@@ -34,6 +34,8 @@ Add `-Details` to see the per-phase timeline, or `-BrowserArgs "..."` to try oth
 
 ## Install (beta)
 
+Download the latest installer (`Marky_<version>_x64-setup.exe`) or the portable ZIP from the repository's **Releases** page; `SHA256SUMS.txt` there lists the checksums. Every 0.x release is a beta and is marked as a pre-release.
+
 Beta builds are **unsigned**, so Windows SmartScreen shows *Windows protected your PC* on first run. Choose **More info**, then **Run anyway**. The installer is per-user and needs no admin rights. A portable ZIP (just `marky.exe`) is also built; it needs the WebView2 runtime, which Windows 11 and current Windows 10 already have.
 
 ## Features
@@ -103,6 +105,18 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--wait
 
 ### Releasing
 
+Versions are plain `X.Y.Z`, and `package.json` is the single source (`tauri.conf.json` points at it). To cut a release from a clean `main`:
+
+```bash
+./scripts/release.ps1 -Version 0.2.0
+```
+
+```bash
+git push origin HEAD --follow-tags
+```
+
+The script bumps `package.json` and `Cargo.toml`, commits, and creates the annotated tag `v0.2.0`. Pushing the tag runs `.github/workflows/release.yml`, which checks that the tag matches the version, runs the checks, builds, enforces the size budgets and publishes a GitHub Release with the installer, the portable ZIP and `SHA256SUMS.txt`.
+
 - **Signed build** (not used during the unsigned beta): set `MARKY_SIGN_COMMAND` to your signing command with `{file}` where the file path goes, then run `./scripts/build-signed.ps1`. Tauri calls the hook for the app, the installer, the uninstaller and the NSIS plugins, and the script verifies every Authenticode signature afterwards. In CI, set the same value as a repository secret. Plain `npx tauri build` stays unsigned.
 - **winget:** after uploading the installer to a release, run `./scripts/winget-manifest.ps1 -InstallerUrl <url>`. It writes validated 1.12.0 manifests to `dist-winget/` for a pull request to microsoft/winget-pkgs.
 
@@ -158,8 +172,11 @@ scripts/
   build-signed.ps1      Signed release build plus signature verification
   winget-manifest.ps1   winget manifests for a published release
   third-party-notices.mjs  THIRD_PARTY_NOTICES.txt from the npm and Cargo dependency graphs
+  release.ps1           Version bump + commit + annotated tag (does not push)
+  package-portable.ps1  Portable ZIP with LICENSE and notices
 .github/workflows/
   ci.yml                Windows CI: checks, tests, audits, build, budgets, e2e, installer + portable ZIP
+  release.yml           On tag vX.Y.Z: build and publish the GitHub Release
 ```
 
 ## Architecture

@@ -1,0 +1,79 @@
+name: Release
+
+# Pushing a tag vX.Y.Z (see scripts/release.ps1) builds the Windows installer and
+# portable ZIP and publishes a GitHub Release. 0.x versions are marked pre-release (beta).
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag matches package.json version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne '${{ github.ref_name }}') { throw "Tag ${{ github.ref_name }} does not match package.json version $version" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Checks
+        run: |
+          npm run typecheck
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml
+          node scripts/third-party-notices.mjs
+          git diff --exit-code THIRD_PARTY_NOTICES.txt
+
+      - name: Build installer (signed when the MARKY_SIGN_COMMAND secret is set)
+        shell: pwsh
+        env:
+          MARKY_SIGN_COMMAND: ${{ secrets.MARKY_SIGN_COMMAND }}
+        run: if ($env:MARKY_SIGN_COMMAND) { ./scripts/build-signed.ps1 } else { npx tauri build }
+
+      - name: Enforce size budgets
+        shell: pwsh
+        run: ./scripts/check-size.ps1
+
+      - name: Package release assets
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem "src-tauri/target/release/bundle/nsis/Marky_${env:VERSION}_x64-setup.exe").FullName
+          $zip = ./scripts/package-portable.ps1
+          $assets = @($installer, $zip)
+          $assets | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), (Split-Path $_ -Leaf) } | Set-Content SHA256SUMS.txt
+          "ASSETS=$($assets -join ';');$((Resolve-Path SHA256SUMS.txt).Path)" >> $env:GITHUB_ENV
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $prerelease = if ($env:VERSION.StartsWith('0.')) { '--prerelease' } else { $null }
+          $notes = @"
+          Windows x64. Download ``Marky_${env:VERSION}_x64-setup.exe`` (per-user install, no admin prompt) or the portable ZIP.
+
+          Beta builds are unsigned: if SmartScreen says *Windows protected your PC*, choose **More info**, then **Run anyway**. Verify downloads against ``SHA256SUMS.txt``.
+          "@
+          gh release create '${{ github.ref_name }}' $env:ASSETS.Split(';') --title "Marky $env:VERSION" --notes $notes --generate-notes $prerelease

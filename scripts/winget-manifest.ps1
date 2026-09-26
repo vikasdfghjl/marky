@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $schema = '1.12.0'
 
-$version = (Get-Content (Join-Path $root 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).version
+$version = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
 $installer = Get-ChildItem (Join-Path $root "src-tauri\target\release\bundle\nsis\*_${version}_x64-setup.exe") | Select-Object -First 1
 if (-not $installer) { throw "No NSIS installer for version $version; run a full 'npx tauri build' first." }
 $sha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash

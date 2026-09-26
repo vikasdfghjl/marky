@@ -51,6 +51,8 @@ For changes to file handling, IPC, shortcuts or window lifecycle, also run the e
 
 ## Releasing
 
+Versions are plain `X.Y.Z`. `package.json` is the only source: `tauri.conf.json` reads it and `scripts/release.ps1` syncs `Cargo.toml`. Never hand-edit versions or create tags directly; run the script, and leave pushing to the user (`git push origin HEAD --follow-tags`). A pushed `vX.Y.Z` tag publishes a GitHub Release through `release.yml`, and 0.x releases are pre-releases. Pre-release suffixes like `-beta.1` are rejected; the NSIS, MSI and winget versioning paths all prefer plain numbers.
+
 The beta ships **unsigned** (PRD decision). Release builds use plain `npx tauri build`, which is what CI does while no `MARKY_SIGN_COMMAND` secret exists. Signing is route-agnostic. `scripts/sign.ps1` runs `MARKY_SIGN_COMMAND` (with a `{file}` placeholder), and `scripts/build-signed.ps1` merges the hook into the config for that build only and then verifies every Authenticode signature. Keep certificates, credentials and the command itself in CI secrets only. winget manifests come from `scripts/winget-manifest.ps1` (schema 1.12.0, validated with `winget validate`).
 
 ## Dependencies and licensing
