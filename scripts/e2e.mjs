@@ -165,7 +165,7 @@ check('drag over the window shows the drop overlay', overlayShown && !(await eva
 await evaluate(`document.querySelector('.cm-content').focus()`);
 await pressKey('End', 'End', 35, 2); // Ctrl+End
 await send('Input.insertText', {
-  text: '\n\n## Docs Section\n\n> [!TIP]\n> Use tabs.\n\n`ust\nfn main() { let x = 1; }\n`\n\n[jump](#docs-section) [other](second.md) [web](https://example.com)\n',
+  text: '\n\n## Docs Section\n\n> [!TIP]\n> Use tabs.\n\n```rust\nfn main() { let x = 1; }\n```\n\n[jump](#docs-section) [other](second.md) [web](https://example.com)\n',
 });
 await sleep(800);
 check('code blocks highlighted in preview', await evaluate(`!!document.querySelector('#preview pre code .tok-keyword')`));

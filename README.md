@@ -8,18 +8,18 @@ Marky opens a `.md` file, lets you edit it with syntax highlighting and a live s
 
 ## Benchmarks
 
-Latest run: 27 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with README.md open. Each figure is the median of 7 runs.
+Latest run: 27 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with README.md open. Each figure is the median of 5 runs.
 
 | Metric                            | Measured           | Target   | Hard limit | Status |
 | --------------------------------- | ------------------ | -------- | ---------- | ------ |
-| Installer (NSIS)                  | 1.75 MB            | ≤ 6 MB   | 10 MB      | ✅     |
-| App exe                           | 3.93 MB            | ≤ 8 MB   | 12 MB      | ✅     |
-| Cold start to editable            | 937 ms (827–1,141) | ≤ 800 ms | 1,000 ms   | ⚠️     |
+| Installer (NSIS) | 1.75 MB | ≤ 6 MB | 10 MB | ✅ |
+| App exe | 4.49 MB | ≤ 8 MB | 12 MB | ✅ |
+| Cold start to editable | 938 ms (932–999) | ≤ 800 ms | 1,000 ms | ⚠️ |
 | Preview update after typing stops | ~160 ms            | ≤ 200 ms | 400 ms     | ✅     |
-| Idle RAM (app + WebView2)         | 103.5 MB           | ≤ 90 MB  | 120 MB     | ⚠️     |
+| Idle RAM (app + WebView2) | 109.6 MB | ≤ 90 MB | 120 MB | ⚠️ |
 | Idle CPU                          | 0%                 | 0%       | < 0.5%     | ✅     |
 
-Cold start breaks down into about 620–650 ms for WebView2 to create its browser process (before any app code runs) and about 250–300 ms in the frontend, most of it one first-layout task. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (39 MB), the browser process (33 MB) and the GPU process (18 MB). The app's own JavaScript heap is about 12 MB. M3 tried pre-reading the startup file in Rust, V8 compile hints and seven WebView2 flag sets; none moved either number beyond noise.
+Cold start breaks down into about 620–650 ms for WebView2 to create its browser process (before any app code runs) and about 250–300 ms in the frontend, most of it one first-layout task. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (39 MB), the browser process (33 MB) and the GPU process (18 MB). The app's own JavaScript heap is about 12 MB. M3 tried pre-reading the startup file in Rust, V8 compile hints and seven WebView2 flag sets; none moved either number beyond noise. Code highlighting in the preview added about 6 MB when the open file has fenced code (parsers load in the preview worker on first use), and the link opener added about 0.5 MB to the exe.
 To reproduce:
 
 ```bash
@@ -44,6 +44,10 @@ Working now:
 
 - Markdown editing with GFM syntax highlighting; fenced code blocks highlighted via lazily loaded language packs
 - Live preview rendered in a Web Worker (tables, task lists, strikethrough, autolinks), scrolled in sync with the editor
+- Code blocks highlighted in the preview with the same parsers and colours as the editor (100+ languages, loaded on first use)
+- YAML frontmatter highlighted in both panes (SKILL.md, docs sites, AI config files)
+- GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) rendered as callouts
+- Links: `#heading` links jump within the document (GitHub-style heading ids), relative `.md` links open in a new tab, and web links open in your browser
 - Local images in the preview: relative paths resolve against the file's folder; remote images are blocked
 - Raw HTML in Markdown is shown as text, never executed
 - Light/dark theme that follows the Windows setting
@@ -155,6 +159,8 @@ src/
   editor.ts             CodeMirror 6 setup and highlight theme
   preview.ts            Preview pane; sends text to the worker, swaps in HTML
   preview.worker.ts     markdown-it rendering and local-image resolution off the main thread
+  markdown-plugins.ts   Frontmatter, GitHub alerts, heading anchors
+  code-highlight.ts     Lezer-based code highlighting for preview fences
   scroll-sync.ts        Editor-to-preview synced scroll via source-line markers
   recent-picker.ts      Ctrl+R recent-files list
   tab-strip.ts          Tab strip rendering (tablist semantics)
@@ -197,6 +203,7 @@ Every Markdown file is treated as untrusted input:
 - A strict Content Security Policy blocks inline scripts, frames and network access.
 - File dialogs run in Rust, and the open/save commands only accept paths the user chose (dialog, drag-drop, command line, Explorer, recent files). The webview has no file system or dialog permissions of its own.
 - The preview can load images only from folders of files the user opened; the asset-protocol scope starts empty and widens at runtime.
+- Clicked links: only http(s) and mailto open externally; relative links are followed only from an opened file to an existing .md, .markdown or .txt file.
 
 ## Roadmap
 

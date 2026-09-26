@@ -10,6 +10,8 @@
 $ErrorActionPreference = 'Stop'
 $exe = Join-Path (Split-Path $PSScriptRoot -Parent) 'src-tauri\target\release\marky.exe'
 if (-not (Test-Path $exe)) { throw 'Release build not found. Run: npx tauri build --no-bundle' }
+# Single-instance mode would forward every launch below into an already-open window.
+if (Get-Process marky -ErrorAction SilentlyContinue) { throw 'Close all Marky windows first (single-instance mode would route the test into them).' }
 
 $dir = Join-Path $env:TEMP 'marky-e2e'
 Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
@@ -55,7 +57,32 @@ try {
   Stop-Tree $app.Id
   Start-Sleep -Seconds 1
 
-  # Run B: a clean window closes immediately.
+  # Run B: run A was killed with unsaved changes, so the relaunch must offer recovery (a native dialog).
+  Add-Type -Namespace Win32 -Name Dialogs -MemberDefinition @'
+public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+[DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder name, int max);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+public static bool HasVisibleDialog(uint processId) {
+  bool found = false;
+  EnumWindows((h, _) => {
+    uint pid; GetWindowThreadProcessId(h, out pid);
+    var name = new System.Text.StringBuilder(64); GetClassName(h, name, 64);
+    if (pid == processId && IsWindowVisible(h) && name.ToString() == "#32770") found = true;
+    return true;
+  }, IntPtr.Zero);
+  return found;
+}
+'@
+  $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
+  Start-Sleep -Seconds 4
+  Write-Check 'relaunch after a crash offers recovery' ([Win32.Dialogs]::HasVisibleDialog([uint32]$app.Id))
+  Stop-Tree $app.Id
+  Start-Sleep -Seconds 1
+  Remove-Item (Join-Path $env:LOCALAPPDATA 'dev.marky.editor\recovery.json') -ErrorAction SilentlyContinue
+
+  # Run C: a clean window closes immediately.
   $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
   Start-Sleep -Seconds 4
   $app.CloseMainWindow() | Out-Null
