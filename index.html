@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Marky</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="editor" aria-label="Editor"></section>
+      <article id="preview" class="markdown-body" aria-label="Preview"></article>
+    </main>
+    <footer id="status" role="status">
+      <span id="st-pos"></span>
+      <span id="st-count"></span>
+      <span class="spacer"></span>
+      <span id="st-render" title="M0 spike: last keystroke to preview paint"></span>
+      <span id="st-perf" title="M0 spike: process start to editable"></span>
+      <span id="st-eol"></span>
+      <span id="st-enc"></span>
+    </footer>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
