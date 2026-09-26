@@ -13,15 +13,11 @@ Marky is a Windows Markdown editor: Tauri 2 (Rust) + WebView2 + CodeMirror 6 + m
 
 ## Performance budgets
 
-Budgets are release-blocking. Measure on a release build; dev-build numbers are meaningless.
+Budgets are release-blocking. Measure on a release build (`npx tauri build --no-bundle`), then run `./scripts/bench.ps1`; dev-build numbers are meaningless. `-Details` prints the per-phase timeline written through `MARKY_PERF_LOG`.
 
-```bash
-npx tauri build --no-bundle
-```
+The README's **Benchmarks** section is the single record of current numbers. After any benchmark run, update that table, its date and the breakdown sentence in the same change.
 
-Launch `src-tauri/target/release/marky.exe <file>` with `MARKY_PERF_LOG=<path>` set. It appends `setup_ms`, page-load times, `startup_ms` and the JS `performance.mark` timeline. Measure idle RAM as the private working set summed over marky.exe and all its msedgewebview2 children.
-
-M0 baseline (i5-9300H, 16 GB): installer 1.68 MB, exe 3.75 MB, idle RAM 97–114 MB, cold start ~1000 ms, of which ~650 ms is WebView2 creation before `setup` runs. Report any change that moves these numbers.
+Known cost structure: about 610 ms of cold start is WebView2 creating its browser process before `setup` runs, and flags don't move it. Optimise the frontend part: bundle size, first layout, IPC round trips. The WebView2 flags in `tauri.conf.json` (`additionalBrowserArgs`) replace Tauri's defaults, so keep the `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` prefix. Keep the GPU enabled; it protects typing and scroll latency.
 
 ## Verification
 

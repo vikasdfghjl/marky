@@ -6,14 +6,32 @@ Marky opens a `.md` file, lets you edit it with syntax highlighting and a live s
 
 > **Status:** early development (M0 spike). See [PRD.md](PRD.md) for the full plan.
 
-## Goals
+## Benchmarks
 
-| Metric | Target | Hard limit |
-| --- | --- | --- |
-| Installer size | ≤ 6 MB | 10 MB |
-| Cold start to editable | ≤ 400 ms | 700 ms |
-| Preview update after typing stops | ≤ 200 ms | 400 ms |
-| Idle RAM (app + WebView2) | ≤ 90 MB | 120 MB |
+Latest run: 27 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with README.md open. Each figure is the median of 5 runs.
+
+| Metric                            | Measured | Target   | Hard limit | Status |
+| --------------------------------- | -------- | -------- | ---------- | ------ |
+| Installer (NSIS)                  | 1.68 MB  | ≤ 6 MB   | 10 MB      | ✅     |
+| App exe                           | 3.75 MB  | ≤ 8 MB   | 12 MB      | ✅     |
+| Cold start to editable            | 891 ms   | ≤ 400 ms | 700 ms     | ❌     |
+| Preview update after typing stops | ~160 ms  | ≤ 200 ms | 400 ms     | ✅     |
+| Idle RAM (app + WebView2)         | 97.5 MB  | ≤ 90 MB  | 120 MB     | ⚠️     |
+| Idle CPU                          | 0%       | 0%       | < 0.5%     | ✅     |
+
+Cold start breaks down into about 610 ms for WebView2 to create its browser process (before any app code runs) and about 280 ms in the frontend: loading the bundle, first layout and first paint. The WebView2 part is mostly a fixed cost, so the start-up budget in the PRD is under review.
+
+To reproduce:
+
+```bash
+npx tauri build --no-bundle
+```
+
+```bash
+./scripts/bench.ps1
+```
+
+Add `-Details` to see the per-phase timeline, or `-BrowserArgs "..."` to try other WebView2 flags without rebuilding.
 
 ## Features
 
@@ -26,7 +44,7 @@ Working now:
 - Find and replace
 - Status bar: line/column, word and character count, line ending, encoding
 
-Written, not yet verified in the native app:
+Built and unit-tested, not yet exercised by hand in the native app:
 
 - Open via dialog, drag-drop, command-line argument or Explorer "Open with"
 - UTF-8 with or without BOM; CRLF/LF preserved on save; non-UTF-8 files open read-only
@@ -35,15 +53,15 @@ Written, not yet verified in the native app:
 
 ## Keyboard shortcuts
 
-| Shortcut | Action |
-| --- | --- |
-| Ctrl+O | Open file |
-| Ctrl+S | Save |
-| Ctrl+Shift+S | Save As |
-| Ctrl+Shift+V | Toggle preview |
-| Ctrl+F | Find |
-| Ctrl+H | Find and replace |
-| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Shortcut        | Action           |
+| --------------- | ---------------- |
+| Ctrl+O          | Open file        |
+| Ctrl+S          | Save             |
+| Ctrl+Shift+S    | Save As          |
+| Ctrl+Shift+V    | Toggle preview   |
+| Ctrl+F          | Find             |
+| Ctrl+H          | Find and replace |
+| Ctrl+Z / Ctrl+Y | Undo / redo      |
 
 ## Development
 
@@ -74,15 +92,15 @@ npm install
 npm run tauri dev
 ```
 
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Frontend only, in a browser at http://localhost:1420 (loads a sample document; file open/save disabled) |
-| `npm run tauri dev` | Full native app with hot reload |
-| `npm run tauri build` | Release build and NSIS installer in `src-tauri/target/release/bundle/` |
-| `npm run typecheck` | TypeScript type-check |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust unit tests (file encoding, line endings, atomic save) |
+| Command                                           | What it does                                                                                            |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `npm run dev`                                     | Frontend only, in a browser at http://localhost:1420 (loads a sample document; file open/save disabled) |
+| `npm run tauri dev`                               | Full native app with hot reload                                                                         |
+| `npm run tauri build`                             | Release build and NSIS installer in `src-tauri/target/release/bundle/`                                  |
+| `npm run typecheck`                               | TypeScript type-check                                                                                   |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust unit tests (file encoding, line endings, atomic save)                                              |
 
-The status bar shows two development metrics: `start` (process start to first editable frame) and `preview` (last keystroke to preview paint).
+The status bar shows two development metrics: `start` (process start to first editable frame) and `preview` (last keystroke to preview paint). Set `MARKY_PERF_LOG=<file>` to have the app append its startup timeline to that file.
 
 ## Project structure
 
@@ -100,6 +118,8 @@ src-tauri/
   src/files.rs          Read/write with BOM and line-ending handling, atomic replace
   tauri.conf.json       Window, CSP, bundle and file-association config
   capabilities/         Webview permissions (least privilege)
+scripts/
+  bench.ps1             Release-build benchmark: cold start, WebView2 ready, idle RAM, sizes
 ```
 
 ## Architecture
@@ -116,12 +136,12 @@ Every Markdown file is treated as untrusted input:
 
 ## Roadmap
 
-| Milestone | Scope |
-| --- | --- |
-| M0 Spike | Scaffold, editor + preview worker, measure RAM and cold start |
-| M1 MVP | Open, edit, save, preview, unsaved-changes guard, theme, find |
-| M2 Beta | External change detection, recent files, synced scroll, status bar, local images, crash recovery, installers |
-| M3 v1.0 | Code signing, winget, accessibility and IME pass |
-| M4 v1.x | Tabs, HTML/PDF export, Mermaid and KaTeX, outline, auto-update |
+| Milestone | Scope                                                                                                        |
+| --------- | ------------------------------------------------------------------------------------------------------------ |
+| M0 Spike  | Scaffold, editor + preview worker, measure RAM and cold start                                                |
+| M1 MVP    | Open, edit, save, preview, unsaved-changes guard, theme, find                                                |
+| M2 Beta   | External change detection, recent files, synced scroll, status bar, local images, crash recovery, installers |
+| M3 v1.0   | Code signing, winget, accessibility and IME pass                                                             |
+| M4 v1.x   | Tabs, HTML/PDF export, Mermaid and KaTeX, outline, auto-update                                               |
 
 Details are in [PRD.md](PRD.md).

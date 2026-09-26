@@ -22,6 +22,10 @@ let typingPauseTimer: number | undefined;
 let lastEditAt = 0;
 
 performance.mark('js-start');
+const startupLongTasks: string[] = [];
+new PerformanceObserver((list) => {
+  for (const t of list.getEntries()) startupLongTasks.push(`${Math.round(t.startTime)}+${Math.round(t.duration)}`);
+}).observe({ type: 'longtask', buffered: true });
 const editor = createEditor($('editor'), onEditorUpdate);
 performance.mark('editor-ready');
 const preview = createPreview($('preview'), showPreviewLatency);
@@ -117,6 +121,7 @@ function showFile(file: OpenedFile) {
   currentFile.dirty = false;
   preview.setVisible(file.text.length <= PREVIEW_AUTO_OFF_BYTES);
   editor.load(file.text, { readOnly: file.readOnly });
+  performance.mark('editor-loaded');
   refreshAllViews();
 }
 
@@ -198,6 +203,8 @@ async function reportStartupTiming() {
   const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
   const marks = performance.getEntriesByType('mark').map((m) => `${m.name}=${Math.round(m.startTime)}`);
   if (nav) marks.unshift(`html=${Math.round(nav.responseEnd)}`, `dcl=${Math.round(nav.domContentLoadedEventEnd)}`);
+  for (const p of performance.getEntriesByType('paint')) marks.push(`${p.name}=${Math.round(p.startTime)}`);
+  if (startupLongTasks.length) marks.push(`longtasks=${startupLongTasks.join(',')}`);
   const startupMs = await api.startupMs(performance.now(), marks.join(' '));
   $('st-perf').textContent = `start ${Math.round(startupMs)} ms`;
 }
@@ -222,7 +229,16 @@ async function start() {
   else refreshAllViews();
   performance.mark('file-loaded');
 
-  requestAnimationFrame(() => void reportStartupTiming());
+  requestAnimationFrame(() => {
+    performance.mark('first-frame');
+    // A message posted from rAF runs after that frame's paint.
+    const afterPaint = new MessageChannel();
+    afterPaint.port1.onmessage = () => {
+      performance.mark('painted');
+      void reportStartupTiming();
+    };
+    afterPaint.port2.postMessage(null);
+  });
 }
 
 void start();

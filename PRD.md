@@ -44,6 +44,8 @@ v1.0 succeeds when every performance budget below holds on a mid-range Windows 1
 
 RAM is measured across all WebView2 helper processes, not just the main process, so the number stays honest against Electron comparisons.
 
+**M0 baseline (27 Sep 2026, i5-9300H, 16 GB):** installer 1.68 MB, exe 3.75 MB, idle RAM 97.5 MB, cold start 891 ms (median of 5). About 610 ms of cold start is WebView2 creating its browser process before app code runs, so the 400 ms target and 700 ms hard limit are not reachable as specified. Current numbers live in the README's Benchmarks section.
+
 ## Target users and use cases
 
 Primary users are developers and technical writers who live in Markdown and want it to open as fast as Notepad.
@@ -258,6 +260,7 @@ The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike
 - [ ] Should raw HTML in Markdown render (sanitized) by default, or stay off?
 - [ ] Free and open source, or paid/freemium? This affects the Store route and update infrastructure.
 - [ ] Is an ARM64 Windows build needed for v1.0?
+- [ ] Revise the cold-start budget given the ~610 ms WebView2 floor measured in M0 (for example: target ≤ 800 ms, hard limit 1,000 ms), or measure "window visible" separately from "editable"?
 
 ## Sources
 
