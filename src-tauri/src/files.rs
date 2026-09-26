@@ -115,37 +115,9 @@ fn resolve_symlink(path: &Path) -> io::Result<PathBuf> {
     }
 }
 
-/// `ReplaceFileW` keeps the original file's ACLs, attributes, alternate data
-/// streams and creation time, which a plain rename would lose.
-#[cfg(windows)]
-fn replace(target: &Path, tmp: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_IGNORE_MERGE_ERRORS};
-
-    if !target.exists() {
-        return fs::rename(tmp, target);
-    }
-    let wide = |p: &Path| p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();
-    let (t, s) = (wide(target), wide(tmp));
-    // SAFETY: both buffers are NUL-terminated and outlive the call; optional pointers are null.
-    let ok = unsafe {
-        ReplaceFileW(
-            t.as_ptr(),
-            s.as_ptr(),
-            std::ptr::null(),
-            REPLACEFILE_IGNORE_MERGE_ERRORS,
-            std::ptr::null(),
-            std::ptr::null(),
-        )
-    };
-    if ok == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(not(windows))]
+/// A single rename-over is atomic on NTFS (std uses POSIX-semantics replace).
+/// `ReplaceFileW` would keep ACLs and alternate data streams, but it renames the
+/// original aside first, so a crash mid-call left no file at all (caught by the kill test).
 fn replace(target: &Path, tmp: &Path) -> io::Result<()> {
     fs::rename(tmp, target)
 }
@@ -196,6 +168,54 @@ mod tests {
         let path = temp_path("latin1.md");
         fs::write(&path, b"caf\xE9\n").unwrap();
         assert!(read(&path).unwrap().read_only);
+    }
+
+    /// 512 KB so each save takes long enough to be interrupted mid-write.
+    fn save_loop_version(n: usize) -> String {
+        n.to_string().repeat(512 * 1024)
+    }
+
+    const LF: FileMeta = FileMeta { bom: false, line_ending: LineEnding::Lf };
+    const SAVE_LOOP_ENV: &str = "MARKY_SAVE_LOOP_PATH";
+
+    /// Helper process for `killed_mid_save_leaves_old_or_new_content`: saves until killed.
+    #[test]
+    #[ignore = "spawned by killed_mid_save_leaves_old_or_new_content"]
+    fn save_loop_until_killed() {
+        let Some(path) = std::env::var_os(SAVE_LOOP_ENV) else { return };
+        let path = PathBuf::from(path);
+        let versions = [save_loop_version(0), save_loop_version(1)];
+        for content in versions.iter().cycle() {
+            write(&path, content, LF).unwrap();
+        }
+    }
+
+    /// M1 exit gate: a process killed at any point during a save never leaves a torn file.
+    #[test]
+    fn killed_mid_save_leaves_old_or_new_content() {
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        let path = temp_path("kill.md");
+        write(&path, &save_loop_version(0), LF).unwrap();
+        let valid = [save_loop_version(0), save_loop_version(1)];
+
+        for round in 0..15u64 {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "files::tests::save_loop_until_killed", "--ignored"])
+                .env(SAVE_LOOP_ENV, &path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            // Vary the kill point so it lands at different phases of the write.
+            std::thread::sleep(Duration::from_millis(150 + round * 17));
+            child.kill().unwrap();
+            child.wait().unwrap();
+
+            let on_disk = fs::read_to_string(&path).unwrap();
+            assert!(valid.contains(&on_disk), "round {round}: torn file ({} bytes)", on_disk.len());
+        }
     }
 
     #[test]

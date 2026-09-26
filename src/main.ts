@@ -1,7 +1,7 @@
 import type { ViewUpdate } from '@codemirror/view';
 import { createEditor } from './editor';
 import { createPreview } from './preview';
-import { api, isTauri, type FileMeta, type OpenedFile } from './ipc';
+import { api, isTauri, type OpenedFile } from './ipc';
 import { SAMPLE } from './sample';
 
 const TYPING_PAUSE_MS = 150;
@@ -11,10 +11,20 @@ const UNTITLED = 'Untitled';
 
 const $ = (id: string) => document.getElementById(id)!;
 
-const currentFile = {
-  path: null as string | null,
-  meta: { bom: false, lineEnding: 'crlf' } as FileMeta,
+/** What the editor shows: a file from disk, or a new untitled document (path null). */
+type EditorDocument = Pick<OpenedFile, 'text' | 'meta' | 'readOnly'> & { path: string | null };
+
+const NEW_DOCUMENT: EditorDocument = {
+  path: null,
+  text: '',
+  meta: { bom: false, lineEnding: 'crlf' },
   readOnly: false,
+};
+
+const currentFile = {
+  path: NEW_DOCUMENT.path,
+  meta: NEW_DOCUMENT.meta,
+  readOnly: NEW_DOCUMENT.readOnly,
   dirty: false,
 };
 
@@ -37,15 +47,17 @@ function onEditorUpdate(update: ViewUpdate) {
   if (!update.docChanged) return;
 
   lastEditAt = performance.now();
-  markDirty();
+  setDirty(true);
   clearTimeout(typingPauseTimer);
   typingPauseTimer = window.setTimeout(renderAfterTypingPause, TYPING_PAUSE_MS);
 }
 
-function markDirty() {
-  if (currentFile.dirty) return;
-  currentFile.dirty = true;
+/** Single place that changes dirty state; Rust is told only on transitions, never per keystroke. */
+function setDirty(dirty: boolean) {
+  if (currentFile.dirty === dirty) return;
+  currentFile.dirty = dirty;
   updateTitle();
+  if (isTauri) void api.setDirty(dirty);
 }
 
 function renderAfterTypingPause() {
@@ -107,31 +119,52 @@ function refreshAllViews() {
 
 // ---- file actions ----
 
-function confirmDiscardUnsavedChanges(): boolean {
-  if (!currentFile.dirty) return true;
-  // Placeholder until the native Save / Don't save / Cancel prompt lands in M1 (F5).
-  return window.confirm(`Discard unsaved changes to ${fileName(currentFile.path)}?`);
+async function notifyError(message: string) {
+  if (!isTauri) return window.alert(message);
+  await api.showError(message);
 }
 
-function showFile(file: OpenedFile) {
+/** Resolves the Save / Don't save / Cancel prompt. True means the current document may be replaced. */
+async function resolveUnsavedChanges(): Promise<boolean> {
+  if (!currentFile.dirty) return true;
+  if (!isTauri) return window.confirm(`Discard unsaved changes to ${fileName(currentFile.path)}?`);
+
+  const choice = await api.askUnsavedChanges(fileName(currentFile.path));
+  if (choice === 'cancel') return false;
+  if (choice === 'discard') return true;
+  return save();
+}
+
+function showDocument(editorDocument: EditorDocument) {
   lastEditAt = 0;
-  currentFile.path = file.path;
-  currentFile.meta = file.meta;
-  currentFile.readOnly = file.readOnly;
-  currentFile.dirty = false;
-  preview.setVisible(file.text.length <= PREVIEW_AUTO_OFF_BYTES);
-  editor.load(file.text, { readOnly: file.readOnly });
+  currentFile.path = editorDocument.path;
+  currentFile.meta = editorDocument.meta;
+  currentFile.readOnly = editorDocument.readOnly;
+  setDirty(false);
+  preview.setVisible(editorDocument.text.length <= PREVIEW_AUTO_OFF_BYTES);
+  editor.load(editorDocument.text, { readOnly: editorDocument.readOnly });
   performance.mark('editor-loaded');
   refreshAllViews();
 }
 
 async function openPath(path: string) {
-  if (!confirmDiscardUnsavedChanges()) return;
+  if (!(await resolveUnsavedChanges())) return;
   try {
-    showFile(await api.openFile(path));
+    showDocument(await api.openFile(path));
   } catch (err) {
-    window.alert(`Could not open ${path}\n\n${err}`);
+    await notifyError(`Could not open ${path}\n\n${err}`);
   }
+}
+
+async function newDocument() {
+  if (!(await resolveUnsavedChanges())) return;
+  showDocument(NEW_DOCUMENT);
+}
+
+async function closeWindow() {
+  if (!isTauri) return;
+  if (!(await resolveUnsavedChanges())) return;
+  await api.closeWindow();
 }
 
 async function openWithDialog() {
@@ -148,22 +181,24 @@ async function resolveSavePath(forceSaveAs: boolean): Promise<string | null> {
   return api.pickSave(suggested);
 }
 
-async function save(forceSaveAs = false) {
-  if (!isTauri || currentFile.readOnly) return;
+/** True when the document is on disk afterwards; false if cancelled or failed. */
+async function save(forceSaveAs = false): Promise<boolean> {
+  if (!isTauri || currentFile.readOnly) return false;
   const path = await resolveSavePath(forceSaveAs);
-  if (!path) return;
+  if (!path) return false;
 
   const text = editor.text();
   try {
     await api.saveFile(path, text, currentFile.meta);
   } catch (err) {
-    window.alert(`Could not save ${path}\n\n${err}`);
-    return;
+    await notifyError(`Could not save ${path}\n\n${err}`);
+    return false;
   }
   currentFile.path = path;
   // Stay dirty if the user typed while the save was in flight.
-  currentFile.dirty = editor.text() !== text;
+  setDirty(editor.text() !== text);
   updateTitle();
+  return true;
 }
 
 function togglePreview() {
@@ -176,6 +211,8 @@ function togglePreview() {
 function shortcutAction(e: KeyboardEvent): (() => unknown) | null {
   if (!e.ctrlKey || e.altKey) return null;
   const key = e.key.toLowerCase();
+  if (key === 'n' && !e.shiftKey) return newDocument;
+  if (key === 'w' && !e.shiftKey) return closeWindow;
   if (key === 'o' && !e.shiftKey) return openWithDialog;
   if (key === 's') return () => save(e.shiftKey);
   if (key === 'v' && e.shiftKey) return togglePreview;
@@ -220,8 +257,9 @@ function startInBrowser() {
 async function start() {
   if (!isTauri) return startInBrowser();
 
-  const [, startupPath] = await Promise.all([
+  const [, , startupPath] = await Promise.all([
     api.onOpenRequest((path) => void openPath(path)),
+    api.onCloseRequested(() => void closeWindow()),
     api.startupFile(),
   ]);
   performance.mark('ipc-ready');

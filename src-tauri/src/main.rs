@@ -5,21 +5,37 @@ mod files;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
 use files::{FileMeta, OpenedFile};
-use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, WebviewWindow, WindowEvent};
-use tauri_plugin_dialog::DialogExt;
+use serde::Serialize;
+use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, WebviewWindow, Window, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
 const MARKDOWN_EXTS: &[&str] = &["md", "markdown", "txt"];
+const APP_NAME: &str = "Marky";
+const SAVE_LABEL: &str = "Save";
+const DONT_SAVE_LABEL: &str = "Don't save";
+const CANCEL_LABEL: &str = "Cancel";
 
-/// Paths the user chose via dialog, drag-drop, CLI arg or Explorer. The webview
-/// can only open/save these, so a compromised preview cannot reach other files.
 struct AppState {
     started: Instant,
+    /// Paths the user chose via dialog, drag-drop, CLI arg or Explorer. The webview
+    /// can only open/save these, so a compromised preview cannot reach other files.
     user_chosen: Mutex<HashSet<PathBuf>>,
     startup_file: Mutex<Option<PathBuf>>,
+    /// Mirrors the editor's unsaved state so a clean window closes without a JS round trip.
+    dirty: AtomicBool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum UnsavedChoice {
+    Save,
+    Discard,
+    Cancel,
 }
 
 impl AppState {
@@ -121,9 +137,73 @@ async fn save_file(
     files::write(&path, &text, meta).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn set_dirty(state: State<'_, AppState>, dirty: bool) {
+    state.dirty.store(dirty, Ordering::Relaxed);
+}
+
+#[tauri::command]
+async fn ask_unsaved_changes(window: WebviewWindow, file_name: String) -> UnsavedChoice {
+    let result = window
+        .dialog()
+        .message(format!("Do you want to save changes to {file_name}?"))
+        .title(APP_NAME)
+        .kind(MessageDialogKind::Warning)
+        .parent(&window)
+        .buttons(MessageDialogButtons::YesNoCancelCustom(
+            SAVE_LABEL.into(),
+            DONT_SAVE_LABEL.into(),
+            CANCEL_LABEL.into(),
+        ))
+        .blocking_show_with_result();
+    match result {
+        MessageDialogResult::Custom(label) if label == SAVE_LABEL => UnsavedChoice::Save,
+        MessageDialogResult::Custom(label) if label == DONT_SAVE_LABEL => UnsavedChoice::Discard,
+        MessageDialogResult::Yes => UnsavedChoice::Save,
+        MessageDialogResult::No => UnsavedChoice::Discard,
+        // Closing the dialog with Esc or the title-bar X keeps the document open.
+        _ => UnsavedChoice::Cancel,
+    }
+}
+
+#[tauri::command]
+async fn show_error(window: WebviewWindow, message: String) {
+    window
+        .dialog()
+        .message(message)
+        .title(APP_NAME)
+        .kind(MessageDialogKind::Error)
+        .parent(&window)
+        .blocking_show();
+}
+
+/// Closes without raising CloseRequested again; the frontend has already resolved unsaved changes.
+#[tauri::command]
+fn close_window(window: WebviewWindow) -> Result<(), String> {
+    window.destroy().map_err(|e| e.to_string())
+}
+
 fn request_open(app: &AppHandle, path: PathBuf) {
     let path = app.state::<AppState>().remember_user_choice(path);
     let _ = app.emit_to("main", "open-request", display(&path));
+}
+
+fn has_unsaved_changes(window: &Window) -> bool {
+    window.state::<AppState>().dirty.load(Ordering::Relaxed)
+}
+
+fn on_window_event(window: &Window, event: &WindowEvent) {
+    match event {
+        WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+            let Some(path) = paths.first() else { return };
+            request_open(window.app_handle(), path.clone());
+        }
+        WindowEvent::CloseRequested { api, .. } if has_unsaved_changes(window) => {
+            api.prevent_close();
+            let _ = window.emit_to("main", "close-requested", ());
+        }
+        _ => {}
+    }
 }
 
 fn main() {
@@ -131,7 +211,12 @@ fn main() {
     let cwd = std::env::current_dir().unwrap_or_default();
     let startup = first_file_arg(std::env::args().skip(1), &cwd);
 
-    let state = AppState { started, user_chosen: Mutex::default(), startup_file: Mutex::new(None) };
+    let state = AppState {
+        started,
+        user_chosen: Mutex::default(),
+        startup_file: Mutex::new(None),
+        dirty: AtomicBool::new(false),
+    };
     if let Some(path) = startup {
         let path = state.remember_user_choice(path);
         *state.startup_file.lock().unwrap() = Some(path);
@@ -158,18 +243,18 @@ fn main() {
             let phase = format!("{:?}", payload.event()).to_lowercase();
             perf_log(&format!("page_{phase}_ms={:.0}", started.elapsed().as_secs_f64() * 1000.0));
         })
-        .on_window_event(|window, event| {
-            let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event else { return };
-            let Some(path) = paths.first() else { return };
-            request_open(window.app_handle(), path.clone());
-        })
+        .on_window_event(on_window_event)
         .invoke_handler(tauri::generate_handler![
             startup_file,
             startup_ms,
             pick_open,
             pick_save,
             open_file,
-            save_file
+            save_file,
+            set_dirty,
+            ask_unsaved_changes,
+            show_error,
+            close_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running Marky");

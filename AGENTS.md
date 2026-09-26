@@ -8,7 +8,8 @@ Marky is a Windows Markdown editor: Tauri 2 (Rust) + WebView2 + CodeMirror 6 + m
 - **Paths come only from Rust.** Dialogs, drag-drop, CLI args and single-instance forwards call `AppState::remember_user_choice`; `open_file`/`save_file` call `require_user_choice`. Any new way to obtain a path registers it through `remember_user_choice` on the Rust side.
 - **Least-privilege webview.** `src-tauri/capabilities/default.json` grants only events and set-title. Prefer a custom command over a plugin permission; when a permission is unavoidable, scope it narrowly and say why in the capability's description.
 - **Untrusted Markdown.** The preview renders with `html: false`, never navigates, and runs under the CSP in `tauri.conf.json` (`csp` and `devCsp` change together). Enabling raw HTML means routing output through DOMPurify first.
-- **Text model.** The editor always holds LF text. `files.rs` detects BOM and line ending on read and restores them on write, so saving an unedited file reproduces it byte-for-byte. All writes go through `files::write` (temp file, `sync_all`, `ReplaceFileW`).
+- **Text model.** The editor always holds LF text. `files.rs` detects BOM and line ending on read and restores them on write, so saving an unedited file reproduces it byte-for-byte. All writes go through `files::write` (temp file, `sync_all`, atomic `fs::rename`). `ReplaceFileW` looks nicer because it keeps ACLs, but a kill mid-call leaves no file; `killed_mid_save_leaves_old_or_new_content` guards this.
+- **Dirty state has one writer.** `setDirty` in `main.ts` updates the title and mirrors transitions to Rust (`set_dirty`), which holds the window close only when dirty. Route every dirty change through it.
 - **Lazy by default.** Language packs, and later KaTeX and Mermaid, load through dynamic `import()`. The initial JS (entry chunk plus its modulepreloads) stays ≤ 250 KB gzipped. The preview worker stays a separate emitted file because the CSP allows `worker-src 'self'` only.
 
 ## Performance budgets
@@ -35,7 +36,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-For UI changes, also check the behaviour in `npm run dev` (browser mode) or `npm run tauri dev`.
+For changes to file handling, IPC, shortcuts or window lifecycle, also run the end-to-end smoke test against a release build (`npx tauri build --no-bundle`, then `./scripts/e2e.ps1`); every line must read PASS. Extend `scripts/e2e.mjs` when adding a flow it can drive. Native dialogs block it, so it covers only dialog-free paths. For purely visual changes, check `npm run dev` in a browser.
 
 ## Environment gotchas
 

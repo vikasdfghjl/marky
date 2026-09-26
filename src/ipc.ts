@@ -33,7 +33,15 @@ export const api = {
   openFile: (path: string) => invoke<OpenedFile>('open_file', { path }),
   saveFile: (path: string, text: string, meta: FileMeta) =>
     invoke<number>('save_file', { path, text, meta }),
+  setDirty: (dirty: boolean) => invoke<void>('set_dirty', { dirty }),
+  askUnsavedChanges: (fileName: string) => invoke<UnsavedChoice>('ask_unsaved_changes', { fileName }),
+  showError: (message: string) => invoke<void>('show_error', { message }),
+  closeWindow: () => invoke<void>('close_window'),
   onOpenRequest: (cb: (path: string) => void): Promise<UnlistenFn> =>
     listen<string>('open-request', (e) => cb(e.payload)),
+  /** Fired only when the window is closed with unsaved changes; clean windows close natively. */
+  onCloseRequested: (cb: () => void): Promise<UnlistenFn> => listen('close-requested', cb),
   setTitle: (title: string) => getCurrentWindow().setTitle(title),
 };
+
+export type UnsavedChoice = 'save' | 'discard' | 'cancel';

@@ -35,7 +35,7 @@ v1.0 succeeds when every performance budget below holds on a mid-range Windows 1
 | --- | --- | --- | --- |
 | Installer size (NSIS .exe) | ≤ 6 MB | 10 MB | CI artifact size |
 | App binary (.exe) | ≤ 8 MB | 12 MB | CI artifact size |
-| Cold start to editable | ≤ 400 ms | 700 ms | Timestamp from process start to first CodeMirror paint |
+| Cold start to editable | ≤ 800 ms | 1,000 ms | Timestamp from process start to first CodeMirror paint |
 | Open 1 MB file | ≤ 150 ms | 300 ms | Rust read + editor state init |
 | Typing latency (keypress to paint) | ≤ 16 ms | 33 ms | Chrome DevTools performance trace in WebView2 |
 | Preview update after typing stops | ≤ 200 ms | 400 ms | Debounced render timer |
@@ -44,7 +44,7 @@ v1.0 succeeds when every performance budget below holds on a mid-range Windows 1
 
 RAM is measured across all WebView2 helper processes, not just the main process, so the number stays honest against Electron comparisons.
 
-**M0 baseline (27 Sep 2026, i5-9300H, 16 GB):** installer 1.68 MB, exe 3.75 MB, idle RAM 97.5 MB, cold start 891 ms (median of 5). About 610 ms of cold start is WebView2 creating its browser process before app code runs, so the 400 ms target and 700 ms hard limit are not reachable as specified. Current numbers live in the README's Benchmarks section.
+**M0 baseline (27 Sep 2026, i5-9300H, 16 GB):** installer 1.68 MB, exe 3.75 MB, idle RAM 97.5 MB, cold start 891 ms (median of 5). About 610 ms of cold start is WebView2 creating its browser process before app code runs, so the budget was revised from 400 / 700 ms to 800 / 1,000 ms. Current numbers live in the README's Benchmarks section.
 
 ## Target users and use cases
 
@@ -233,7 +233,7 @@ MVP in 3 weeks and v1.0 in 7 weeks, assuming one developer part-time (\~20 h/wee
 
 | Milestone | Week | Scope | Exit gate |
 | --- | --- | --- | --- |
-| M0 Spike | 1 | Scaffold, CodeMirror + preview worker, measure baseline RAM/start time | Idle RAM ≤ 120 MB, cold start ≤ 700 ms on test laptop |
+| M0 Spike | 1 | Scaffold, CodeMirror + preview worker, measure baseline RAM/start time | Idle RAM ≤ 120 MB, cold start ≤ 1,000 ms on test laptop |
 | M1 MVP | 2–3 | F1–F7 (open, edit, save, preview, guard, theme, find) | All P0 acceptance criteria pass; atomic-save kill test passes |
 | M2 Beta | 4–5 | F8–F13, CSP + capabilities hardened, NSIS + portable builds, CI budgets enforced | 10 beta users for 1 week, zero data-loss reports |
 | M3 v1.0 | 6–7 | Signing, winget, accessibility and IME pass, docs | All budgets met at target (not hard limit); signed installer published |
@@ -260,7 +260,7 @@ The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike
 - [ ] Should raw HTML in Markdown render (sanitized) by default, or stay off?
 - [ ] Free and open source, or paid/freemium? This affects the Store route and update infrastructure.
 - [ ] Is an ARM64 Windows build needed for v1.0?
-- [ ] Revise the cold-start budget given the ~610 ms WebView2 floor measured in M0 (for example: target ≤ 800 ms, hard limit 1,000 ms), or measure "window visible" separately from "editable"?
+- [x] Cold-start budget revised to ≤ 800 ms target / 1,000 ms hard limit after M0 measured a ~610 ms WebView2 floor.
 
 ## Sources
 
