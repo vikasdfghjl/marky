@@ -9,7 +9,7 @@ import {
   rectangularSelection,
   type ViewUpdate,
 } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from '@codemirror/commands';
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -55,6 +55,10 @@ export interface Editor {
   /** Replace the document and reset undo history (used when opening a file). */
   load(text: string, opts?: { readOnly?: boolean }): void;
   text(): string;
+  undo(): void;
+  redo(): void;
+  openFind(): void;
+  /** Opens the search panel with the cursor in its replace field. */
   openReplace(): void;
   /** Cursor offset and scroll position, to restore after reloading the same file. */
   viewPosition(): ViewPosition;
@@ -89,6 +93,11 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
   ];
 
   const view = new EditorView({ parent, state: EditorState.create({ extensions: extensions(false) }) });
+  // Menu commands arrive while focus is on the menu bar; return it to the editor.
+  const runAndFocus = (command: (target: EditorView) => boolean) => {
+    view.focus();
+    command(view);
+  };
 
   return {
     view,
@@ -97,7 +106,13 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
       view.focus();
     },
     text: () => view.state.doc.toString(),
-    openReplace: () => openSearchPanel(view),
+    undo: () => runAndFocus(undo),
+    redo: () => runAndFocus(redo),
+    openFind: () => runAndFocus(openSearchPanel),
+    openReplace() {
+      openSearchPanel(view);
+      view.dom.querySelector<HTMLInputElement>('.cm-search input[name=replace]')?.focus();
+    },
     viewPosition: () => ({ cursor: view.state.selection.main.head, scrollTop: view.scrollDOM.scrollTop }),
     restoreViewPosition({ cursor, scrollTop }) {
       view.dispatch({ selection: { anchor: Math.min(cursor, view.state.doc.length) } });

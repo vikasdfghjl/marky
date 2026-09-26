@@ -121,6 +121,19 @@ check('recovery snapshot round-trips', read.ok?.recovery?.text === snapshot.text
 await invoke('clear_snapshot');
 check('recovery snapshot clears', (await invoke('startup_state')).ok?.recovery === null);
 
+// ---- native menu commands reach the frontend (clicks arrive as 'menu' events) ----
+const emitMenu = (id) => invoke('plugin:event|emit', { event: 'menu', payload: id });
+await emitMenu('toggle-preview');
+await sleep(200);
+const hiddenAfterToggle = await evaluate(`document.getElementById('preview').hidden`);
+await emitMenu('toggle-preview');
+await sleep(200);
+check('menu command toggles preview', hiddenAfterToggle && !(await evaluate(`document.getElementById('preview').hidden`)));
+await emitMenu('replace');
+await sleep(200);
+check('menu Replace focuses the replace field', await evaluate(`document.activeElement?.getAttribute('name') === 'replace'`));
+await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+
 // ---- leave the buffer dirty for the close-guard check in e2e.ps1 ----
 await send('Input.insertText', { text: 'unsaved ' });
 await sleep(300);

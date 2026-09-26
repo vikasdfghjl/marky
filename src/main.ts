@@ -324,32 +324,60 @@ async function offerRecovery(snapshot: Snapshot) {
   lastSnapshotText = snapshot.text;
 }
 
-// ---- shortcuts ----
+// ---- commands: one table for the menu bar and the keyboard ----
 
-function shortcutAction(e: KeyboardEvent): (() => unknown) | null {
-  // A reload would silently drop the buffer; there is nothing to refresh.
-  if (e.key === 'F5') return () => {};
-  if (!e.ctrlKey || e.altKey) return null;
-  const key = e.key.toLowerCase();
-  if (key === 'n' && !e.shiftKey) return newDocument;
-  if (key === 'w' && !e.shiftKey) return closeWindow;
-  if (key === 'o' && !e.shiftKey) return openWithDialog;
-  if (key === 'r') return e.shiftKey ? () => {} : openRecent;
-  if (key === 's') return () => save(e.shiftKey);
-  if (key === 'v' && e.shiftKey) return togglePreview;
-  if (key === 'h' && !e.shiftKey) return editor.openReplace;
-  return null;
+/** Ids match the native menu items in src-tauri/src/menu.rs. */
+const commands = {
+  new: newDocument,
+  open: openWithDialog,
+  'open-recent': openRecent,
+  save: () => save(),
+  'save-as': () => save(true),
+  close: closeWindow,
+  undo: editor.undo,
+  redo: editor.redo,
+  find: editor.openFind,
+  replace: editor.openReplace,
+  'toggle-preview': togglePreview,
+} satisfies Record<string, () => unknown>;
+
+type CommandId = keyof typeof commands;
+
+function runCommand(id: string) {
+  if (!(id in commands)) return;
+  void commands[id as CommandId]();
+}
+
+/** Undo, redo and find are left to CodeMirror's own keymap; the menu only mirrors them. */
+const SHORTCUTS: Record<string, CommandId> = {
+  'Ctrl+N': 'new',
+  'Ctrl+O': 'open',
+  'Ctrl+R': 'open-recent',
+  'Ctrl+S': 'save',
+  'Ctrl+Shift+S': 'save-as',
+  'Ctrl+W': 'close',
+  'Ctrl+H': 'replace',
+  'Ctrl+Shift+V': 'toggle-preview',
+};
+
+/** A reload would silently drop the buffer; there is nothing to refresh. */
+const BLOCKED_KEYS = new Set(['F5', 'Ctrl+F5', 'Ctrl+Shift+R']);
+
+function keyChord(e: KeyboardEvent): string {
+  const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  return [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', key].filter(Boolean).join('+');
 }
 
 // Capture phase so app shortcuts win over the editor and the webview defaults.
 window.addEventListener(
   'keydown',
   (e) => {
-    const action = shortcutAction(e);
-    if (!action) return;
+    const chord = keyChord(e);
+    const command = SHORTCUTS[chord];
+    if (!command && !BLOCKED_KEYS.has(chord)) return;
     e.preventDefault();
     e.stopPropagation();
-    void action();
+    if (command) runCommand(command);
   },
   { capture: true },
 );
@@ -367,8 +395,9 @@ function startInBrowser() {
 async function start() {
   if (!isTauri) return startInBrowser();
 
-  const [, , , startup] = await Promise.all([
+  const [, , , , startup] = await Promise.all([
     api.onOpenRequest((path) => void openPath(path)),
+    api.onMenuCommand(runCommand),
     api.onCloseRequested(() => void closeWindow()),
     api.onFileChanged(onFileChangedOnDisk),
     api.startupState(),

@@ -50,6 +50,9 @@ export const api = {
   closeWindow: () => invoke<void>('close_window'),
   onOpenRequest: (cb: (path: string) => void): Promise<UnlistenFn> =>
     listen<string>('open-request', (e) => cb(e.payload)),
+  /** Native menu clicks; the payload is a command id (see `commands` in main.ts). */
+  onMenuCommand: (cb: (command: string) => void): Promise<UnlistenFn> =>
+    listen<string>('menu', (e) => cb(e.payload)),
   /** Fires in bursts for any change to the watched file, including our own saves. */
   onFileChanged: (cb: () => void): Promise<UnlistenFn> => listen('file-changed', cb),
   /** Fired only when the window is closed with unsaved changes; clean windows close natively. */

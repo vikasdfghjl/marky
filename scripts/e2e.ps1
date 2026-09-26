@@ -40,6 +40,14 @@ try {
   node (Join-Path $PSScriptRoot 'e2e.mjs') $fixture
   if ($LASTEXITCODE -ne 0) { $script:failures++ }
 
+  Add-Type -Namespace Win32 -Name Menu -MemberDefinition @'
+[DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr hMenu);
+'@
+  $app.Refresh()
+  $menuCount = [Win32.Menu]::GetMenuItemCount([Win32.Menu]::GetMenu($app.MainWindowHandle))
+  Write-Check 'native menu bar has File, Edit, View, Help' ($menuCount -eq 4) "$menuCount top-level menus"
+
   $app.CloseMainWindow() | Out-Null
   Start-Sleep -Seconds 2
   Write-Check 'close with unsaved changes is held for the prompt' (-not $app.HasExited)

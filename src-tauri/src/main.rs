@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod files;
+mod menu;
 mod store;
 mod watcher;
 
@@ -382,6 +383,8 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .menu(menu::build)
+        .on_menu_event(menu::on_event)
         .manage(state)
         .setup(move |_| {
             perf_log(&format!("setup_ms={:.0}", started.elapsed().as_secs_f64() * 1000.0));
