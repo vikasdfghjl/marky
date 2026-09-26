@@ -53,10 +53,13 @@ Working now:
 - Crash-safe saves (temp file, flush, atomic rename; follows symlinks), verified by a test that kills the process mid-save
 - Native Save / Don't save / Cancel prompt before closing, opening another file or starting a new one
 - External change detection: a clean buffer reloads silently when git or an AI agent rewrites the file; an edited buffer asks Reload / Keep mine
+- Tabs: up to 20 files, each with its own undo history, cursor and scroll position. Opening a file that is already open focuses its tab; a second launch from Explorer opens in a new tab
+- Drag and drop files onto the window to open them, one tab each
+- Native menu bar (File, Edit, View, Help), with Alt and arrow-key navigation
 - Recent files (last 10), Ctrl+R
 - Crash recovery: unsaved changes are snapshotted every 30 s and offered back after a crash
 
-Built, not yet tested end to end: open dialog, drag-drop, the Reload / Keep mine and crash-recovery prompts, and single instance (a second launch forwards its file to the running window).
+Built, not yet tested end to end: the open dialog, the native drop itself (the overlay and the open path are tested), and the Reload / Keep mine and crash-recovery prompts.
 
 Not yet built: optional auto-save (F13, waits for a settings surface) and taskbar jump-list entries for recent files (F9, needs Win32 code).
 
@@ -64,12 +67,13 @@ Not yet built: optional auto-save (F13, waits for a settings surface) and taskba
 
 | Shortcut        | Action                                              |
 | --------------- | --------------------------------------------------- |
-| Ctrl+N          | New document                                        |
+| Ctrl+N          | New tab                                             |
 | Ctrl+O          | Open file                                           |
 | Ctrl+R          | Open recent file                                    |
 | Ctrl+S          | Save                                                |
 | Ctrl+Shift+S    | Save As                                             |
-| Ctrl+W          | Close window                                        |
+| Ctrl+W          | Close tab (the last tab closes the window)          |
+| Ctrl+Tab        | Next tab (Ctrl+Shift+Tab: previous)                 |
 | Ctrl+Shift+V    | Toggle preview                                      |
 | Ctrl+F          | Find                                                |
 | Ctrl+H          | Find and replace                                    |
@@ -153,6 +157,7 @@ src/
   preview.worker.ts     markdown-it rendering and local-image resolution off the main thread
   scroll-sync.ts        Editor-to-preview synced scroll via source-line markers
   recent-picker.ts      Ctrl+R recent-files list
+  tab-strip.ts          Tab strip rendering (tablist semantics)
   perf.ts               Cold-start instrumentation
   ipc.ts                Typed wrappers around Tauri commands and events
   styles.css            Theme variables (light/dark), picker and preview typography
@@ -160,7 +165,8 @@ src-tauri/
   src/main.rs           Commands, path allowlist, dialogs, window lifecycle, single instance
   src/files.rs          Read/write with BOM and line-ending handling, atomic save
   src/watcher.rs        External change detection (watches the file's folder)
-  src/store.rs          Recent-files list and crash-recovery snapshot (JSON in app folders)
+  src/store.rs          Recent-files list and crash-recovery snapshots (JSON in app folders)
+  src/menu.rs           Native menu bar
   tauri.conf.json       Window, CSP, asset protocol, bundle and file-association config
   capabilities/         Webview permissions (least privilege)
 scripts/

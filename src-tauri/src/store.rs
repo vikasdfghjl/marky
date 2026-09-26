@@ -33,12 +33,18 @@ pub fn push_recent(config_dir: &Path, path: &Path) -> io::Result<()> {
     write_json(&config_dir.join(RECENT_FILE), &recent)
 }
 
-pub fn save_snapshot(data_dir: &Path, snapshot: &Snapshot) -> io::Result<()> {
-    write_json(&data_dir.join(SNAPSHOT_FILE), snapshot)
+/// One entry per unsaved tab.
+pub fn save_snapshots(data_dir: &Path, snapshots: &[Snapshot]) -> io::Result<()> {
+    write_json(&data_dir.join(SNAPSHOT_FILE), snapshots)
 }
 
-pub fn read_snapshot(data_dir: &Path) -> Option<Snapshot> {
-    read_json(&data_dir.join(SNAPSHOT_FILE))
+/// Empty when there is nothing to recover. Also reads the single-snapshot format written before tabs.
+pub fn read_snapshots(data_dir: &Path) -> Vec<Snapshot> {
+    let path = data_dir.join(SNAPSHOT_FILE);
+    if let Some(snapshots) = read_json::<Vec<Snapshot>>(&path) {
+        return snapshots;
+    }
+    read_json::<Snapshot>(&path).into_iter().collect()
 }
 
 pub fn clear_snapshot(data_dir: &Path) -> io::Result<()> {
@@ -99,18 +105,27 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_round_trips_and_clears() {
+    fn snapshots_round_trip_and_clear() {
         let dir = temp_dir("snapshot");
-        let snapshot = Snapshot {
-            path: Some("C:\\docs\\a.md".into()),
-            text: "unsaved\n".into(),
+        let snapshot = |path: Option<&str>, text: &str| Snapshot {
+            path: path.map(Into::into),
+            text: text.into(),
             meta: FileMeta { bom: true, line_ending: LineEnding::Crlf },
         };
-        save_snapshot(&dir, &snapshot).unwrap();
-        assert_eq!(read_snapshot(&dir), Some(snapshot));
+        let snapshots = vec![snapshot(Some("C:\\docs\\a.md"), "unsaved\n"), snapshot(None, "untitled\n")];
+        save_snapshots(&dir, &snapshots).unwrap();
+        assert_eq!(read_snapshots(&dir), snapshots);
 
         clear_snapshot(&dir).unwrap();
-        assert_eq!(read_snapshot(&dir), None);
+        assert!(read_snapshots(&dir).is_empty());
         clear_snapshot(&dir).unwrap();
+    }
+
+    #[test]
+    fn reads_single_snapshot_written_before_tabs() {
+        let dir = temp_dir("legacy");
+        let single = Snapshot { path: None, text: "old\n".into(), meta: FileMeta { bom: false, line_ending: LineEnding::Lf } };
+        write_json(&dir.join(SNAPSHOT_FILE), &single).unwrap();
+        assert_eq!(read_snapshots(&dir), vec![single]);
     }
 }

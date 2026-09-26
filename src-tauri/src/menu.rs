@@ -13,14 +13,14 @@ const ABOUT: &str = "about";
 /// Item ids are the frontend's command names (see `commands` in main.ts).
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let file = SubmenuBuilder::new(app, "&File")
-        .text("new", "&New\tCtrl+N")
+        .text("new", "&New Tab\tCtrl+N")
         .text("open", "&Open…\tCtrl+O")
         .text("open-recent", "Open &Recent…\tCtrl+R")
         .separator()
         .text("save", "&Save\tCtrl+S")
         .text("save-as", "Save &As…\tCtrl+Shift+S")
         .separator()
-        .text("close", "&Close\tCtrl+W")
+        .text("close", "&Close Tab\tCtrl+W")
         .build()?;
     let edit = SubmenuBuilder::new(app, "&Edit")
         .text("undo", "&Undo\tCtrl+Z")
@@ -31,6 +31,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .build()?;
     let view = SubmenuBuilder::new(app, "&View")
         .text("toggle-preview", "Toggle &Preview\tCtrl+Shift+V")
+        .separator()
+        .text("next-tab", "Ne&xt Tab\tCtrl+Tab")
+        .text("previous-tab", "Pre&vious Tab\tCtrl+Shift+Tab")
         .build()?;
     let help = SubmenuBuilder::new(app, "&Help").text(ABOUT, "&About Marky").build()?;
     MenuBuilder::new(app).items(&[&file, &edit, &view, &help]).build()

@@ -16,6 +16,7 @@ Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $dir 'img') | Out-Null
 $fixture = Join-Path $dir 'fixture.md'
 [IO.File]::WriteAllBytes($fixture, [byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("# Fixture`r`n`r`n![dot](img/dot.png)`r`n`r`nBody text`r`n"))
+[IO.File]::WriteAllText((Join-Path $dir 'second.md'), "# Second file`n")
 [IO.File]::WriteAllBytes((Join-Path $dir 'img\dot.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='))
 
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
@@ -37,7 +38,7 @@ try {
   # Run A: everything scriptable, ending with unsaved changes for the close guard.
   $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
   Start-Sleep -Seconds 4
-  node (Join-Path $PSScriptRoot 'e2e.mjs') $fixture
+  node (Join-Path $PSScriptRoot 'e2e.mjs') $fixture $exe (Join-Path $dir 'second.md')
   if ($LASTEXITCODE -ne 0) { $script:failures++ }
 
   Add-Type -Namespace Win32 -Name Menu -MemberDefinition @'

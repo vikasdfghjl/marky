@@ -52,6 +52,10 @@ const theme = EditorView.theme({
 
 export interface Editor {
   view: EditorView;
+  /** A fresh state (own undo history) for a tab that is not shown yet. */
+  createState(text: string, opts?: { readOnly?: boolean }): EditorState;
+  /** Shows a tab's state, keeping its undo history and selection, and restores its scroll position. */
+  show(state: EditorState, scrollTop?: number): void;
   /** Replace the document and reset undo history (used when opening a file). */
   load(text: string, opts?: { readOnly?: boolean }): void;
   text(): string;
@@ -99,12 +103,20 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     command(view);
   };
 
+  const createState = (text: string, opts: { readOnly?: boolean } = {}) =>
+    EditorState.create({ doc: text, extensions: extensions(!!opts.readOnly) });
+  const show = (state: EditorState, scrollTop = 0) => {
+    view.setState(state);
+    view.focus();
+    // Wait for the new document's layout before scrolling.
+    if (scrollTop) requestAnimationFrame(() => (view.scrollDOM.scrollTop = scrollTop));
+  };
+
   return {
     view,
-    load(text, opts = {}) {
-      view.setState(EditorState.create({ doc: text, extensions: extensions(!!opts.readOnly) }));
-      view.focus();
-    },
+    createState,
+    show,
+    load: (text, opts) => show(createState(text, opts)),
     text: () => view.state.doc.toString(),
     undo: () => runAndFocus(undo),
     redo: () => runAndFocus(redo),

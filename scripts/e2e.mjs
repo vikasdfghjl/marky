@@ -1,8 +1,9 @@
 // Drives the running app over the WebView2 DevTools protocol (Node 24 has a global WebSocket).
 // Usage: node e2e.mjs <fixture.md>. Prints one PASS/FAIL line per check.
+import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const fixture = process.argv[2];
+const [fixture, exe, secondFixture] = process.argv.slice(2);
 const port = 9222;
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -33,6 +34,10 @@ const invoke = (command, args) =>
     .then((v) => ({ ok: v }), (e) => ({ err: String(e) }))`);
 const title = () => evaluate('document.title');
 const editorText = () => evaluate(`document.querySelector('.cm-content').innerText`);
+const pressKey = (key, code, vk, modifiers) =>
+  Promise.all(
+    ['keyDown', 'keyUp'].map((type) => send('Input.dispatchKeyEvent', { type, modifiers, key, code, windowsVirtualKeyCode: vk })),
+  );
 const pressCtrl = (key, code, vk) =>
   Promise.all(
     ['keyDown', 'keyUp'].map((type) =>
@@ -114,12 +119,12 @@ const savedText = readFileSync(fixture, 'utf8');
 check('IME text saved as UTF-8', savedText.includes('日本語') && savedText.includes('नमस्ते'), JSON.stringify(savedText));
 
 // ---- crash-recovery snapshot round trip (F13) ----
-const snapshot = { path: fixture, text: 'recovered text\n', meta: { bom: false, lineEnding: 'lf' } };
-await invoke('snapshot_buffer', { snapshot });
+const snapshots = [{ path: fixture, text: 'recovered text\n', meta: { bom: false, lineEnding: 'lf' } }];
+await invoke('snapshot_buffers', { snapshots });
 const read = await invoke('startup_state');
-check('recovery snapshot round-trips', read.ok?.recovery?.text === snapshot.text, JSON.stringify(read));
-await invoke('clear_snapshot');
-check('recovery snapshot clears', (await invoke('startup_state')).ok?.recovery === null);
+check('recovery snapshot round-trips', read.ok?.recovery?.[0]?.text === snapshots[0].text, JSON.stringify(read));
+await invoke('snapshot_buffers', { snapshots: [] });
+check('recovery snapshot clears', (await invoke('startup_state')).ok?.recovery?.length === 0);
 
 // ---- native menu commands reach the frontend (clicks arrive as 'menu' events) ----
 const emitMenu = (id) => invoke('plugin:event|emit', { event: 'menu', payload: id });
@@ -133,6 +138,31 @@ await emitMenu('replace');
 await sleep(200);
 check('menu Replace focuses the replace field', await evaluate(`document.activeElement?.getAttribute('name') === 'replace'`));
 await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+
+// ---- tabs (F14) and single instance: a second launch opens its file in a new tab ----
+const tabTitles = () => evaluate(`[...document.querySelectorAll('[role=tab]')].map((t) => t.querySelector('.tab-title').textContent)`);
+const activeTab = () => evaluate(`document.querySelector('[role=tab][aria-selected=true] .tab-title').textContent`);
+spawn(exe, [secondFixture], { detached: true, stdio: 'ignore' }).unref();
+await sleep(2500);
+check('second launch opens a new tab', JSON.stringify(await tabTitles()) === JSON.stringify(['fixture.md', 'second.md']), JSON.stringify(await tabTitles()));
+check('new tab is active and shows its file', (await activeTab()) === 'second.md' && (await editorText()).includes('Second file'));
+await pressKey('Tab', 'Tab', 9, 2);
+await sleep(200);
+check('Ctrl+Tab switches back with the text intact', (await activeTab()) === 'fixture.md' && (await editorText()).includes('日本語'));
+spawn(exe, [secondFixture], { detached: true, stdio: 'ignore' }).unref();
+await sleep(2500);
+check('reopening an open file focuses its tab', (await tabTitles()).length === 2 && (await activeTab()) === 'second.md');
+await pressCtrl('w', 'KeyW', 87);
+await sleep(300);
+check('Ctrl+W closes a clean tab', JSON.stringify(await tabTitles()) === JSON.stringify(['fixture.md']), JSON.stringify(await tabTitles()));
+
+// ---- drag and drop overlay (the native drop itself is not scriptable) ----
+await invoke('plugin:event|emit', { event: 'drag-hover', payload: true });
+await sleep(100);
+const overlayShown = await evaluate(`document.body.classList.contains('drag-over')`);
+await invoke('plugin:event|emit', { event: 'drag-hover', payload: false });
+await sleep(100);
+check('drag over the window shows the drop overlay', overlayShown && !(await evaluate(`document.body.classList.contains('drag-over')`)));
 
 // ---- leave the buffer dirty for the close-guard check in e2e.ps1 ----
 await send('Input.insertText', { text: 'unsaved ' });

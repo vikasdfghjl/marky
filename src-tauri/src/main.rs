@@ -6,7 +6,7 @@ mod menu;
 mod store;
 mod watcher;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,8 +39,8 @@ struct AppState {
     startup_read: Mutex<Option<StartupRead>>,
     /// Mirrors the editor's unsaved state so a clean window closes without a JS round trip.
     dirty: AtomicBool,
-    /// One watcher for the one open file; replacing it stops the previous watch.
-    watcher: Mutex<Option<RecommendedWatcher>>,
+    /// One watcher per open tab's file; dropping an entry stops that watch.
+    watchers: Mutex<HashMap<PathBuf, RecommendedWatcher>>,
 }
 
 impl AppState {
@@ -66,7 +66,8 @@ struct StartupState {
     file: Option<OpenedFile>,
     /// Set when the startup file could not be read; the frontend reports it.
     file_error: Option<String>,
-    recovery: Option<Snapshot>,
+    /// Unsaved tabs left by a session that did not end cleanly (empty when none).
+    recovery: Vec<Snapshot>,
 }
 
 #[derive(Serialize)]
@@ -110,8 +111,8 @@ fn record_file_access(app: &AppHandle, path: &Path) {
 /// One-shot: the pre-read startup file and any crash-recovery snapshot (whose path is re-authorised).
 #[tauri::command]
 async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<StartupState, String> {
-    let recovery = store::read_snapshot(&local_data_dir(&app)?);
-    if let Some(path) = recovery.as_ref().and_then(|s| s.path.as_ref()) {
+    let recovery = store::read_snapshots(&local_data_dir(&app)?);
+    for path in recovery.iter().filter_map(|s| s.path.as_ref()) {
         state.remember_user_choice(PathBuf::from(path));
     }
 
@@ -213,23 +214,27 @@ async fn file_mtime(state: State<'_, AppState>, path: String) -> Result<Option<u
 
 // ---- external change detection (F8) ----
 
-/// Emits `file-changed` whenever another program touches `path`. Replaces any previous watch.
+/// Emits `file-changed` (payload: the path) whenever another program touches `path`.
 #[tauri::command]
 async fn watch_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
     let path = state.require_user_choice(&path)?;
+    if state.watchers.lock().unwrap().contains_key(&path) {
+        return Ok(());
+    }
     let emitter = app.clone();
     let payload = display(&path);
     let watcher = watcher::watch(&path, move || {
         let _ = emitter.emit_to("main", "file-changed", &payload);
     })
     .map_err(|e| e.to_string())?;
-    *state.watcher.lock().unwrap() = Some(watcher);
+    state.watchers.lock().unwrap().insert(path, watcher);
     Ok(())
 }
 
 #[tauri::command]
-fn unwatch_file(state: State<'_, AppState>) {
-    *state.watcher.lock().unwrap() = None;
+fn unwatch_file(state: State<'_, AppState>, path: String) {
+    let Ok(path) = std::path::absolute(&path) else { return };
+    state.watchers.lock().unwrap().remove(&path);
 }
 
 // ---- recent files (F9) ----
@@ -247,15 +252,14 @@ async fn recent_files(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<
 
 // ---- crash recovery (F13); the snapshot itself is read by `startup_state` ----
 
+/// Replaces the recovery file with the given unsaved tabs; an empty list clears it.
 #[tauri::command]
-async fn snapshot_buffer(app: AppHandle, snapshot: Snapshot) -> Result<(), String> {
-    store::save_snapshot(&local_data_dir(&app)?, &snapshot).map_err(|e| e.to_string())
+async fn snapshot_buffers(app: AppHandle, snapshots: Vec<Snapshot>) -> Result<(), String> {
+    let dir = local_data_dir(&app)?;
+    let result = if snapshots.is_empty() { store::clear_snapshot(&dir) } else { store::save_snapshots(&dir, &snapshots) };
+    result.map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-async fn clear_snapshot(app: AppHandle) -> Result<(), String> {
-    store::clear_snapshot(&local_data_dir(&app)?).map_err(|e| e.to_string())
-}
 
 // ---- prompts & window lifecycle ----
 
@@ -338,9 +342,17 @@ fn has_unsaved_changes(window: &Window) -> bool {
 
 fn on_window_event(window: &Window, event: &WindowEvent) {
     match event {
+        WindowEvent::DragDrop(DragDropEvent::Enter { .. }) => {
+            let _ = window.emit_to("main", "drag-hover", true);
+        }
+        WindowEvent::DragDrop(DragDropEvent::Leave) => {
+            let _ = window.emit_to("main", "drag-hover", false);
+        }
         WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
-            let Some(path) = paths.first() else { return };
-            request_open(window.app_handle(), path.clone());
+            let _ = window.emit_to("main", "drag-hover", false);
+            for path in paths {
+                request_open(window.app_handle(), path.clone());
+            }
         }
         WindowEvent::CloseRequested { api, .. } if has_unsaved_changes(window) => {
             api.prevent_close();
@@ -360,7 +372,7 @@ fn main() {
         user_chosen: Mutex::default(),
         startup_read: Mutex::new(None),
         dirty: AtomicBool::new(false),
-        watcher: Mutex::new(None),
+        watchers: Mutex::default(),
     };
     if let Some(path) = startup {
         let path = state.remember_user_choice(path);
@@ -406,8 +418,7 @@ fn main() {
             watch_file,
             unwatch_file,
             recent_files,
-            snapshot_buffer,
-            clear_snapshot,
+            snapshot_buffers,
             set_dirty,
             ask_unsaved_changes,
             ask_choice,

@@ -37,10 +37,10 @@ export const api = {
   /** Null when the file no longer exists. */
   fileMtime: (path: string) => invoke<number | null>('file_mtime', { path }),
   watchFile: (path: string) => invoke<void>('watch_file', { path }),
-  unwatchFile: () => invoke<void>('unwatch_file'),
+  unwatchFile: (path: string) => invoke<void>('unwatch_file', { path }),
   recentFiles: () => invoke<string[]>('recent_files'),
-  snapshotBuffer: (snapshot: Snapshot) => invoke<void>('snapshot_buffer', { snapshot }),
-  clearSnapshot: () => invoke<void>('clear_snapshot'),
+  /** Replaces the recovery file with these unsaved tabs; an empty list clears it. */
+  snapshotBuffers: (snapshots: Snapshot[]) => invoke<void>('snapshot_buffers', { snapshots }),
   setDirty: (dirty: boolean) => invoke<void>('set_dirty', { dirty }),
   askUnsavedChanges: (fileName: string) => invoke<UnsavedChoice>('ask_unsaved_changes', { fileName }),
   /** True only when the user picks `confirm`. */
@@ -54,7 +54,11 @@ export const api = {
   onMenuCommand: (cb: (command: string) => void): Promise<UnlistenFn> =>
     listen<string>('menu', (e) => cb(e.payload)),
   /** Fires in bursts for any change to the watched file, including our own saves. */
-  onFileChanged: (cb: () => void): Promise<UnlistenFn> => listen('file-changed', cb),
+  onFileChanged: (cb: (path: string) => void): Promise<UnlistenFn> =>
+    listen<string>('file-changed', (e) => cb(e.payload)),
+  /** True while files are dragged over the window, false when they leave or drop. */
+  onDragHover: (cb: (hovering: boolean) => void): Promise<UnlistenFn> =>
+    listen<boolean>('drag-hover', (e) => cb(e.payload)),
   /** Fired only when the window is closed with unsaved changes; clean windows close natively. */
   onCloseRequested: (cb: () => void): Promise<UnlistenFn> => listen('close-requested', cb),
   setTitle: (title: string) => getCurrentWindow().setTitle(title),
@@ -65,7 +69,8 @@ export type UnsavedChoice = 'save' | 'discard' | 'cancel';
 export interface StartupState {
   file: OpenedFile | null;
   fileError: string | null;
-  recovery: Snapshot | null;
+  /** Unsaved tabs left by a session that did not end cleanly; empty when none. */
+  recovery: Snapshot[];
 }
 
 /** Crash-recovery copy of an unsaved buffer. */
