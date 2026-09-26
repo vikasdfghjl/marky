@@ -1,5 +1,10 @@
 // Drives the running app over the WebView2 DevTools protocol (Node 24 has a global WebSocket).
+// Usage: node e2e.mjs <fixture.md>. Prints one PASS/FAIL line per check.
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const fixture = process.argv[2];
 const port = 9222;
+const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
@@ -9,12 +14,12 @@ let nextId = 0;
 const pending = new Map();
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
-  if (msg.id && pending.has(msg.id)) {
-    pending.get(msg.id)(msg);
-    pending.delete(msg.id);
-  }
+  if (!msg.id || !pending.has(msg.id)) return;
+  pending.get(msg.id)(msg);
+  pending.delete(msg.id);
 };
 await new Promise((r) => (ws.onopen = r));
+
 const send = (method, params = {}) =>
   new Promise((r) => {
     const id = ++nextId;
@@ -23,42 +28,83 @@ const send = (method, params = {}) =>
   });
 const evaluate = async (expression) =>
   (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })).result.result.value;
-
-const ctrlKey = (key, code, vk) =>
+const invoke = (command, args) =>
+  evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(args ?? {})})
+    .then((v) => ({ ok: v }), (e) => ({ err: String(e) }))`);
+const title = () => evaluate('document.title');
+const editorText = () => evaluate(`document.querySelector('.cm-content').innerText`);
+const pressCtrl = (key, code, vk) =>
   Promise.all(
     ['keyDown', 'keyUp'].map((type) =>
       send('Input.dispatchKeyEvent', { type, modifiers: 2, key, code, windowsVirtualKeyCode: vk }),
     ),
   );
 
-const results = [];
-const check = (name, ok, detail = '') => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
+let failures = 0;
+const check = (name, ok, detail = '') => {
+  if (!ok) failures++;
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
+};
 
-const mode = process.argv[2];
+// ---- open, format detection, preview ----
+check('startup file opened', (await title()) === 'fixture.md — Marky', await title());
+check(
+  'BOM + CRLF detected',
+  (await evaluate(`document.getElementById('st-enc').textContent + ' ' + document.getElementById('st-eol').textContent`)) ===
+    'UTF-8 BOM CRLF',
+);
+check('preview rendered', await evaluate(`!!document.querySelector('#preview h1')`));
+await sleep(500);
+check(
+  'relative image loads from the file folder (F12)',
+  await evaluate(`(() => { const img = document.querySelector('#preview img'); return !!img && img.complete && img.naturalWidth > 0; })()`),
+  await evaluate(`document.querySelector('#preview img')?.src ?? 'no img'`),
+);
 
-if (mode === 'edit-save') {
-  check('startup file opened', (await evaluate('document.title')) === 'fixture.md — Marky', await evaluate('document.title'));
-  check('BOM + CRLF detected', (await evaluate(`document.getElementById('st-enc').textContent + ' ' + document.getElementById('st-eol').textContent`)) === 'UTF-8 BOM CRLF');
-  check('preview rendered', await evaluate(`!!document.querySelector('#preview h1')`));
+// ---- edit and save ----
+await evaluate(`document.querySelector('.cm-content').focus()`);
+await send('Input.insertText', { text: 'Added line\n' });
+await sleep(300);
+check('dirty marker after typing', (await title()).startsWith('● '));
 
-  await evaluate(`document.querySelector('.cm-content').focus()`);
-  await send('Input.insertText', { text: 'Added line\n' });
-  await sleep(300);
-  check('dirty marker after typing', (await evaluate('document.title')).startsWith('● '));
+await pressCtrl('s', 'KeyS', 83);
+await sleep(800);
+check('clean after Ctrl+S', (await title()) === 'fixture.md — Marky', await title());
+const expected = Buffer.concat([BOM, Buffer.from('Added line\r\n# Fixture\r\n\r\n![dot](img/dot.png)\r\n\r\nBody text\r\n')]);
+check('saved bytes keep BOM and CRLF', readFileSync(fixture).equals(expected));
 
-  await ctrlKey('s', 'KeyS', 83);
-  await sleep(800);
-  check('clean after Ctrl+S', (await evaluate('document.title')) === 'fixture.md — Marky', await evaluate('document.title'));
+// ---- security ----
+const leak = await invoke('open_file', { path: 'C:\\Windows\\win.ini' });
+check('unselected path is refused', !!leak.err, leak.err ?? 'LEAKED');
 
-  const leak = await evaluate(
-    `window.__TAURI_INTERNALS__.invoke('open_file', { path: 'C:\\\\Windows\\\\win.ini' }).then(() => 'LEAKED', (e) => 'blocked: ' + e)`,
-  );
-  check('unselected path is refused', leak.startsWith('blocked'), leak);
+// ---- recent files (F9) ----
+const recent = await invoke('recent_files');
+check('opened file is in recent files', recent.ok?.[0]?.toLowerCase() === fixture.toLowerCase(), JSON.stringify(recent));
 
-  await send('Input.insertText', { text: 'unsaved ' });
-  await sleep(300);
-  check('dirty again before close test', (await evaluate('document.title')).startsWith('● '));
-}
+// ---- external change while clean reloads silently (F8) ----
+writeFileSync(fixture, Buffer.concat([BOM, Buffer.from('# Changed on disk\r\n')]));
+await sleep(1000);
+check('clean buffer reloads external change', (await editorText()).includes('Changed on disk'), await editorText());
+check('still clean after reload', (await title()) === 'fixture.md — Marky', await title());
 
-console.log(results.join('\n'));
+// ---- our own save does not trigger a reload prompt ----
+await send('Input.insertText', { text: 'x' });
+await pressCtrl('s', 'KeyS', 83);
+await sleep(1000);
+check('own save is not treated as external', (await title()) === 'fixture.md — Marky', await title());
+
+// ---- crash-recovery snapshot round trip (F13) ----
+const snapshot = { path: fixture, text: 'recovered text\n', meta: { bom: false, lineEnding: 'lf' } };
+await invoke('snapshot_buffer', { snapshot });
+const read = await invoke('read_recovery');
+check('recovery snapshot round-trips', read.ok?.text === snapshot.text, JSON.stringify(read));
+await invoke('clear_snapshot');
+check('recovery snapshot clears', (await invoke('read_recovery')).ok === null);
+
+// ---- leave the buffer dirty for the close-guard check in e2e.ps1 ----
+await send('Input.insertText', { text: 'unsaved ' });
+await sleep(300);
+check('dirty again before close test', (await title()).startsWith('● '));
+
 ws.close();
+process.exit(failures ? 1 : 0);

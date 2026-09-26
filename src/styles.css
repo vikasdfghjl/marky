@@ -117,6 +117,61 @@ body {
   flex: 1;
 }
 
+/* ---- recent-files picker ---- */
+
+.picker-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: rgb(0 0 0 / 0.25);
+  z-index: 10;
+}
+
+.picker {
+  width: min(640px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.3);
+  outline: none;
+}
+
+.picker ul {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+
+.picker li {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.picker li[aria-selected='true'] {
+  background: var(--selection);
+}
+
+.picker-name {
+  font-weight: 600;
+}
+
+.picker-folder,
+.picker-empty {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- preview typography ---- */
 
 .markdown-body {

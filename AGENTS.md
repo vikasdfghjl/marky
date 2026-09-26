@@ -4,11 +4,14 @@ Marky is a Windows Markdown editor: Tauri 2 (Rust) + WebView2 + CodeMirror 6 + m
 
 ## Architecture invariants
 
-- **Rust owns the disk; the webview owns the text.** The document lives in CodeMirror state and crosses IPC only on open, save and external change. Typing stays inside the webview.
-- **Paths come only from Rust.** Dialogs, drag-drop, CLI args and single-instance forwards call `AppState::remember_user_choice`; `open_file`/`save_file` call `require_user_choice`. Any new way to obtain a path registers it through `remember_user_choice` on the Rust side.
+- **Rust owns the disk; the webview owns the text.** The document lives in CodeMirror state and crosses IPC only on open, save, external change and the 30-second recovery snapshot. Typing stays inside the webview.
+- **Paths come only from Rust.** Dialogs, drag-drop, CLI args, single-instance forwards, the recent list and crash recovery call `AppState::remember_user_choice`; `open_file`/`save_file` call `require_user_choice`. Any new way to obtain a path registers it through `remember_user_choice` on the Rust side.
 - **Least-privilege webview.** `src-tauri/capabilities/default.json` grants only events and set-title. Prefer a custom command over a plugin permission; when a permission is unavoidable, scope it narrowly and say why in the capability's description.
 - **Untrusted Markdown.** The preview renders with `html: false`, never navigates, and runs under the CSP in `tauri.conf.json` (`csp` and `devCsp` change together). Enabling raw HTML means routing output through DOMPurify first.
 - **Text model.** The editor always holds LF text. `files.rs` detects BOM and line ending on read and restores them on write, so saving an unedited file reproduces it byte-for-byte. All writes go through `files::write` (temp file, `sync_all`, atomic `fs::rename`). `ReplaceFileW` looks nicer because it keeps ACLs, but a kill mid-call leaves no file; `killed_mid_save_leaves_old_or_new_content` guards this.
+- **Preview images are scoped to opened folders.** The asset-protocol scope starts empty; `record_file_access` widens it to a file's folder after a successful open or save. That is the only place it widens.
+- **External changes are recognised by mtime.** `watcher.rs` watches the file's folder (saves replace files by rename). The frontend debounces events and compares disk mtime with `currentFile.mtimeMs`, which `save_file` updates, so our own saves never prompt.
+- **Recovery runs before any file opens at startup,** because showing a document clears the snapshot.
 - **Dirty state has one writer.** `setDirty` in `main.ts` updates the title and mirrors transitions to Rust (`set_dirty`), which holds the window close only when dirty. Route every dirty change through it.
 - **Lazy by default.** Language packs, and later KaTeX and Mermaid, load through dynamic `import()`. The initial JS (entry chunk plus its modulepreloads) stays ≤ 250 KB gzipped. The preview worker stays a separate emitted file because the CSP allows `worker-src 'self'` only.
 
@@ -19,6 +22,10 @@ Budgets are release-blocking. Measure on a release build (`npx tauri build --no-
 The README's **Benchmarks** section is the single record of current numbers. After any benchmark run, update that table, its date and the breakdown sentence in the same change.
 
 Known cost structure: about 610 ms of cold start is WebView2 creating its browser process before `setup` runs, and flags don't move it. Optimise the frontend part: bundle size, first layout, IPC round trips. The WebView2 flags in `tauri.conf.json` (`additionalBrowserArgs`) replace Tauri's defaults, so keep the `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` prefix. Keep the GPU enabled; it protects typing and scroll latency.
+
+## Check the docs first
+
+Tauri 2 and CodeMirror 6 move quickly, and memory of their APIs goes stale. Before using or changing an API from either, read the current reference: [v2.tauri.app/reference](https://v2.tauri.app/reference/) and [codemirror.net/docs/ref](https://codemirror.net/docs/ref/). Also check the installed crate or package source (`~/.cargo/registry/src`, `node_modules`) for exact signatures. Example: CodeMirror's `lineBlockAtHeight` is relative to `documentTop`, not `scrollTop`. Resolve GitHub Action versions from each action's latest release.
 
 ## Verification
 
@@ -36,7 +43,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-For changes to file handling, IPC, shortcuts or window lifecycle, also run the end-to-end smoke test against a release build (`npx tauri build --no-bundle`, then `./scripts/e2e.ps1`); every line must read PASS. Extend `scripts/e2e.mjs` when adding a flow it can drive. Native dialogs block it, so it covers only dialog-free paths. For purely visual changes, check `npm run dev` in a browser.
+For changes to file handling, IPC, shortcuts or window lifecycle, also run the end-to-end smoke test against a release build (`npx tauri build --no-bundle`, then `./scripts/e2e.ps1`); every line must read PASS. Extend `scripts/e2e.mjs` when adding a flow it can drive. Native dialogs block it, so it covers only dialog-free paths. For purely visual changes, check `npm run dev` in a browser. CI (`.github/workflows/ci.yml`) runs all of this plus audits, `scripts/check-size.ps1` and the end-to-end test on every push.
 
 ## Environment gotchas
 
@@ -45,6 +52,8 @@ For changes to file handling, IPC, shortcuts or window lifecycle, also run the e
 - `npm run dev` runs in a plain browser: `isTauri` is false, a sample document loads, and open/save are no-ops.
 - Tauri `async` commands that take `State<'_, _>` must return `Result`.
 - The `STATIC_VCRUNTIME is deprecated` build warning comes from the Tauri CLI, not this repo.
+- markdown-it 15 ships its own types (`import MarkdownIt, { type Token } from 'markdown-it'`); `@types/markdown-it` conflicts with them.
+- CodeMirror's DOM exposes `cmTile`, not a view. In browser-side tests, get the view with `EditorView.findFromDOM` (import the module from the URL the app loaded).
 
 ## Code style
 

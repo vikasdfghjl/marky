@@ -1,17 +1,22 @@
 <#
 .SYNOPSIS
   End-to-end smoke test of the release app, driven over the WebView2 DevTools protocol.
-  Covers: open from CLI arg, BOM/CRLF round trip, dirty marker, Ctrl+S, path allowlist, close guard.
+  Covers: open from CLI arg, BOM/CRLF round trip, dirty marker, Ctrl+S, path allowlist,
+  local images, recent files, external-change reload, recovery snapshot, close guard.
+  Native dialogs block automation, so dialog-driven flows are not covered.
 .EXAMPLE
   npx tauri build --no-bundle; ./scripts/e2e.ps1
 #>
 $ErrorActionPreference = 'Stop'
 $exe = Join-Path (Split-Path $PSScriptRoot -Parent) 'src-tauri\target\release\marky.exe'
 if (-not (Test-Path $exe)) { throw 'Release build not found. Run: npx tauri build --no-bundle' }
+
 $dir = Join-Path $env:TEMP 'marky-e2e'
-New-Item -ItemType Directory -Force $dir | Out-Null
+Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force (Join-Path $dir 'img') | Out-Null
 $fixture = Join-Path $dir 'fixture.md'
-[IO.File]::WriteAllBytes($fixture, [byte[]](0xEF,0xBB,0xBF) + [Text.Encoding]::UTF8.GetBytes("# Fixture`r`n`r`nBody text`r`n"))
+[IO.File]::WriteAllBytes($fixture, [byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("# Fixture`r`n`r`n![dot](img/dot.png)`r`n`r`nBody text`r`n"))
+[IO.File]::WriteAllBytes((Join-Path $dir 'img\dot.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='))
 
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
 
@@ -20,28 +25,36 @@ function Stop-Tree($id) {
   Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
 }
 
-# Run A: open, edit, save, security check, then close with unsaved changes.
-$app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
-Start-Sleep -Seconds 4
-node (Join-Path $PSScriptRoot 'e2e.mjs') edit-save
+$script:failures = 0
 
-$bytes = [IO.File]::ReadAllBytes($fixture)
-$text = [Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
-$bomKept = $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
-$expected = "Added line`r`n# Fixture`r`n`r`nBody text`r`n"
-"{0}  saved bytes: BOM kept, CRLF kept, edit present" -f $(if ($bomKept -and $text -eq $expected) { 'PASS' } else { "FAIL (bom=$bomKept text=$([regex]::Escape($text)))" })
+function Write-Check($name, [bool]$ok, $detail = '') {
+  if (-not $ok) { $script:failures++ }
+  $status = if ($ok) { 'PASS' } else { 'FAIL' }
+  "$status  $name$(if ($detail) { "  ($detail)" })"
+}
 
-$app.CloseMainWindow() | Out-Null
-Start-Sleep -Seconds 2
-"{0}  close with unsaved changes is held for the prompt" -f $(if (-not $app.HasExited) { 'PASS' } else { 'FAIL (window closed)' })
-Stop-Tree $app.Id
-Start-Sleep -Seconds 1
+try {
+  # Run A: everything scriptable, ending with unsaved changes for the close guard.
+  $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
+  Start-Sleep -Seconds 4
+  node (Join-Path $PSScriptRoot 'e2e.mjs') $fixture
+  if ($LASTEXITCODE -ne 0) { $script:failures++ }
 
-# Run B: a clean window closes immediately.
-$app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
-Start-Sleep -Seconds 4
-$app.CloseMainWindow() | Out-Null
-Start-Sleep -Seconds 2
-"{0}  clean window closes without a prompt" -f $(if ($app.HasExited) { 'PASS' } else { 'FAIL (still open)' })
-if (-not $app.HasExited) { Stop-Tree $app.Id }
-Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+  $app.CloseMainWindow() | Out-Null
+  Start-Sleep -Seconds 2
+  Write-Check 'close with unsaved changes is held for the prompt' (-not $app.HasExited)
+  Stop-Tree $app.Id
+  Start-Sleep -Seconds 1
+
+  # Run B: a clean window closes immediately.
+  $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
+  Start-Sleep -Seconds 4
+  $app.CloseMainWindow() | Out-Null
+  Start-Sleep -Seconds 2
+  Write-Check 'clean window closes without a prompt' $app.HasExited
+  if (-not $app.HasExited) { Stop-Tree $app.Id }
+}
+finally {
+  Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+}
+exit $script:failures

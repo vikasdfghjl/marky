@@ -56,6 +56,14 @@ export interface Editor {
   load(text: string, opts?: { readOnly?: boolean }): void;
   text(): string;
   openReplace(): void;
+  /** Cursor offset and scroll position, to restore after reloading the same file. */
+  viewPosition(): ViewPosition;
+  restoreViewPosition(position: ViewPosition): void;
+}
+
+export interface ViewPosition {
+  cursor: number;
+  scrollTop: number;
 }
 
 export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => void): Editor {
@@ -90,5 +98,11 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     },
     text: () => view.state.doc.toString(),
     openReplace: () => openSearchPanel(view),
+    viewPosition: () => ({ cursor: view.state.selection.main.head, scrollTop: view.scrollDOM.scrollTop }),
+    restoreViewPosition({ cursor, scrollTop }) {
+      view.dispatch({ selection: { anchor: Math.min(cursor, view.state.doc.length) } });
+      // Wait for the new document's layout before scrolling.
+      requestAnimationFrame(() => (view.scrollDOM.scrollTop = scrollTop));
+    },
   };
 }

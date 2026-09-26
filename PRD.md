@@ -239,6 +239,8 @@ MVP in 3 weeks and v1.0 in 7 weeks, assuming one developer part-time (\~20 h/wee
 | M3 v1.0 | 6–7 | Signing, winget, accessibility and IME pass, docs | All budgets met at target (not hard limit); signed installer published |
 | M4 v1.x | 8+ | P2: tabs, export, Mermaid/KaTeX, outline, auto-update | Per-feature, without breaching budgets |
 
+**M2 status (27 Sep 2026):** F8, F10, F11, F12, F13 crash recovery, and F9's recent list (Ctrl+R) are done; CI, size budgets and the portable ZIP are in `.github/workflows/ci.yml`. Deferred: F13 optional auto-save (needs a settings surface) and F9 taskbar jump-list entries (need Win32 code outside Tauri's API). Synced scroll is one-way (editor drives preview).
+
 ## Risks and open questions
 
 The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike exists to measure it before any feature work.

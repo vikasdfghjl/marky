@@ -22,6 +22,10 @@
       }
     ],
     "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      },
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src ipc: http://ipc.localhost; worker-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
       "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src ipc: http://ipc.localhost ws://localhost:1420; worker-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
     }
