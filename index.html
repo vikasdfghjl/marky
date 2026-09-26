@@ -9,9 +9,11 @@
   <body>
     <main id="app">
       <section id="editor" aria-label="Editor"></section>
-      <article id="preview" class="markdown-body" aria-label="Preview"></article>
+      <!-- Focusable so keyboard users can scroll it with arrow keys / Page Up / Page Down. -->
+      <article id="preview" class="markdown-body" aria-label="Preview" tabindex="0"></article>
     </main>
-    <footer id="status" role="status">
+    <!-- Not a live region: it changes on every keystroke and would flood screen readers. -->
+    <footer id="status" aria-label="Status bar">
       <span id="st-pos"></span>
       <span id="st-count"></span>
       <span class="spacer"></span>

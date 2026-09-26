@@ -6,6 +6,7 @@ mod store;
 mod watcher;
 
 use std::collections::HashSet;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -24,13 +25,17 @@ const SAVE_LABEL: &str = "Save";
 const DONT_SAVE_LABEL: &str = "Don't save";
 const CANCEL_LABEL: &str = "Cancel";
 
+/// Background read of the startup file: the path and its result.
+type StartupRead = std::thread::JoinHandle<(PathBuf, io::Result<OpenedFile>)>;
+
 struct AppState {
     started: Instant,
     /// Paths the user chose via dialog, drag-drop, CLI arg, Explorer, recent files or
     /// crash recovery. The webview can only touch these, so a compromised preview
     /// cannot reach other files.
     user_chosen: Mutex<HashSet<PathBuf>>,
-    startup_file: Mutex<Option<PathBuf>>,
+    /// The CLI/Explorer file, read on a background thread while WebView2 starts (~600 ms).
+    startup_read: Mutex<Option<StartupRead>>,
     /// Mirrors the editor's unsaved state so a clean window closes without a JS round trip.
     dirty: AtomicBool,
     /// One watcher for the one open file; replacing it stops the previous watch.
@@ -51,6 +56,16 @@ impl AppState {
         }
         Ok(path)
     }
+}
+
+/// Everything the frontend needs for its first paint, in one IPC round trip.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupState {
+    file: Option<OpenedFile>,
+    /// Set when the startup file could not be read; the frontend reports it.
+    file_error: Option<String>,
+    recovery: Option<Snapshot>,
 }
 
 #[derive(Serialize)]
@@ -91,9 +106,26 @@ fn record_file_access(app: &AppHandle, path: &Path) {
 
 // ---- startup & diagnostics ----
 
+/// One-shot: the pre-read startup file and any crash-recovery snapshot (whose path is re-authorised).
 #[tauri::command]
-fn startup_file(state: State<'_, AppState>) -> Option<String> {
-    state.startup_file.lock().unwrap().take().map(|p| display(&p))
+async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<StartupState, String> {
+    let recovery = store::read_snapshot(&local_data_dir(&app)?);
+    if let Some(path) = recovery.as_ref().and_then(|s| s.path.as_ref()) {
+        state.remember_user_choice(PathBuf::from(path));
+    }
+
+    let pending_read = state.startup_read.lock().unwrap().take();
+    let Some(pending_read) = pending_read else {
+        return Ok(StartupState { file: None, file_error: None, recovery });
+    };
+    let (path, read) = pending_read.join().map_err(|_| "startup file reader panicked".to_string())?;
+    match read {
+        Ok(file) => {
+            record_file_access(&app, &path);
+            Ok(StartupState { file: Some(file), file_error: None, recovery })
+        }
+        Err(e) => Ok(StartupState { file: None, file_error: Some(format!("Could not open {}\n\n{e}", display(&path))), recovery }),
+    }
 }
 
 /// Milliseconds since process start; the frontend calls this on its first editable frame.
@@ -212,7 +244,7 @@ async fn recent_files(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<
         .collect())
 }
 
-// ---- crash recovery (F13) ----
+// ---- crash recovery (F13); the snapshot itself is read by `startup_state` ----
 
 #[tauri::command]
 async fn snapshot_buffer(app: AppHandle, snapshot: Snapshot) -> Result<(), String> {
@@ -222,16 +254,6 @@ async fn snapshot_buffer(app: AppHandle, snapshot: Snapshot) -> Result<(), Strin
 #[tauri::command]
 async fn clear_snapshot(app: AppHandle) -> Result<(), String> {
     store::clear_snapshot(&local_data_dir(&app)?).map_err(|e| e.to_string())
-}
-
-/// The snapshot left by a session that did not end cleanly, if any. Its path is re-authorised.
-#[tauri::command]
-async fn read_recovery(app: AppHandle, state: State<'_, AppState>) -> Result<Option<Snapshot>, String> {
-    let Some(snapshot) = store::read_snapshot(&local_data_dir(&app)?) else { return Ok(None) };
-    if let Some(path) = &snapshot.path {
-        state.remember_user_choice(PathBuf::from(path));
-    }
-    Ok(Some(snapshot))
 }
 
 // ---- prompts & window lifecycle ----
@@ -335,13 +357,17 @@ fn main() {
     let state = AppState {
         started,
         user_chosen: Mutex::default(),
-        startup_file: Mutex::new(None),
+        startup_read: Mutex::new(None),
         dirty: AtomicBool::new(false),
         watcher: Mutex::new(None),
     };
     if let Some(path) = startup {
         let path = state.remember_user_choice(path);
-        *state.startup_file.lock().unwrap() = Some(path);
+        let reader = std::thread::spawn(move || {
+            let read = files::read(&path);
+            (path, read)
+        });
+        *state.startup_read.lock().unwrap() = Some(reader);
     }
 
     tauri::Builder::default()
@@ -367,7 +393,7 @@ fn main() {
         })
         .on_window_event(on_window_event)
         .invoke_handler(tauri::generate_handler![
-            startup_file,
+            startup_state,
             startup_ms,
             pick_open,
             pick_save,
@@ -379,7 +405,6 @@ fn main() {
             recent_files,
             snapshot_buffer,
             clear_snapshot,
-            read_recovery,
             set_dirty,
             ask_unsaved_changes,
             ask_choice,

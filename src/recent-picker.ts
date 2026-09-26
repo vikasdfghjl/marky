@@ -25,6 +25,7 @@ export function pickRecentFile(paths: string[]): Promise<string | null> {
   const items = paths.map((path, index) => {
     const item = document.createElement('li');
     item.setAttribute('role', 'option');
+    item.id = `recent-file-${index}`;
     item.dataset.index = String(index);
     const name = document.createElement('span');
     name.className = 'picker-name';
@@ -42,6 +43,8 @@ export function pickRecentFile(paths: string[]): Promise<string | null> {
     if (items.length === 0) return;
     selected = (index + items.length) % items.length;
     items.forEach((item, i) => item.setAttribute('aria-selected', String(i === selected)));
+    // Focus stays on the panel; screen readers follow the highlighted option.
+    list.setAttribute('aria-activedescendant', items[selected].id);
     items[selected].scrollIntoView({ block: 'nearest' });
   };
   highlight(0);
@@ -71,7 +74,7 @@ export function pickRecentFile(paths: string[]): Promise<string | null> {
     });
     document.addEventListener('keydown', onKey, true);
     document.body.append(backdrop);
-    panel.tabIndex = -1;
-    panel.focus();
+    list.tabIndex = -1;
+    list.focus();
   });
 }

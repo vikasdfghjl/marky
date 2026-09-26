@@ -93,13 +93,33 @@ await pressCtrl('s', 'KeyS', 83);
 await sleep(1000);
 check('own save is not treated as external', (await title()) === 'fixture.md — Marky', await title());
 
+// ---- IME composition: Japanese and Hindi (PRD input requirement) ----
+await evaluate(`document.querySelector('.cm-content').focus()`);
+await send('Input.imeSetComposition', { text: 'にほんご', selectionStart: 4, selectionEnd: 4 });
+await sleep(150);
+await send('Input.insertText', { text: '日本語' }); // commits, replacing the composition
+await send('Input.imeSetComposition', { text: 'नमस', selectionStart: 3, selectionEnd: 3 });
+await sleep(150);
+await send('Input.insertText', { text: 'नमस्ते' });
+await sleep(300);
+const composed = await editorText();
+check(
+  'IME composition commits without leftovers',
+  composed.includes('日本語') && composed.includes('नमस्ते') && !composed.includes('にほんご') && !composed.includes('नमसनमस्ते'),
+  JSON.stringify(composed),
+);
+await pressCtrl('s', 'KeyS', 83);
+await sleep(800);
+const savedText = readFileSync(fixture, 'utf8');
+check('IME text saved as UTF-8', savedText.includes('日本語') && savedText.includes('नमस्ते'), JSON.stringify(savedText));
+
 // ---- crash-recovery snapshot round trip (F13) ----
 const snapshot = { path: fixture, text: 'recovered text\n', meta: { bom: false, lineEnding: 'lf' } };
 await invoke('snapshot_buffer', { snapshot });
-const read = await invoke('read_recovery');
-check('recovery snapshot round-trips', read.ok?.text === snapshot.text, JSON.stringify(read));
+const read = await invoke('startup_state');
+check('recovery snapshot round-trips', read.ok?.recovery?.text === snapshot.text, JSON.stringify(read));
 await invoke('clear_snapshot');
-check('recovery snapshot clears', (await invoke('read_recovery')).ok === null);
+check('recovery snapshot clears', (await invoke('startup_state')).ok?.recovery === null);
 
 // ---- leave the buffer dirty for the close-guard check in e2e.ps1 ----
 await send('Input.insertText', { text: 'unsaved ' });

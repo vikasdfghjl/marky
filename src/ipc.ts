@@ -25,7 +25,8 @@ export interface OpenedFile {
 // Paths are only ever produced by the Rust side (dialog, drag-drop, CLI arg),
 // which records them in an allowlist; open/save refuse anything else.
 export const api = {
-  startupFile: () => invoke<string | null>('startup_file'),
+  /** One-shot at startup: the pre-read CLI/Explorer file and any crash-recovery snapshot. */
+  startupState: () => invoke<StartupState>('startup_state'),
   /** `jsMs` is time since navigation start, so Rust can split webview vs. frontend cost. */
   startupMs: (jsMs: number, marks: string) => invoke<number>('startup_ms', { jsMs, marks }),
   pickOpen: () => invoke<string | null>('pick_open'),
@@ -40,7 +41,6 @@ export const api = {
   recentFiles: () => invoke<string[]>('recent_files'),
   snapshotBuffer: (snapshot: Snapshot) => invoke<void>('snapshot_buffer', { snapshot }),
   clearSnapshot: () => invoke<void>('clear_snapshot'),
-  readRecovery: () => invoke<Snapshot | null>('read_recovery'),
   setDirty: (dirty: boolean) => invoke<void>('set_dirty', { dirty }),
   askUnsavedChanges: (fileName: string) => invoke<UnsavedChoice>('ask_unsaved_changes', { fileName }),
   /** True only when the user picks `confirm`. */
@@ -58,6 +58,12 @@ export const api = {
 };
 
 export type UnsavedChoice = 'save' | 'discard' | 'cancel';
+
+export interface StartupState {
+  file: OpenedFile | null;
+  fileError: string | null;
+  recovery: Snapshot | null;
+}
 
 /** Crash-recovery copy of an unsaved buffer. */
 export interface Snapshot {

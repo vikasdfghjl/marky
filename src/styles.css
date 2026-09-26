@@ -18,7 +18,7 @@
   --hl-link: #0969da;
   --hl-code: #953800;
   --hl-quote: #59636e;
-  --hl-muted: #6e7781;
+  --hl-muted: #636c76;
   --hl-keyword: #cf222e;
   --hl-string: #0a3069;
   --hl-number: #0550ae;
@@ -100,6 +100,11 @@ body {
 
 #preview[hidden] {
   display: none;
+}
+
+#preview:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: -2px;
 }
 
 #status {
@@ -258,3 +263,8 @@ body {
 .markdown-body .task-list-item input {
   margin: 0 0.4em 0 -1.4em;
 }
+
+.picker ul:focus {
+  outline: none;
+}
+

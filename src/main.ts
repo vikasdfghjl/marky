@@ -4,7 +4,7 @@ import { createEditor } from './editor';
 import { createPreview } from './preview';
 import { syncPreviewToEditor } from './scroll-sync';
 import { pickRecentFile } from './recent-picker';
-import { api, isTauri, type OpenedFile } from './ipc';
+import { api, isTauri, type OpenedFile, type Snapshot } from './ipc';
 import { SAMPLE } from './sample';
 
 const TYPING_PAUSE_MS = 150;
@@ -308,25 +308,20 @@ function clearRecoverySnapshot() {
   void api.clearSnapshot();
 }
 
-/** True when the user restored a snapshot left by a session that did not end cleanly. */
-async function offerRecovery(): Promise<boolean> {
-  const snapshot = await api.readRecovery();
-  if (!snapshot) return false;
-
+/** Offers back a snapshot left by a session that did not end cleanly; it replaces the clean startup document. */
+async function offerRecovery(snapshot: Snapshot) {
   const restore = await api.askChoice(
     `Marky did not close cleanly. Restore your unsaved changes to ${fileName(snapshot.path)}?`,
     'Restore',
     'Discard',
   );
-  if (!restore) {
-    await api.clearSnapshot();
-    return false;
-  }
+  if (!restore) return void api.clearSnapshot();
+  if (currentFile.dirty) return; // The user started typing while the prompt was up; keep their work.
+
   const mtimeMs = snapshot.path ? await api.fileMtime(snapshot.path) : null;
   showDocument({ ...snapshot, readOnly: false, mtimeMs });
   setDirty(true);
   lastSnapshotText = snapshot.text;
-  return true;
 }
 
 // ---- shortcuts ----
@@ -372,22 +367,23 @@ function startInBrowser() {
 async function start() {
   if (!isTauri) return startInBrowser();
 
-  const [, , , startupPath] = await Promise.all([
+  const [, , , startup] = await Promise.all([
     api.onOpenRequest((path) => void openPath(path)),
     api.onCloseRequested(() => void closeWindow()),
     api.onFileChanged(onFileChangedOnDisk),
-    api.startupFile(),
+    api.startupState(),
   ]);
   performance.mark('ipc-ready');
 
-  // Recovery first: opening a file would otherwise clear the snapshot.
-  const recovered = await offerRecovery();
-  if (startupPath) await openPath(startupPath);
-  else if (!recovered) refreshAllViews();
+  // Paint first: the file was pre-read in Rust while WebView2 started.
+  if (startup.file) showDocument(startup.file);
+  else refreshAllViews();
   performance.mark('file-loaded');
+  measureColdStart((ms) => ($('st-perf').textContent = `start ${Math.round(ms)} ms`));
 
   window.setInterval(snapshotIfDirty, SNAPSHOT_INTERVAL_MS);
-  measureColdStart((ms) => ($('st-perf').textContent = `start ${Math.round(ms)} ms`));
+  if (startup.fileError) await notifyError(startup.fileError);
+  if (startup.recovery) await offerRecovery(startup.recovery);
 }
 
 void start();
