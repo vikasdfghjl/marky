@@ -39,6 +39,10 @@ export const api = {
   watchFile: (path: string) => invoke<void>('watch_file', { path }),
   unwatchFile: (path: string) => invoke<void>('unwatch_file', { path }),
   recentFiles: () => invoke<string[]>('recent_files'),
+  /** Absolute path of a relative .md link clicked in `from`'s preview (rejects other targets). */
+  resolveLink: (from: string, target: string) => invoke<string>('resolve_link', { from, target }),
+  /** Opens an http(s) or mailto link in the default app. */
+  openExternal: (url: string) => invoke<void>('open_external', { url }),
   /** Replaces the recovery file with these unsaved tabs; an empty list clears it. */
   snapshotBuffers: (snapshots: Snapshot[]) => invoke<void>('snapshot_buffers', { snapshots }),
   setDirty: (dirty: boolean) => invoke<void>('set_dirty', { dirty }),

@@ -86,7 +86,7 @@ Not yet built: optional auto-save (F13, waits for a settings surface) and taskba
 - All text meets WCAG 2.2 AA contrast (4.5:1) in both themes; `node scripts/contrast.mjs` checks every text/background pair and runs in CI.
 - Everything works from the keyboard. The preview pane is focusable, so it can be scrolled with the arrow and Page keys.
 - The editor is exposed to screen readers by CodeMirror. The status bar is deliberately not a live region, so it does not announce every keystroke.
-- IME composition (verified for Japanese and Hindi in the end-to-end test) commits cleanly and saves as UTF-8.
+- IME composition (verified with Japanese input in the end-to-end test) commits cleanly and saves as UTF-8.
 
 ## Development
 

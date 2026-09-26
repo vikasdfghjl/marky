@@ -55,6 +55,8 @@ let nextTabId = 1;
 let windowDirty = false;
 /** The recovery file's current content, to skip rewriting it unchanged. */
 let lastSnapshotJson = '[]';
+/** `#anchor` of a cross-file link, applied once the linked file's preview has rendered. */
+let pendingAnchor: string | null = null;
 /** User's Ctrl+Shift+V choice; large files additionally force the preview off. */
 let previewWanted = true;
 /** Opens run one at a time, so a multi-file drop creates tabs in order. */
@@ -64,7 +66,7 @@ const fileChangeTimers = new Map<number, number>();
 performance.mark('js-start');
 const editor = createEditor($('editor'), onEditorUpdate);
 performance.mark('editor-ready');
-const preview = createPreview($('preview'), onPreviewRendered);
+const preview = createPreview($('preview'), onPreviewRendered, (href) => void followLink(href));
 const syncPreviewScroll = syncPreviewToEditor(editor.view, $('preview'));
 const tabStrip = createTabStrip($('tabs'), {
   onActivate: (id) => activate(tabById(id)),
@@ -206,6 +208,10 @@ function renderAfterTypingPause() {
 }
 
 function onPreviewRendered(parseMs: number) {
+  if (pendingAnchor) {
+    jumpToAnchor(pendingAnchor);
+    pendingAnchor = null;
+  }
   syncPreviewScroll();
   // Budget: last keystroke to preview paint, including the typing pause.
   if (!lastEditAt) return;
@@ -397,6 +403,35 @@ async function save(forceSaveAs = false): Promise<boolean> {
     watchPath(path, previousPath);
   }
   return true;
+}
+
+// ---- links in the preview ----
+
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+
+/** `#heading` scrolls, http(s)/mailto opens the browser, relative .md links open in a tab. Other schemes are ignored. */
+async function followLink(href: string) {
+  if (href.startsWith('#')) return jumpToAnchor(decodeURIComponent(href.slice(1)));
+  if (/^(https?|mailto):/i.test(href)) return void api.openExternal(href).catch((err) => notifyError(String(err)));
+  if (URL_SCHEME.test(href) || !isTauri) return;
+  if (!active.path) return void notifyError('Save this document first so its relative links have a folder to resolve from.');
+
+  const [target, anchor] = href.split('#', 2);
+  let path: string;
+  try {
+    path = await api.resolveLink(active.path, decodeURIComponent(target));
+  } catch (err) {
+    return void notifyError(String(err));
+  }
+  pendingAnchor = anchor ? decodeURIComponent(anchor) : null;
+  queueOpen(path);
+}
+
+/** Moves the editor to the heading's source line; synced scroll then brings the preview along. */
+function jumpToAnchor(id: string) {
+  const target = $('preview').querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`);
+  const line = target?.closest<HTMLElement>('[data-line]')?.dataset.line;
+  if (line !== undefined) editor.goToLine(Number(line));
 }
 
 // ---- external changes (F8) ----

@@ -212,6 +212,37 @@ async fn file_mtime(state: State<'_, AppState>, path: String) -> Result<Option<u
     Ok(files::mtime_ms(&path).ok())
 }
 
+// ---- links in the preview ----
+
+/// Resolves a relative link clicked in `from`'s preview. Only links from a user-chosen
+/// file to an existing .md/.markdown/.txt file are followed; clicking one is the user's
+/// choice, so the target joins the allowlist.
+#[tauri::command]
+async fn resolve_link(state: State<'_, AppState>, from: String, target: String) -> Result<String, String> {
+    let from = state.require_user_choice(&from)?;
+    let folder = from.parent().ok_or("the document has no folder")?;
+    // absolute() normalises `.` and `..` on Windows.
+    let path = std::path::absolute(folder.join(&target)).map_err(|e| e.to_string())?;
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !MARKDOWN_EXTS.contains(&extension.as_str()) {
+        return Err(format!("Marky follows links to .md, .markdown and .txt files only: {target}"));
+    }
+    if !path.is_file() {
+        return Err(format!("Linked file not found: {}", display(&path)));
+    }
+    Ok(display(&state.remember_user_choice(path)))
+}
+
+/// Opens a web or mail link in the default app. Anything else (file:, javascript:, …) is refused.
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
+    if !["http", "https", "mailto"].contains(&scheme.as_str()) {
+        return Err(format!("Refusing to open a {scheme}: link"));
+    }
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
 // ---- external change detection (F8) ----
 
 /// Emits `file-changed` (payload: the path) whenever another program touches `path`.
@@ -415,6 +446,8 @@ fn main() {
             open_file,
             save_file,
             file_mtime,
+            resolve_link,
+            open_external,
             watch_file,
             unwatch_file,
             recent_files,

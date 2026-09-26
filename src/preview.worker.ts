@@ -1,5 +1,7 @@
 import MarkdownIt, { type Token } from 'markdown-it';
 import taskLists from 'markdown-it-task-lists';
+import { highlightFence, prepareLanguages } from './code-highlight';
+import { frontmatter, githubAlerts, headingAnchors } from './markdown-plugins';
 
 export interface RenderRequest {
   id: number;
@@ -23,14 +25,32 @@ type RenderEnv = {
 };
 
 // html: false renders raw HTML as text, so untrusted files cannot inject markup.
-const md = new MarkdownIt({ html: false, linkify: true }).use(taskLists, { enabled: false });
+const md = new MarkdownIt({
+  html: false,
+  linkify: true,
+  highlight: (code, language) => (language ? highlightFence(code, language) : ''),
+})
+  .use(taskLists, { enabled: false })
+  .use(frontmatter)
+  .use(githubAlerts)
+  .use(headingAnchors);
 
-// Tag block elements with their source line for synced scroll (F10).
+// Tag block elements with their source line for synced scroll (F10) and #anchor jumps.
 md.core.ruler.push('source_lines', (state) => {
   for (const tok of state.tokens) {
     if (tok.map && tok.nesting === 1) tok.attrSet('data-line', String(tok.map[0]));
   }
 });
+
+// Fences are rendered as <pre><code>, which has no data-line of its own; tag the <pre>.
+const renderDefaultFence = md.renderer.rules.fence!;
+md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const html = renderDefaultFence(tokens, idx, options, env, self);
+  const line = token.map ? ` data-line="${token.map[0]}"` : '';
+  const frontmatterClass = token.attrGet('class') === 'frontmatter' ? ' class="frontmatter"' : '';
+  return html.replace(/^<pre/, `<pre${line}${frontmatterClass}`);
+};
 
 // Relative image paths load from the document's folder via the asset protocol (F12).
 // Remote images stay blocked by the CSP: the preview makes no network requests.
@@ -79,10 +99,24 @@ function joinWindowsPath(folder: string, relative: string): string {
   return prefix + parts.join('\\');
 }
 
-self.onmessage = (e: MessageEvent<RenderRequest>) => {
+/** First word of each fence's info string (```ts title="x" → ts). */
+function fenceLanguages(tokens: Token[]): Set<string> {
+  const names = new Set<string>();
+  for (const token of tokens) {
+    const name = token.type === 'fence' ? token.info.trim().split(/\s+/)[0] : '';
+    if (name) names.add(name);
+  }
+  return names;
+}
+
+self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   const start = performance.now();
   const { id, text, documentFolder, assetBase } = e.data;
-  const html = md.render(text, { documentFolder, assetBase } satisfies RenderEnv);
+  const env: RenderEnv = { documentFolder, assetBase };
+  // Parse once; load any fence languages (async, first use only), then render synchronously.
+  const tokens = md.parse(text, env);
+  await prepareLanguages(fenceLanguages(tokens));
+  const html = md.renderer.render(tokens, md.options, env);
   const result: RenderResult = { id, html, ms: performance.now() - start };
   self.postMessage(result);
 };

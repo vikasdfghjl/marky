@@ -13,6 +13,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
+import { yamlFrontmatter } from '@codemirror/lang-yaml';
 import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tags as t } from '@lezer/highlight';
 
@@ -64,6 +65,8 @@ export interface Editor {
   openFind(): void;
   /** Opens the search panel with the cursor in its replace field. */
   openReplace(): void;
+  /** Puts the cursor at the start of a 0-based source line and scrolls it to the top. */
+  goToLine(line: number): void;
   /** Cursor offset and scroll position, to restore after reloading the same file. */
   viewPosition(): ViewPosition;
   restoreViewPosition(position: ViewPosition): void;
@@ -86,7 +89,8 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     highlightActiveLine(),
     highlightSelectionMatches(),
     search({ top: true }),
-    markdown({ base: markdownLanguage, codeLanguages: languages }),
+    // YAML frontmatter (SKILL.md, docs sites, AI config files) is highlighted as YAML.
+    yamlFrontmatter({ content: markdown({ base: markdownLanguage, codeLanguages: languages }) }),
     syntaxHighlighting(highlight),
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({ spellcheck: 'false', 'aria-label': 'Markdown source' }),
@@ -124,6 +128,12 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     openReplace() {
       openSearchPanel(view);
       view.dom.querySelector<HTMLInputElement>('.cm-search input[name=replace]')?.focus();
+    },
+    goToLine(line) {
+      const { doc } = view.state;
+      const pos = doc.line(Math.min(Math.max(line + 1, 1), doc.lines)).from;
+      view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'start' }) });
+      view.focus();
     },
     viewPosition: () => ({ cursor: view.state.selection.main.head, scrollTop: view.scrollDOM.scrollTop }),
     restoreViewPosition({ cursor, scrollTop }) {

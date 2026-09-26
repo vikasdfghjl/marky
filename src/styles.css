@@ -26,6 +26,12 @@
   --hl-fn: #8250df;
   --hl-type: #953800;
   --hl-prop: #0550ae;
+
+  --alert-note: #0969da;
+  --alert-tip: #1a7f37;
+  --alert-important: #8250df;
+  --alert-warning: #9a6700;
+  --alert-caution: #d1242f;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -45,14 +51,20 @@
     --hl-link: #58a6ff;
     --hl-code: #ffa657;
     --hl-quote: #9da5b0;
-    --hl-muted: #8b949e;
+    --hl-muted: #9198a1;
     --hl-keyword: #ff7b72;
     --hl-string: #a5d6ff;
     --hl-number: #79c0ff;
-    --hl-comment: #8b949e;
+    --hl-comment: #9198a1;
     --hl-fn: #d2a8ff;
     --hl-type: #ffa657;
     --hl-prop: #79c0ff;
+
+    --alert-note: #4493f8;
+    --alert-tip: #3fb950;
+    --alert-important: #ab7df8;
+    --alert-warning: #d29922;
+    --alert-caution: #f85149;
   }
 }
 
@@ -369,3 +381,87 @@ body.drag-over #app::after {
   outline: none;
 }
 
+/* ---- preview: code highlighting (same colours as the editor) ---- */
+
+.markdown-body .tok-keyword,
+.markdown-body .tok-deleted {
+  color: var(--hl-keyword);
+}
+
+.markdown-body .tok-string,
+.markdown-body .tok-string2,
+.markdown-body .tok-literal,
+.markdown-body .tok-inserted {
+  color: var(--hl-string);
+}
+
+.markdown-body .tok-number,
+.markdown-body .tok-bool,
+.markdown-body .tok-atom {
+  color: var(--hl-number);
+}
+
+.markdown-body .tok-comment {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+
+.markdown-body .tok-typeName,
+.markdown-body .tok-className,
+.markdown-body .tok-namespace,
+.markdown-body .tok-macroName {
+  color: var(--hl-type);
+}
+
+.markdown-body .tok-propertyName,
+.markdown-body .tok-labelName {
+  color: var(--hl-prop);
+}
+
+.markdown-body .tok-meta,
+.markdown-body .tok-punctuation {
+  color: var(--hl-muted);
+}
+
+.markdown-body .tok-heading {
+  color: var(--hl-heading);
+  font-weight: 700;
+}
+
+.markdown-body .tok-link,
+.markdown-body .tok-url {
+  color: var(--hl-link);
+}
+
+.markdown-body .tok-invalid {
+  text-decoration: underline wavy var(--hl-keyword);
+}
+
+/* ---- preview: YAML frontmatter ---- */
+
+.markdown-body pre.frontmatter {
+  border-left: 3px solid var(--border);
+  font-size: 0.82em;
+}
+
+/* ---- preview: GitHub alerts ---- */
+
+.markdown-body .markdown-alert {
+  color: inherit;
+  border-left: 4px solid var(--alert-color);
+  padding: 4px 16px;
+}
+
+.markdown-body .markdown-alert-title {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 6px;
+  color: var(--alert-color);
+  font-weight: 600;
+}
+
+.markdown-alert-note { --alert-color: var(--alert-note); }
+.markdown-alert-tip { --alert-color: var(--alert-tip); }
+.markdown-alert-important { --alert-color: var(--alert-important); }
+.markdown-alert-warning { --alert-color: var(--alert-warning); }
+.markdown-alert-caution { --alert-color: var(--alert-caution); }

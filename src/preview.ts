@@ -10,8 +10,15 @@ export interface Preview {
   readonly visible: boolean;
 }
 
-/** Parsing runs in a worker; the main thread only swaps in the HTML. */
-export function createPreview(el: HTMLElement, onRendered: (parseMs: number) => void): Preview {
+/**
+ * Parsing runs in a worker; the main thread only swaps in the HTML. Link clicks never
+ * navigate the webview: they go to `onLinkClick` with the raw href.
+ */
+export function createPreview(
+  el: HTMLElement,
+  onRendered: (parseMs: number) => void,
+  onLinkClick: (href: string) => void,
+): Preview {
   const worker = new Worker(new URL('./preview.worker.ts', import.meta.url), { type: 'module' });
   const assetBase = isTauri ? convertFileSrc('') : '';
   let seq = 0;
@@ -24,9 +31,12 @@ export function createPreview(el: HTMLElement, onRendered: (parseMs: number) => 
     requestAnimationFrame(() => onRendered(e.data.ms));
   };
 
-  // The preview must never navigate the webview. External links open via tauri-plugin-opener later.
   el.addEventListener('click', (e) => {
-    if ((e.target as Element).closest('a')) e.preventDefault();
+    const link = (e.target as Element).closest('a');
+    if (!link) return;
+    e.preventDefault();
+    const href = link.getAttribute('href');
+    if (href) onLinkClick(href);
   });
 
   return {
