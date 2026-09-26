@@ -39,6 +39,11 @@ jobs:
       - name: Rust tests (encoding, atomic save, kill-mid-save, store)
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Third-party notices are up to date
+        run: |
+          node scripts/third-party-notices.mjs
+          git diff --exit-code THIRD_PARTY_NOTICES.txt
+
       - name: Audit npm dependencies
         run: npm audit --omit=dev
 
@@ -66,7 +71,9 @@ jobs:
 
       - name: Package portable ZIP
         shell: pwsh
-        run: Compress-Archive -Path src-tauri/target/release/marky.exe -DestinationPath marky-portable-x64.zip
+        run: |
+          Copy-Item LICENSE LICENSE.txt
+          Compress-Archive -Path src-tauri/target/release/marky.exe, LICENSE.txt, THIRD_PARTY_NOTICES.txt -DestinationPath marky-portable-x64.zip
 
       - uses: actions/upload-artifact@v7
         with:
