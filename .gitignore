@@ -40,3 +40,6 @@ graphify-out/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Generated winget manifests (scripts/winget-manifest.ps1)
+dist-winget/

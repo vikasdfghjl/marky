@@ -11,7 +11,7 @@ Marky is a Windows Markdown editor: Tauri 2 (Rust) + WebView2 + CodeMirror 6 + m
 - **Text model.** The editor always holds LF text. `files.rs` detects BOM and line ending on read and restores them on write, so saving an unedited file reproduces it byte-for-byte. All writes go through `files::write` (temp file, `sync_all`, atomic `fs::rename`). `ReplaceFileW` looks nicer because it keeps ACLs, but a kill mid-call leaves no file; `killed_mid_save_leaves_old_or_new_content` guards this.
 - **Preview images are scoped to opened folders.** The asset-protocol scope starts empty; `record_file_access` widens it to a file's folder after a successful open or save. That is the only place it widens.
 - **External changes are recognised by mtime.** `watcher.rs` watches the file's folder (saves replace files by rename). The frontend debounces events and compares disk mtime with `currentFile.mtimeMs`, which `save_file` updates, so our own saves never prompt.
-- **Recovery runs before any file opens at startup,** because showing a document clears the snapshot.
+- **Startup is one IPC call.** `startup_state` returns the startup file (pre-read on a Rust thread while WebView2 starts) and any recovery snapshot. The file paints first; recovery is offered after. `showDocument` clears only a snapshot this session wrote, so a crash snapshot survives until the user answers.
 - **Dirty state has one writer.** `setDirty` in `main.ts` updates the title and mirrors transitions to Rust (`set_dirty`), which holds the window close only when dirty. Route every dirty change through it.
 - **Lazy by default.** Language packs, and later KaTeX and Mermaid, load through dynamic `import()`. The initial JS (entry chunk plus its modulepreloads) stays ≤ 250 KB gzipped. The preview worker stays a separate emitted file because the CSP allows `worker-src 'self'` only.
 
@@ -23,13 +23,15 @@ The README's **Benchmarks** section is the single record of current numbers. Aft
 
 Known cost structure: about 610 ms of cold start is WebView2 creating its browser process before `setup` runs, and flags don't move it. Optimise the frontend part: bundle size, first layout, IPC round trips. The WebView2 flags in `tauri.conf.json` (`additionalBrowserArgs`) replace Tauri's defaults, so keep the `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` prefix. Keep the GPU enabled; it protects typing and scroll latency.
 
+Tried in M3 with no effect beyond noise, so don't repeat them without new evidence: V8 explicit compile hints on the startup chunks; pre-reading the startup file (kept for simpler startup, not speed); WebView2 flags `--in-process-gpu`, `--js-flags=--lite-mode`, `--disable-crash-reporter`, `--renderer-process-limit=1`. Idle RAM is about 90% WebView2 (renderer 39 MB, browser 33 MB, GPU 18 MB); the app's JS heap is about 12 MB. The remaining startup cost is one 60–120 ms first-layout task after `showDocument`. Warm, the same load costs about 15 ms of JS.
+
 ## Check the docs first
 
 Tauri 2 and CodeMirror 6 move quickly, and memory of their APIs goes stale. Before using or changing an API from either, read the current reference: [v2.tauri.app/reference](https://v2.tauri.app/reference/) and [codemirror.net/docs/ref](https://codemirror.net/docs/ref/). Also check the installed crate or package source (`~/.cargo/registry/src`, `node_modules`) for exact signatures. Example: CodeMirror's `lineBlockAtHeight` is relative to `documentTop`, not `scrollTop`. Resolve GitHub Action versions from each action's latest release.
 
 ## Verification
 
-A change is done when all three pass:
+A change is done when these pass:
 
 ```bash
 npm run typecheck
@@ -43,7 +45,13 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+For colour or theme changes, also run `node scripts/contrast.mjs` (WCAG AA, 4.5:1 for all text in both themes).
+
 For changes to file handling, IPC, shortcuts or window lifecycle, also run the end-to-end smoke test against a release build (`npx tauri build --no-bundle`, then `./scripts/e2e.ps1`); every line must read PASS. Extend `scripts/e2e.mjs` when adding a flow it can drive. Native dialogs block it, so it covers only dialog-free paths. For purely visual changes, check `npm run dev` in a browser. CI (`.github/workflows/ci.yml`) runs all of this plus audits, `scripts/check-size.ps1` and the end-to-end test on every push.
+
+## Releasing
+
+Signing is route-agnostic. `scripts/sign.ps1` runs `MARKY_SIGN_COMMAND` (with a `{file}` placeholder), and `scripts/build-signed.ps1` merges the hook into the config for that build only and then verifies every Authenticode signature. Keep certificates, credentials and the command itself in CI secrets only. winget manifests come from `scripts/winget-manifest.ps1` (schema 1.12.0, validated with `winget validate`).
 
 ## Environment gotchas
 

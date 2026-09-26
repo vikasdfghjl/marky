@@ -4,23 +4,22 @@ A fast, lightweight Markdown editor for Windows, built with [Tauri 2](https://v2
 
 Marky opens a `.md` file, lets you edit it with syntax highlighting and a live side-by-side preview, and saves it. It uses the WebView2 runtime that already ships with Windows, so no browser engine is bundled.
 
-> **Status:** early development (M2 beta). See [PRD.md](PRD.md) for the full plan.
+> **Status:** early development (M3 release readiness). See [PRD.md](PRD.md) for the full plan.
 
 ## Benchmarks
 
-Latest run: 27 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with README.md open. Each figure is the median of 5 runs.
+Latest run: 27 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with README.md open. Each figure is the median of 7 runs.
 
 | Metric | Measured | Target | Hard limit | Status |
 | --- | --- | --- | --- | --- |
-| Installer (NSIS) | 1.73 MB | ≤ 6 MB | 10 MB | ✅ |
-| App exe | 3.92 MB | ≤ 8 MB | 12 MB | ✅ |
-| Cold start to editable | 875 ms | ≤ 800 ms | 1,000 ms | ⚠️ |
+| Installer (NSIS) | 1.75 MB | ≤ 6 MB | 10 MB | ✅ |
+| App exe | 3.93 MB | ≤ 8 MB | 12 MB | ✅ |
+| Cold start to editable | 937 ms (827–1,141) | ≤ 800 ms | 1,000 ms | ⚠️ |
 | Preview update after typing stops | ~160 ms | ≤ 200 ms | 400 ms | ✅ |
-| Idle RAM (app + WebView2) | 101.3 MB | ≤ 90 MB | 120 MB | ⚠️ |
+| Idle RAM (app + WebView2) | 103.5 MB | ≤ 90 MB | 120 MB | ⚠️ |
 | Idle CPU | 0% | 0% | < 0.5% | ✅ |
 
-Cold start breaks down into about 620 ms for WebView2 to create its browser process (before any app code runs) and about 250 ms in the frontend: loading the bundle, first layout and first paint. The WebView2 part is mostly a fixed cost, so the budget was revised from 400 / 700 ms to 800 / 1,000 ms; remaining gains come from the frontend. Idle RAM rose about 4 MB in M2 with the file watcher and recovery timer.
-
+Cold start breaks down into about 620–650 ms for WebView2 to create its browser process (before any app code runs) and about 250–300 ms in the frontend, most of it one first-layout task. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (39 MB), the browser process (33 MB) and the GPU process (18 MB). The app's own JavaScript heap is about 12 MB. M3 tried pre-reading the startup file in Rust, V8 compile hints and seven WebView2 flag sets; none moved either number beyond noise.
 To reproduce:
 
 ```bash
@@ -69,6 +68,15 @@ Not yet built: optional auto-save (F13, waits for a settings surface) and taskba
 | Ctrl+F | Find |
 | Ctrl+H | Find and replace |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
+| Esc, then Tab | Move focus out of the editor (Tab normally indents) |
+| Ctrl+M | Toggle Tab between indenting and moving focus |
+
+## Accessibility
+
+- All text meets WCAG 2.2 AA contrast (4.5:1) in both themes; `node scripts/contrast.mjs` checks every text/background pair and runs in CI.
+- Everything works from the keyboard. The preview pane is focusable, so it can be scrolled with the arrow and Page keys.
+- The editor is exposed to screen readers by CodeMirror. The status bar is deliberately not a live region, so it does not announce every keystroke.
+- IME composition (verified for Japanese and Hindi in the end-to-end test) commits cleanly and saves as UTF-8.
 ## Development
 
 ### Prerequisites
@@ -87,6 +95,11 @@ winget install --id Rustlang.Rustup -e
 ```bash
 winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
+
+### Releasing
+
+- **Signed build:** set `MARKY_SIGN_COMMAND` to your signing command with `{file}` where the file path goes, then run `./scripts/build-signed.ps1`. Tauri calls the hook for the app, the installer, the uninstaller and the NSIS plugins, and the script verifies every Authenticode signature afterwards. In CI, set the same value as a repository secret. Plain `npx tauri build` stays unsigned.
+- **winget:** after uploading the installer to a release, run `./scripts/winget-manifest.ps1 -InstallerUrl <url> -License <license>`. It writes validated 1.12.0 manifests to `dist-winget/` for a pull request to microsoft/winget-pkgs.
 
 ### Commands
 
@@ -135,6 +148,10 @@ scripts/
   bench.ps1             Release-build benchmark: cold start, WebView2 ready, idle RAM, sizes
   e2e.ps1, e2e.mjs      Release-build smoke test driven over the WebView2 DevTools protocol
   check-size.ps1        Size budgets (release-blocking)
+  contrast.mjs          WCAG AA contrast audit of the theme tokens
+  sign.ps1              Signing hook (route-agnostic, driven by MARKY_SIGN_COMMAND)
+  build-signed.ps1      Signed release build plus signature verification
+  winget-manifest.ps1   winget manifests for a published release
 .github/workflows/
   ci.yml                Windows CI: checks, tests, audits, build, budgets, e2e, installer + portable ZIP
 ```

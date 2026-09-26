@@ -47,8 +47,14 @@ jobs:
           cargo install cargo-audit --locked
           cargo audit --file src-tauri/Cargo.lock
 
-      - name: Build installer
-        run: npx tauri build
+      - name: Contrast audit (WCAG AA, both themes)
+        run: node scripts/contrast.mjs
+
+      - name: Build installer (signed when the MARKY_SIGN_COMMAND secret is set)
+        shell: pwsh
+        env:
+          MARKY_SIGN_COMMAND: ${{ secrets.MARKY_SIGN_COMMAND }}
+        run: if ($env:MARKY_SIGN_COMMAND) { ./scripts/build-signed.ps1 } else { npx tauri build }
 
       - name: Enforce size budgets
         shell: pwsh
