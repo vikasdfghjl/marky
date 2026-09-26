@@ -51,7 +51,7 @@ For changes to file handling, IPC, shortcuts or window lifecycle, also run the e
 
 ## Releasing
 
-Signing is route-agnostic. `scripts/sign.ps1` runs `MARKY_SIGN_COMMAND` (with a `{file}` placeholder), and `scripts/build-signed.ps1` merges the hook into the config for that build only and then verifies every Authenticode signature. Keep certificates, credentials and the command itself in CI secrets only. winget manifests come from `scripts/winget-manifest.ps1` (schema 1.12.0, validated with `winget validate`).
+The beta ships **unsigned** (PRD decision). Release builds use plain `npx tauri build`, which is what CI does while no `MARKY_SIGN_COMMAND` secret exists. Signing is route-agnostic. `scripts/sign.ps1` runs `MARKY_SIGN_COMMAND` (with a `{file}` placeholder), and `scripts/build-signed.ps1` merges the hook into the config for that build only and then verifies every Authenticode signature. Keep certificates, credentials and the command itself in CI secrets only. winget manifests come from `scripts/winget-manifest.ps1` (schema 1.12.0, validated with `winget validate`).
 
 ## Environment gotchas
 

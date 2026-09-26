@@ -259,10 +259,10 @@ The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike
 
 **Open questions**
 
-- [ ] Which code-signing route: OV cert with cloud HSM, Microsoft Store, or unsigned beta first?
+- [x] Code signing: unsigned beta first (decided 27 Sep 2026). SmartScreen warnings are accepted for the beta; the signing hook stays wired so a certificate can be added before v1.0 without code changes.
 - [ ] Support non-UTF-8 encodings (UTF-16, Windows-1252) in v1, or read-only warning only?
 - [ ] Should raw HTML in Markdown render (sanitized) by default, or stay off?
-- [ ] Free and open source, or paid/freemium? This affects the Store route and update infrastructure.
+- [x] Open source under the MIT license (decided 27 Sep 2026).
 - [ ] Is an ARM64 Windows build needed for v1.0?
 - [ ] Idle RAM target: WebView2's own baseline is about 95–100 MB on the test laptop. Revise the target to ≤ 105 MB (hard limit 120 MB unchanged), or keep 90 MB as aspirational?
 - [x] Cold-start budget revised to ≤ 800 ms target / 1,000 ms hard limit after M0 measured a ~610 ms WebView2 floor.

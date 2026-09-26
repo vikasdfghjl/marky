@@ -10,14 +10,14 @@ Marky opens a `.md` file, lets you edit it with syntax highlighting and a live s
 
 Latest run: 27 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with README.md open. Each figure is the median of 7 runs.
 
-| Metric | Measured | Target | Hard limit | Status |
-| --- | --- | --- | --- | --- |
-| Installer (NSIS) | 1.75 MB | ≤ 6 MB | 10 MB | ✅ |
-| App exe | 3.93 MB | ≤ 8 MB | 12 MB | ✅ |
-| Cold start to editable | 937 ms (827–1,141) | ≤ 800 ms | 1,000 ms | ⚠️ |
-| Preview update after typing stops | ~160 ms | ≤ 200 ms | 400 ms | ✅ |
-| Idle RAM (app + WebView2) | 103.5 MB | ≤ 90 MB | 120 MB | ⚠️ |
-| Idle CPU | 0% | 0% | < 0.5% | ✅ |
+| Metric                            | Measured           | Target   | Hard limit | Status |
+| --------------------------------- | ------------------ | -------- | ---------- | ------ |
+| Installer (NSIS)                  | 1.75 MB            | ≤ 6 MB   | 10 MB      | ✅     |
+| App exe                           | 3.93 MB            | ≤ 8 MB   | 12 MB      | ✅     |
+| Cold start to editable            | 937 ms (827–1,141) | ≤ 800 ms | 1,000 ms   | ⚠️     |
+| Preview update after typing stops | ~160 ms            | ≤ 200 ms | 400 ms     | ✅     |
+| Idle RAM (app + WebView2)         | 103.5 MB           | ≤ 90 MB  | 120 MB     | ⚠️     |
+| Idle CPU                          | 0%                 | 0%       | < 0.5%     | ✅     |
 
 Cold start breaks down into about 620–650 ms for WebView2 to create its browser process (before any app code runs) and about 250–300 ms in the frontend, most of it one first-layout task. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (39 MB), the browser process (33 MB) and the GPU process (18 MB). The app's own JavaScript heap is about 12 MB. M3 tried pre-reading the startup file in Rust, V8 compile hints and seven WebView2 flag sets; none moved either number beyond noise.
 To reproduce:
@@ -31,6 +31,10 @@ npx tauri build --no-bundle
 ```
 
 Add `-Details` to see the per-phase timeline, or `-BrowserArgs "..."` to try other WebView2 flags without rebuilding.
+
+## Install (beta)
+
+Beta builds are **unsigned**, so Windows SmartScreen shows *Windows protected your PC* on first run. Choose **More info**, then **Run anyway**. The installer is per-user and needs no admin rights. A portable ZIP (just `marky.exe`) is also built; it needs the WebView2 runtime, which Windows 11 and current Windows 10 already have.
 
 ## Features
 
@@ -56,20 +60,20 @@ Not yet built: optional auto-save (F13, waits for a settings surface) and taskba
 
 ## Keyboard shortcuts
 
-| Shortcut | Action |
-| --- | --- |
-| Ctrl+N | New document |
-| Ctrl+O | Open file |
-| Ctrl+R | Open recent file |
-| Ctrl+S | Save |
-| Ctrl+Shift+S | Save As |
-| Ctrl+W | Close window |
-| Ctrl+Shift+V | Toggle preview |
-| Ctrl+F | Find |
-| Ctrl+H | Find and replace |
-| Ctrl+Z / Ctrl+Y | Undo / redo |
-| Esc, then Tab | Move focus out of the editor (Tab normally indents) |
-| Ctrl+M | Toggle Tab between indenting and moving focus |
+| Shortcut        | Action                                              |
+| --------------- | --------------------------------------------------- |
+| Ctrl+N          | New document                                        |
+| Ctrl+O          | Open file                                           |
+| Ctrl+R          | Open recent file                                    |
+| Ctrl+S          | Save                                                |
+| Ctrl+Shift+S    | Save As                                             |
+| Ctrl+W          | Close window                                        |
+| Ctrl+Shift+V    | Toggle preview                                      |
+| Ctrl+F          | Find                                                |
+| Ctrl+H          | Find and replace                                    |
+| Ctrl+Z / Ctrl+Y | Undo / redo                                         |
+| Esc, then Tab   | Move focus out of the editor (Tab normally indents) |
+| Ctrl+M          | Toggle Tab between indenting and moving focus       |
 
 ## Accessibility
 
@@ -77,6 +81,7 @@ Not yet built: optional auto-save (F13, waits for a settings surface) and taskba
 - Everything works from the keyboard. The preview pane is focusable, so it can be scrolled with the arrow and Page keys.
 - The editor is exposed to screen readers by CodeMirror. The status bar is deliberately not a live region, so it does not announce every keystroke.
 - IME composition (verified for Japanese and Hindi in the end-to-end test) commits cleanly and saves as UTF-8.
+
 ## Development
 
 ### Prerequisites
@@ -98,8 +103,8 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--wait
 
 ### Releasing
 
-- **Signed build:** set `MARKY_SIGN_COMMAND` to your signing command with `{file}` where the file path goes, then run `./scripts/build-signed.ps1`. Tauri calls the hook for the app, the installer, the uninstaller and the NSIS plugins, and the script verifies every Authenticode signature afterwards. In CI, set the same value as a repository secret. Plain `npx tauri build` stays unsigned.
-- **winget:** after uploading the installer to a release, run `./scripts/winget-manifest.ps1 -InstallerUrl <url> -License <license>`. It writes validated 1.12.0 manifests to `dist-winget/` for a pull request to microsoft/winget-pkgs.
+- **Signed build** (not used during the unsigned beta): set `MARKY_SIGN_COMMAND` to your signing command with `{file}` where the file path goes, then run `./scripts/build-signed.ps1`. Tauri calls the hook for the app, the installer, the uninstaller and the NSIS plugins, and the script verifies every Authenticode signature afterwards. In CI, set the same value as a repository secret. Plain `npx tauri build` stays unsigned.
+- **winget:** after uploading the installer to a release, run `./scripts/winget-manifest.ps1 -InstallerUrl <url>`. It writes validated 1.12.0 manifests to `dist-winget/` for a pull request to microsoft/winget-pkgs.
 
 ### Commands
 
@@ -117,7 +122,7 @@ npm run tauri dev
 | `npm run tauri dev`                               | Full native app with hot reload                                                                         |
 | `npm run tauri build`                             | Release build and NSIS installer in `src-tauri/target/release/bundle/`                                  |
 | `npm run typecheck`                               | TypeScript type-check                                                                                   |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust tests: encoding, atomic save, kill-mid-save, recent/recovery                                         |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust tests: encoding, atomic save, kill-mid-save, recent/recovery                                       |
 | `./scripts/e2e.ps1`                               | End-to-end smoke test of the release build (needs `npx tauri build --no-bundle` first)                  |
 | `./scripts/check-size.ps1`                        | Fail if the exe or installer exceeds the PRD hard limits (needs a full `npx tauri build`)               |
 
@@ -180,3 +185,7 @@ Every Markdown file is treated as untrusted input:
 | M4 v1.x   | Tabs, HTML/PDF export, Mermaid and KaTeX, outline, auto-update                                               |
 
 Details are in [PRD.md](PRD.md).
+
+## License
+
+[MIT](LICENSE)

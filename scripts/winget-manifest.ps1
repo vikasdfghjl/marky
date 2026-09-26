@@ -6,11 +6,11 @@
   -InstallerUrl, and writes manifests\<letter>\<Publisher>\<Package>\<Version>\ ready
   for a pull request to microsoft/winget-pkgs. Validates them with `winget validate`.
 .EXAMPLE
-  ./scripts/winget-manifest.ps1 -InstallerUrl https://github.com/<owner>/marky/releases/download/v0.1.0/Marky_0.1.0_x64-setup.exe -License MIT
+  ./scripts/winget-manifest.ps1 -InstallerUrl https://github.com/<owner>/marky/releases/download/v0.1.0/Marky_0.1.0_x64-setup.exe
 #>
 param(
   [Parameter(Mandatory)][string]$InstallerUrl,
-  [Parameter(Mandatory)][string]$License,
+  [string]$License = 'MIT',
   [string]$PackageIdentifier = 'VikasSingh.Marky',
   [string]$Publisher = 'Vikas Singh',
   [string]$PackageUrl = '',
