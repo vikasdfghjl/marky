@@ -157,6 +157,7 @@ scripts/
   sign.ps1              Signing hook (route-agnostic, driven by MARKY_SIGN_COMMAND)
   build-signed.ps1      Signed release build plus signature verification
   winget-manifest.ps1   winget manifests for a published release
+  third-party-notices.mjs  THIRD_PARTY_NOTICES.txt from the npm and Cargo dependency graphs
 .github/workflows/
   ci.yml                Windows CI: checks, tests, audits, build, budgets, e2e, installer + portable ZIP
 ```
@@ -188,4 +189,4 @@ Details are in [PRD.md](PRD.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Marky bundles third-party open-source packages; their licenses are in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt), which ships next to `marky.exe` in the installer and the portable ZIP.

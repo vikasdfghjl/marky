@@ -53,6 +53,10 @@ For changes to file handling, IPC, shortcuts or window lifecycle, also run the e
 
 The beta ships **unsigned** (PRD decision). Release builds use plain `npx tauri build`, which is what CI does while no `MARKY_SIGN_COMMAND` secret exists. Signing is route-agnostic. `scripts/sign.ps1` runs `MARKY_SIGN_COMMAND` (with a `{file}` placeholder), and `scripts/build-signed.ps1` merges the hook into the config for that build only and then verifies every Authenticode signature. Keep certificates, credentials and the command itself in CI secrets only. winget manifests come from `scripts/winget-manifest.ps1` (schema 1.12.0, validated with `winget validate`).
 
+## Dependencies and licensing
+
+Marky is MIT. After adding, removing or upgrading any npm or Cargo dependency, run `node scripts/third-party-notices.mjs` and commit the regenerated `THIRD_PARTY_NOTICES.txt`; CI fails if it is stale. The file ships in the installer (`bundle.resources`) and the portable ZIP. Prefer MIT, Apache-2.0, BSD, ISC or Zlib dependencies. Flag anything copyleft (GPL, LGPL, AGPL) before adding it, and keep MPL-2.0 to unmodified crates.
+
 ## Environment gotchas
 
 - Shells are PowerShell on Windows. Shells opened before Rust was installed lack cargo on PATH; prepend `$env:USERPROFILE\.cargo\bin`.
