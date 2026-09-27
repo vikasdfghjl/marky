@@ -25,6 +25,20 @@ Fast Markdown for docs, READMEs and AI context files. Jump to [the code](#code-b
 | Cold start | 800 ms | 1,000 ms |
 | Idle RAM | 90 MB | 120 MB |
 
+## Math
+
+Inline $E = mc^2$ and $\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$, while prices like $5 and $10 stay text.
+
+$$
+\\operatorname{softmax}(x_i) = \\frac{e^{x_i}}{\\sum_j e^{x_j}}
+$$
+
+\`\`\`math
+\\mathrm{Attention}(Q, K, V) = \\mathrm{softmax}\\left(\\frac{QK^\\top}{\\sqrt{d_k}}\\right)V
+\`\`\`
+
+Broken TeX stays readable: $\\frac{1}{$.
+
 ## Architecture
 
 \`\`\`mermaid

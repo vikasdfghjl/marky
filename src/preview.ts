@@ -11,6 +11,14 @@ export interface Preview {
   readonly visible: boolean;
 }
 
+let mathStyles: Promise<unknown> | null = null;
+
+/** KaTeX's stylesheet and fonts (~300 KB) load only once a document actually shows math. */
+function loadMathStylesIfNeeded(el: HTMLElement) {
+  if (mathStyles || !el.querySelector('.katex')) return;
+  mathStyles = import('katex/dist/katex.min.css');
+}
+
 /**
  * Parsing runs in a worker; the main thread only swaps in the HTML. Link clicks never
  * navigate the webview: they go to `onLinkClick` with the raw href.
@@ -31,6 +39,7 @@ export function createPreview(
     const { id } = e.data;
     if (id !== seq) return; // stale result, a newer render is in flight
     el.innerHTML = e.data.html;
+    loadMathStylesIfNeeded(el);
     await drawMermaidBlocks(el, () => id === seq);
     if (id !== seq) return;
     requestAnimationFrame(() => onRendered(e.data.ms));

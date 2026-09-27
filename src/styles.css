@@ -535,3 +535,11 @@ body.drag-over #app::after {
 .markdown-alert-important { --alert-color: var(--alert-important); }
 .markdown-alert-warning { --alert-color: var(--alert-warning); }
 .markdown-alert-caution { --alert-color: var(--alert-caution); }
+/* ---- math (KaTeX styles load lazily) ---- */
+
+.markdown-body .math-block {
+  margin: 0 0 1em;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+

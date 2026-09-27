@@ -245,7 +245,7 @@ MVP in 3 weeks and v1.0 in 7 weeks, assuming one developer part-time (\~20 h/wee
 
 **F14 status (27 Sep 2026):** tabs shipped early with a native menu bar and multi-file drag and drop. Measured memory growth is 2.5 MB per extra 100 KB tab (budget 3 MB).
 
-**F16/F17 status (27 Sep 2026):** Mermaid (lazy, strict security, cached) and the outline sidebar shipped; KaTeX is still to do. Installer is 3.55 MB with Mermaid.
+**F16/F17 status (27 Sep 2026):** Mermaid (lazy, strict security, cached), KaTeX math (worker-rendered, lazy CSS and fonts) and the outline sidebar shipped. The installer is 4.46 MB with both.
 
 ## Risks and open questions
 

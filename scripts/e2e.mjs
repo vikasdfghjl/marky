@@ -186,6 +186,13 @@ await sleep(4000);
 check('mermaid diagram drawn as SVG', await evaluate(`!!document.querySelector('#preview .mermaid[data-drawn="svg"] svg')`));
 check('mermaid syntax error shown inline', await evaluate(`!!document.querySelector('#preview .mermaid-error')`));
 
+// KaTeX math renders in the worker; its CSS and fonts load lazily under the app's CSP.
+await send('Input.insertText', { text: '\nInline $a^2 + b^2 = c^2$ costs $5 and $10.\n\n$$\n\\int_0^1 x\\,dx\n$$\n' });
+await sleep(3000);
+check('inline and display math rendered', await evaluate(`!!document.querySelector('#preview p .katex') && !!document.querySelector('#preview .katex-display')`));
+check('prices with $ stay plain text', await evaluate(`document.getElementById('preview').textContent.includes('costs $5 and $10')`));
+check('KaTeX fonts load under the CSP', await evaluate(`document.fonts.ready.then(() => document.fonts.check('16px KaTeX_Main'))`));
+
 // Outline sidebar (F17): headings from the syntax tree, click to jump.
 await emitMenu('toggle-outline');
 await sleep(300);

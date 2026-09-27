@@ -2,6 +2,7 @@ import MarkdownIt, { type Token } from 'markdown-it';
 import taskLists from 'markdown-it-task-lists';
 import { highlightFence, prepareLanguages } from './code-highlight';
 import { frontmatter, githubAlerts, headingAnchors } from './markdown-plugins';
+import { mathPlugin, prepareMath, renderMathFence } from './math';
 
 export interface RenderRequest {
   id: number;
@@ -33,7 +34,8 @@ const md = new MarkdownIt({
   .use(taskLists, { enabled: false })
   .use(frontmatter)
   .use(githubAlerts)
-  .use(headingAnchors);
+  .use(headingAnchors)
+  .use(mathPlugin);
 
 // Tag block elements with their source line for synced scroll (F10) and #anchor jumps.
 md.core.ruler.push('source_lines', (state) => {
@@ -48,6 +50,8 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const line = token.map ? ` data-line="${token.map[0]}"` : '';
   // Mermaid needs the DOM, so the main thread draws it (mermaid-blocks.ts) from this escaped source.
+  const math = renderMathFence(token, md.utils.escapeHtml);
+  if (math) return math;
   if (fenceLanguage(token) === 'mermaid') {
     return `<div class="mermaid"${line}>${md.utils.escapeHtml(token.content)}</div>\n`;
   }
@@ -113,7 +117,7 @@ function fenceLanguages(tokens: Token[]): Set<string> {
   const names = new Set<string>();
   for (const token of tokens) {
     const name = token.type === 'fence' ? fenceLanguage(token) : '';
-    if (name && name !== 'mermaid') names.add(name);
+    if (name && name !== 'mermaid' && name !== 'math') names.add(name);
   }
   return names;
 }
@@ -124,7 +128,7 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   const env: RenderEnv = { documentFolder, assetBase };
   // Parse once; load any fence languages (async, first use only), then render synchronously.
   const tokens = md.parse(text, env);
-  await prepareLanguages(fenceLanguages(tokens));
+  await Promise.all([prepareLanguages(fenceLanguages(tokens)), prepareMath(tokens)]);
   const html = md.renderer.render(tokens, md.options, env);
   const result: RenderResult = { id, html, ms: performance.now() - start };
   self.postMessage(result);
