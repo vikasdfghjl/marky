@@ -5,13 +5,13 @@
 //! accelerator the same way, so Windows right-aligns it identically.
 
 use tauri::menu::{Menu, MenuBuilder, MenuEvent, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_dialog::MessageDialogKind;
 
 const ABOUT: &str = "about";
 
 /// Item ids are the frontend's command names (see `commands` in main.ts).
-pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+pub fn build(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let file = SubmenuBuilder::new(app, "&File")
         .text("new", "&New Tab\tCtrl+N")
         .text("open", "&Open…\tCtrl+O")
@@ -41,7 +41,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 }
 
 /// About is answered natively; everything else is a frontend command.
-pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
+pub fn on_event(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref();
     if id == ABOUT {
         return show_about(app);
@@ -49,17 +49,11 @@ pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let _ = app.emit_to("main", "menu", id);
 }
 
-fn show_about<R: Runtime>(app: &AppHandle<R>) {
+fn show_about(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else { return };
     let version = &app.package_info().version;
-    let mut dialog = app
-        .dialog()
-        .message(format!(
-            "Marky {version}\n\nA fast, lightweight Markdown editor.\nMIT License. Third-party licenses are in THIRD_PARTY_NOTICES.txt next to marky.exe."
-        ))
-        .title("About Marky")
-        .kind(MessageDialogKind::Info);
-    if let Some(window) = app.get_webview_window("main") {
-        dialog = dialog.parent(&window);
-    }
-    dialog.show(|_| {});
+    let text = format!(
+        "Marky {version}\n\nA fast, lightweight Markdown editor.\nMIT License. Third-party licenses are in THIRD_PARTY_NOTICES.txt next to marky.exe."
+    );
+    crate::message_dialog(&window, text, MessageDialogKind::Info).title("About Marky").show(|_| {});
 }

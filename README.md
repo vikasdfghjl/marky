@@ -171,6 +171,9 @@ src/
   scroll-sync.ts        Editor-to-preview synced scroll via source-line markers
   recent-picker.ts      Ctrl+R recent-files list
   tab-strip.ts          Tab strip rendering (tablist semantics)
+  status-bar.ts         Footer: cursor, counts, file format, timings
+  shortcuts.ts          Keyboard dispatch into the command table (blocks reload keys)
+  paths.ts              File-name, folder and path helpers shared by page and worker
   perf.ts               Cold-start instrumentation
   ipc.ts                Typed wrappers around Tauri commands and events
   styles.css            Theme variables (light/dark), picker and preview typography
@@ -184,6 +187,7 @@ src-tauri/
   capabilities/         Webview permissions (least privilege)
 scripts/
   bench.ps1             Release-build benchmark: cold start, WebView2 ready, idle RAM, sizes
+  lib.ps1               Shared script helpers (process-tree walk and stop)
   e2e.ps1, e2e.mjs      Release-build smoke test driven over the WebView2 DevTools protocol
   check-size.ps1        Size budgets (release-blocking)
   contrast.mjs          WCAG AA contrast audit of the theme tokens

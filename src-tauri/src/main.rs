@@ -17,8 +17,8 @@ use files::{FileMeta, OpenedFile};
 use notify::RecommendedWatcher;
 use serde::Serialize;
 use store::Snapshot;
-use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, WebviewWindow, Window, WindowEvent};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
+use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, WebviewWindow, Window, WindowEvent, Wry};
+use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
 const MARKDOWN_EXTS: &[&str] = &["md", "markdown", "txt"];
 const APP_NAME: &str = "Marky";
@@ -294,6 +294,11 @@ async fn snapshot_buffers(app: AppHandle, snapshots: Vec<Snapshot>) -> Result<()
 
 // ---- prompts & window lifecycle ----
 
+/// Every message box: app title, modal to the window that asked.
+fn message_dialog(window: &WebviewWindow, text: impl Into<String>, kind: MessageDialogKind) -> MessageDialogBuilder<Wry> {
+    window.dialog().message(text).title(APP_NAME).kind(kind).parent(window)
+}
+
 #[tauri::command]
 fn set_dirty(state: State<'_, AppState>, dirty: bool) {
     state.dirty.store(dirty, Ordering::Relaxed);
@@ -301,12 +306,7 @@ fn set_dirty(state: State<'_, AppState>, dirty: bool) {
 
 #[tauri::command]
 async fn ask_unsaved_changes(window: WebviewWindow, file_name: String) -> UnsavedChoice {
-    let result = window
-        .dialog()
-        .message(format!("Do you want to save changes to {file_name}?"))
-        .title(APP_NAME)
-        .kind(MessageDialogKind::Warning)
-        .parent(&window)
+    let result = message_dialog(&window, format!("Do you want to save changes to {file_name}?"), MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::YesNoCancelCustom(
             SAVE_LABEL.into(),
             DONT_SAVE_LABEL.into(),
@@ -326,12 +326,7 @@ async fn ask_unsaved_changes(window: WebviewWindow, file_name: String) -> Unsave
 /// Two-button question; true only when the user picks `confirm`.
 #[tauri::command]
 async fn ask_choice(window: WebviewWindow, message: String, confirm: String, cancel: String) -> bool {
-    let result = window
-        .dialog()
-        .message(message)
-        .title(APP_NAME)
-        .kind(MessageDialogKind::Warning)
-        .parent(&window)
+    let result = message_dialog(&window, message, MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(confirm.clone(), cancel))
         .blocking_show_with_result();
     match result {
@@ -343,13 +338,7 @@ async fn ask_choice(window: WebviewWindow, message: String, confirm: String, can
 
 #[tauri::command]
 async fn show_error(window: WebviewWindow, message: String) {
-    window
-        .dialog()
-        .message(message)
-        .title(APP_NAME)
-        .kind(MessageDialogKind::Error)
-        .parent(&window)
-        .blocking_show();
+    message_dialog(&window, message, MessageDialogKind::Error).blocking_show();
 }
 
 /// Closes without raising CloseRequested again; the frontend has already resolved

@@ -24,7 +24,7 @@ export async function prepareLanguages(names: Iterable<string>) {
 }
 
 /** Highlighted HTML for a fence, or '' when its language is unknown or not loaded (markdown-it then escapes it). */
-export function highlightFence(code: string, languageName: string): string {
+export function highlightFence(code: string, languageName: string, escapeHtml: (text: string) => string): string {
   const support = loaded.get(languageName.toLowerCase());
   if (!support) return '';
   const tree = support.language.parser.parse(code);
@@ -40,8 +40,4 @@ export function highlightFence(code: string, languageName: string): string {
     () => (html += '\n'),
   );
   return html;
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

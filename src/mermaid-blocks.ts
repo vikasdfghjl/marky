@@ -11,12 +11,14 @@ let renderCount = 0;
 
 const darkScheme = window.matchMedia('(prefers-color-scheme: dark)');
 
+/** 'strict' encodes HTML in labels and disables click handlers: the source is untrusted. */
+function configure(m: Mermaid): Mermaid {
+  m.initialize({ startOnLoad: false, securityLevel: 'strict', theme: darkScheme.matches ? 'dark' : 'default' });
+  return m;
+}
+
 function loadMermaid(): Promise<Mermaid> {
-  mermaid ??= import('mermaid').then(({ default: m }) => {
-    // 'strict' encodes HTML in labels and disables click handlers: the source is untrusted.
-    m.initialize({ startOnLoad: false, securityLevel: 'strict', theme: darkScheme.matches ? 'dark' : 'default' });
-    return m;
-  });
+  mermaid ??= import('mermaid').then(({ default: m }) => configure(m));
   return mermaid;
 }
 
@@ -25,7 +27,7 @@ export function onMermaidThemeChange(rerender: () => void) {
   darkScheme.addEventListener('change', () => {
     if (!mermaid) return;
     void mermaid.then((m) => {
-      m.initialize({ startOnLoad: false, securityLevel: 'strict', theme: darkScheme.matches ? 'dark' : 'default' });
+      configure(m);
       rerender();
     });
   });

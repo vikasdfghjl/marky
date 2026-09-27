@@ -23,10 +23,7 @@ $fixture = Join-Path $dir 'fixture.md'
 
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
 
-function Stop-Tree($id) {
-  Get-CimInstance Win32_Process | Where-Object ParentProcessId -eq $id | ForEach-Object { Stop-Tree $_.ProcessId }
-  Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
-}
+. (Join-Path $PSScriptRoot 'lib.ps1')
 
 $script:failures = 0
 
@@ -54,7 +51,7 @@ try {
   $app.CloseMainWindow() | Out-Null
   Start-Sleep -Seconds 2
   Write-Check 'close with unsaved changes is held for the prompt' (-not $app.HasExited)
-  Stop-Tree $app.Id
+  Stop-ProcessTree $app.Id
   Start-Sleep -Seconds 1
 
   # Run B: run A was killed with unsaved changes, so the relaunch must offer recovery (a native dialog).
@@ -78,7 +75,7 @@ public static bool HasVisibleDialog(uint processId) {
   $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
   Start-Sleep -Seconds 4
   Write-Check 'relaunch after a crash offers recovery' ([Win32.Dialogs]::HasVisibleDialog([uint32]$app.Id))
-  Stop-Tree $app.Id
+  Stop-ProcessTree $app.Id
   Start-Sleep -Seconds 1
   Remove-Item (Join-Path $env:LOCALAPPDATA 'dev.marky.editor\recovery.json') -ErrorAction SilentlyContinue
 
@@ -88,7 +85,7 @@ public static bool HasVisibleDialog(uint processId) {
   $app.CloseMainWindow() | Out-Null
   Start-Sleep -Seconds 2
   Write-Check 'clean window closes without a prompt' $app.HasExited
-  if (-not $app.HasExited) { Stop-Tree $app.Id }
+  if (-not $app.HasExited) { Stop-ProcessTree $app.Id }
 }
 finally {
   Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue

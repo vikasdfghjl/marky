@@ -7,6 +7,9 @@ import { syncPreviewToEditor } from './scroll-sync';
 import { pickRecentFile } from './recent-picker';
 import { createTabStrip } from './tab-strip';
 import { createOutline } from './outline';
+import { statusBar } from './status-bar';
+import { listenForShortcuts } from './shortcuts';
+import { URL_SCHEME, UNTITLED, fileName, folderOf } from './paths';
 import { api, isTauri, type FileMeta, type OpenedFile, type Snapshot } from './ipc';
 import { SAMPLE } from './sample';
 
@@ -18,7 +21,6 @@ const SNAPSHOT_INTERVAL_MS = 30_000;
 const PREVIEW_AUTO_OFF_BYTES = 5 * 1024 * 1024;
 /** PRD F14: up to 20 open files. */
 const MAX_TABS = 20;
-const UNTITLED = 'Untitled';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -117,8 +119,13 @@ function activate(tab: Tab) {
   active.state = editor.view.state;
   active.scrollTop = editor.view.scrollDOM.scrollTop;
   active = tab;
+  showInEditor(tab, tab.scrollTop);
+}
+
+/** Puts the (already active) tab's state in the editor and refreshes everything around it. */
+function showInEditor(tab: Tab, scrollTop: number) {
   lastEditAt = 0;
-  editor.show(tab.state, tab.scrollTop);
+  editor.show(tab.state, scrollTop);
   showActiveTab();
 }
 
@@ -145,10 +152,8 @@ function loadIntoTab(tab: Tab, doc: EditorDocument) {
   tab.state = editor.createState(doc.text, { readOnly: doc.readOnly });
   setDirty(false, tab);
   if (tab === active) {
-    lastEditAt = 0;
-    editor.show(tab.state);
+    showInEditor(tab, 0);
     performance.mark('editor-loaded');
-    showActiveTab();
   } else {
     renderTabs();
   }
@@ -177,7 +182,7 @@ function renderTabs() {
 
 function onEditorUpdate(update: ViewUpdate) {
   if (update.selectionSet || update.docChanged) {
-    updateCursorPosition();
+    statusBar.cursor(update.state);
     outline.highlightCurrent();
   }
   if (!update.docChanged) return;
@@ -209,7 +214,7 @@ function syncWindowDirty() {
 function renderAfterTypingPause() {
   const text = editor.text();
   preview.render(text);
-  updateWordCount(text);
+  statusBar.counts(text);
   outline.refresh();
 }
 
@@ -219,45 +224,10 @@ function onPreviewRendered(parseMs: number) {
     pendingAnchor = null;
   }
   syncPreviewScroll();
-  // Budget: last keystroke to preview paint, including the typing pause.
-  if (!lastEditAt) return;
-  const latencyMs = performance.now() - lastEditAt;
-  $('st-render').textContent = `preview ${Math.round(latencyMs)} ms (parse ${parseMs.toFixed(1)})`;
+  if (lastEditAt) statusBar.previewLatency(performance.now() - lastEditAt, parseMs);
 }
 
-// ---- status bar & title ----
-
-function updateCursorPosition() {
-  const { state } = editor.view;
-  const head = state.selection.main.head;
-  const line = state.doc.lineAt(head);
-  $('st-pos').textContent = `Ln ${line.number}, Col ${head - line.from + 1}`;
-}
-
-function updateWordCount(text: string) {
-  const words = text.match(/\S+/g)?.length ?? 0;
-  $('st-count').textContent = `${words.toLocaleString()} words, ${text.length.toLocaleString()} chars`;
-}
-
-function encodingLabel(): string {
-  if (active.readOnly) return 'Not UTF-8 (read-only)';
-  return active.meta.bom ? 'UTF-8 BOM' : 'UTF-8';
-}
-
-function updateFileFormatStatus() {
-  $('st-eol').textContent = active.meta.lineEnding.toUpperCase();
-  $('st-enc').textContent = encodingLabel();
-}
-
-function fileName(path: string | null): string {
-  if (!path) return UNTITLED;
-  return path.split(/[\\/]/).pop()!;
-}
-
-function folderOf(path: string | null): string | null {
-  if (!path) return null;
-  return path.replace(/[\\/][^\\/]*$/, '');
-}
+// ---- title & views ----
 
 function updateTitle() {
   const title = `${active.dirty ? '● ' : ''}${fileName(active.path)} — Marky`;
@@ -268,10 +238,10 @@ function updateTitle() {
 function refreshAllViews() {
   const text = editor.text();
   preview.render(text);
-  updateWordCount(text);
+  statusBar.counts(text);
+  statusBar.cursor(editor.view.state);
+  statusBar.format(active.meta, active.readOnly);
   outline.refresh();
-  updateCursorPosition();
-  updateFileFormatStatus();
   updateTitle();
 }
 
@@ -280,26 +250,6 @@ function applyPreviewVisibility() {
   if (visible === preview.visible) return;
   preview.setVisible(visible);
   if (visible) preview.render(editor.text());
-}
-
-const OUTLINE_KEY = 'marky.outline';
-
-/** A per-install convenience, so browser storage is enough; it may be unavailable, which is fine. */
-function toggleOutline() {
-  outline.setVisible(!outline.visible);
-  try {
-    localStorage.setItem(OUTLINE_KEY, outline.visible ? '1' : '0');
-  } catch {
-    // Private mode or blocked storage: the choice just is not remembered.
-  }
-}
-
-function restoreOutlineVisibility() {
-  try {
-    outline.setVisible(localStorage.getItem(OUTLINE_KEY) === '1');
-  } catch {
-    // Stays hidden.
-  }
 }
 
 function togglePreview() {
@@ -360,9 +310,7 @@ async function closeTab(tab: Tab = active) {
   watchPath(null, tab.path);
   // Activate the neighbour directly: the closed tab's state must not be stashed back.
   active = tabs[Math.min(index, tabs.length - 1)];
-  lastEditAt = 0;
-  editor.show(active.state, active.scrollTop);
-  showActiveTab();
+  showInEditor(active, active.scrollTop);
   syncWindowDirty();
   snapshotDirtyTabs();
 }
@@ -433,8 +381,6 @@ async function save(forceSaveAs = false): Promise<boolean> {
 }
 
 // ---- links in the preview ----
-
-const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 
 /** `#heading` scrolls, http(s)/mailto opens the browser, relative .md links open in a tab. Other schemes are ignored. */
 async function followLink(href: string) {
@@ -575,7 +521,7 @@ const commands = {
   find: editor.openFind,
   replace: editor.openReplace,
   'toggle-preview': togglePreview,
-  'toggle-outline': toggleOutline,
+  'toggle-outline': outline.toggle,
   'next-tab': () => activateNeighbour(1),
   'previous-tab': () => activateNeighbour(-1),
 } satisfies Record<string, () => unknown>;
@@ -602,36 +548,14 @@ const SHORTCUTS: Record<string, CommandId> = {
   'Ctrl+Shift+Tab': 'previous-tab',
 };
 
-/** A reload would silently drop every buffer; there is nothing to refresh. */
-const BLOCKED_KEYS = new Set(['F5', 'Ctrl+F5', 'Ctrl+Shift+R']);
-
-function keyChord(e: KeyboardEvent): string {
-  const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
-  return [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', key].filter(Boolean).join('+');
-}
-
-// Capture phase so app shortcuts win over the editor and the webview defaults.
-window.addEventListener(
-  'keydown',
-  (e) => {
-    const chord = keyChord(e);
-    const command = SHORTCUTS[chord];
-    if (!command && !BLOCKED_KEYS.has(chord)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (command) runCommand(command);
-  },
-  { capture: true },
-);
+listenForShortcuts(SHORTCUTS, runCommand);
 
 // ---- startup ----
 
 function startInBrowser() {
-  restoreOutlineVisibility();
+  outline.restoreVisibility();
   loadIntoTab(active, { ...NEW_DOCUMENT, text: SAMPLE });
-  requestAnimationFrame(() => {
-    $('st-perf').textContent = `start ${Math.round(performance.now())} ms (browser)`;
-  });
+  requestAnimationFrame(() => statusBar.startup(performance.now(), true));
 }
 
 async function start() {
@@ -646,13 +570,13 @@ async function start() {
     api.startupState(),
   ]);
   performance.mark('ipc-ready');
-  restoreOutlineVisibility();
+  outline.restoreVisibility();
 
   // Paint first: the file was pre-read in Rust while WebView2 started.
   if (startup.file) loadIntoTab(active, startup.file);
   else showActiveTab();
   performance.mark('file-loaded');
-  measureColdStart((ms) => ($('st-perf').textContent = `start ${Math.round(ms)} ms`));
+  measureColdStart((ms) => statusBar.startup(ms));
 
   window.setInterval(snapshotDirtyTabs, SNAPSHOT_INTERVAL_MS);
   if (startup.fileError) await notifyError(startup.fileError);

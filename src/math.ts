@@ -1,5 +1,6 @@
 import type { MarkdownIt, StateBlock, StateInline, Token } from 'markdown-it';
 import type katexModule from 'katex';
+import { dataLineAttr, fenceLanguage } from './markdown-plugins';
 
 // Math in the preview (PRD F16), with GitHub's syntax: `$…$` inline, `$$…$$` blocks
 // and ```math fences. KaTeX renders to a string, so it runs here in the worker and
@@ -21,7 +22,12 @@ function containsMath(tokens: Token[]): boolean {
 }
 
 function isMathFence(token: Token): boolean {
-  return token.info.trim().split(/\s+/)[0].toLowerCase() === 'math';
+  return fenceLanguage(token) === 'math';
+}
+
+/** Display math for both `$$` blocks and "math" fences. */
+function mathBlockHtml(token: Token, escapeHtml: (s: string) => string): string {
+  return `<div class="math-block"${dataLineAttr(token)}>${renderTex(token.content, true, escapeHtml)}</div>\n`;
 }
 
 /** Rendered math, or the escaped source while KaTeX is still loading. */
@@ -42,19 +48,14 @@ export function mathPlugin(md: MarkdownIt) {
   md.block.ruler.before('fence', 'math_block', mathBlock, { alt: ['paragraph', 'reference', 'blockquote', 'list'] });
   md.inline.ruler.after('escape', 'math_inline', mathInline);
 
-  md.renderer.rules.math_block = (tokens, idx) => {
-    const token = tokens[idx];
-    const line = token.map ? ` data-line="${token.map[0]}"` : '';
-    return `<div class="math-block"${line}>${renderTex(token.content, true, md.utils.escapeHtml)}</div>\n`;
-  };
+  md.renderer.rules.math_block = (tokens, idx) => mathBlockHtml(tokens[idx], md.utils.escapeHtml);
   md.renderer.rules.math_inline = (tokens, idx) => renderTex(tokens[idx].content, false, md.utils.escapeHtml);
 }
 
 /** Renders a ```math fence like a $$ block; returns null for other fences. */
 export function renderMathFence(token: Token, escapeHtml: (s: string) => string): string | null {
   if (!isMathFence(token)) return null;
-  const line = token.map ? ` data-line="${token.map[0]}"` : '';
-  return `<div class="math-block"${line}>${renderTex(token.content, true, escapeHtml)}</div>\n`;
+  return mathBlockHtml(token, escapeHtml);
 }
 
 /** `$$` on its own line (or `$$ … $$` on one line) up to a closing `$$`. */

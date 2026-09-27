@@ -89,20 +89,54 @@ export function createOutline(el: HTMLElement, view: EditorView, onSelect: (line
   return {
     /** Call on cursor moves; cheap, and a no-op while hidden. */
     highlightCurrent() {
-      if (!el.hidden) highlightCurrent();
+      if (isVisible()) highlightCurrent();
     },
     /** Re-reads headings from the editor; a no-op while hidden, so a closed outline costs nothing. */
     refresh() {
-      if (el.hidden) return;
-      headings = extractHeadings(view.state);
-      render();
+      if (isVisible()) reload();
     },
-    setVisible(visible: boolean) {
-      el.hidden = !visible;
-      if (visible) this.refresh();
+    /** Shows or hides the outline and remembers the choice for the next launch. */
+    toggle() {
+      setVisible(!isVisible());
+      rememberVisibility(isVisible());
     },
-    get visible() {
-      return !el.hidden;
+    /** Applies the choice remembered from the last session (hidden by default). */
+    restoreVisibility() {
+      setVisible(rememberedVisibility());
     },
   };
+
+  function isVisible(): boolean {
+    return !el.hidden;
+  }
+
+  function setVisible(visible: boolean) {
+    el.hidden = !visible;
+    if (visible) reload();
+  }
+
+  function reload() {
+    headings = extractHeadings(view.state);
+    render();
+  }
+}
+
+// A per-install convenience, so browser storage is enough. It may be unavailable
+// (blocked or private storage); then the outline simply starts hidden.
+const VISIBILITY_KEY = 'marky.outline';
+
+function rememberVisibility(visible: boolean) {
+  try {
+    localStorage.setItem(VISIBILITY_KEY, visible ? '1' : '0');
+  } catch {
+    // Not remembered; nothing else depends on it.
+  }
+}
+
+function rememberedVisibility(): boolean {
+  try {
+    return localStorage.getItem(VISIBILITY_KEY) === '1';
+  } catch {
+    return false;
+  }
 }

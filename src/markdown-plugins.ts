@@ -1,5 +1,15 @@
 import type { MarkdownIt, StateBlock, StateCore, Token } from 'markdown-it';
 
+/** First word of a fence's info string, lower-cased (```ts title="x" → ts). */
+export function fenceLanguage(token: Token): string {
+  return token.info.trim().split(/\s+/)[0].toLowerCase();
+}
+
+/** ` data-line="N"` for a block token's source line (synced scroll, #anchor jumps), or ''. */
+export function dataLineAttr(token: Token): string {
+  return token.map ? ` data-line="${token.map[0]}"` : '';
+}
+
 /**
  * YAML frontmatter (`---` … `---` on the first lines), as used by SKILL.md, docs
  * sites and AI config files. Emitted as a `yaml` fence so it is highlighted like

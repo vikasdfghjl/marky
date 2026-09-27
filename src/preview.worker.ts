@@ -1,8 +1,9 @@
 import MarkdownIt, { type Token } from 'markdown-it';
 import taskLists from 'markdown-it-task-lists';
 import { highlightFence, prepareLanguages } from './code-highlight';
-import { frontmatter, githubAlerts, headingAnchors } from './markdown-plugins';
+import { dataLineAttr, fenceLanguage, frontmatter, githubAlerts, headingAnchors } from './markdown-plugins';
 import { mathPlugin, prepareMath, renderMathFence } from './math';
+import { URL_SCHEME, joinWindowsPath } from './paths';
 
 export interface RenderRequest {
   id: number;
@@ -26,16 +27,13 @@ type RenderEnv = {
 };
 
 // html: false renders raw HTML as text, so untrusted files cannot inject markup.
-const md = new MarkdownIt({
-  html: false,
-  linkify: true,
-  highlight: (code, language) => (language ? highlightFence(code, language) : ''),
-})
+const md = new MarkdownIt({ html: false, linkify: true })
   .use(taskLists, { enabled: false })
   .use(frontmatter)
   .use(githubAlerts)
   .use(headingAnchors)
   .use(mathPlugin);
+md.set({ highlight: (code, language) => (language ? highlightFence(code, language, md.utils.escapeHtml) : '') });
 
 // Tag block elements with their source line for synced scroll (F10) and #anchor jumps.
 md.core.ruler.push('source_lines', (state) => {
@@ -48,16 +46,15 @@ md.core.ruler.push('source_lines', (state) => {
 const renderDefaultFence = md.renderer.rules.fence!;
 md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
-  const line = token.map ? ` data-line="${token.map[0]}"` : '';
-  // Mermaid needs the DOM, so the main thread draws it (mermaid-blocks.ts) from this escaped source.
   const math = renderMathFence(token, md.utils.escapeHtml);
   if (math) return math;
+  // Mermaid needs the DOM, so the main thread draws it (mermaid-blocks.ts) from this escaped source.
   if (fenceLanguage(token) === 'mermaid') {
-    return `<div class="mermaid"${line}>${md.utils.escapeHtml(token.content)}</div>\n`;
+    return `<div class="mermaid"${dataLineAttr(token)}>${md.utils.escapeHtml(token.content)}</div>\n`;
   }
   const html = renderDefaultFence(tokens, idx, options, env, self);
   const frontmatterClass = token.attrGet('class') === 'frontmatter' ? ' class="frontmatter"' : '';
-  return html.replace(/^<pre/, `<pre${line}${frontmatterClass}`);
+  return html.replace(/^<pre/, `<pre${dataLineAttr(token)}${frontmatterClass}`);
 };
 
 // Relative image paths load from the document's folder via the asset protocol (F12).
@@ -76,8 +73,6 @@ function pointAtLocalAsset(token: Token, env: RenderEnv | undefined) {
   token.attrSet('src', env.assetBase + encodeURIComponent(localPath));
 }
 
-const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-
 function resolveLocalImage(src: string, env: RenderEnv): string | null {
   if (!env.documentFolder || !env.assetBase) return null;
   if (URL_SCHEME.test(src) || src.startsWith('/') || src.startsWith('\\') || src.startsWith('#')) return null;
@@ -89,27 +84,6 @@ function resolveLocalImage(src: string, env: RenderEnv): string | null {
     return null;
   }
   return joinWindowsPath(env.documentFolder, relative);
-}
-
-/** Joins and normalises `.`/`..` segments; never climbs above the drive or share root. */
-function joinWindowsPath(folder: string, relative: string): string {
-  const parts = folder.split(/[\\/]+/).filter(Boolean);
-  const rootLength = folder.startsWith('\\\\') ? 2 : 1; // \\server\share or C:
-  for (const segment of relative.split(/[\\/]+/)) {
-    if (segment === '' || segment === '.') continue;
-    if (segment === '..') {
-      if (parts.length > rootLength) parts.pop();
-      continue;
-    }
-    parts.push(segment);
-  }
-  const prefix = folder.startsWith('\\\\') ? '\\\\' : '';
-  return prefix + parts.join('\\');
-}
-
-/** First word of a fence's info string (```ts title="x" → ts), lower-cased. */
-function fenceLanguage(token: Token): string {
-  return token.info.trim().split(/\s+/)[0].toLowerCase();
 }
 
 /** Languages whose parsers the fences need; Mermaid is drawn, not highlighted. */

@@ -83,6 +83,6 @@ Pragmatic, readable code that balances SOLID and DRY without overengineering:
 
 - Guard clauses and early returns (`let … else { return }` in Rust) keep functions flat and reject invalid state first.
 - Names reveal domain intent (`remember_user_choice`, `renderAfterTypingPause`, `currentFile`).
-- Add an abstraction when a second caller needs it.
+- Add an abstraction when a second caller needs it, and reuse the ones that exist: `paths.ts` (`fileName`, `folderOf`, `URL_SCHEME`, `joinWindowsPath`), `fenceLanguage` and `dataLineAttr` in `markdown-plugins.ts`, `statusBar`, `showInEditor` for putting a tab into the view, `message_dialog` in `main.rs` for every native message box, and `scripts/lib.ps1` for process trees.
 - Comments explain *why*: a budget, a security reason, a platform quirk.
 - The frontend is vanilla TypeScript with no UI framework (PRD decision; SolidJS is the fallback if state grows).

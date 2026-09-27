@@ -1,3 +1,5 @@
+import { fileName } from './paths';
+
 /**
  * Keyboard-first recent-files list (F9, Ctrl+R). Resolves with the chosen path,
  * or null when dismissed with Esc or a click outside.
@@ -29,7 +31,7 @@ export function pickRecentFile(paths: string[]): Promise<string | null> {
     item.dataset.index = String(index);
     const name = document.createElement('span');
     name.className = 'picker-name';
-    name.textContent = path.split(/[\\/]/).pop() ?? path;
+    name.textContent = fileName(path);
     const folder = document.createElement('span');
     folder.className = 'picker-folder';
     folder.textContent = path;
