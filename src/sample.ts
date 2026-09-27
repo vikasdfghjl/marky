@@ -25,6 +25,15 @@ Fast Markdown for docs, READMEs and AI context files. Jump to [the code](#code-b
 | Cold start | 800 ms | 1,000 ms |
 | Idle RAM | 90 MB | 120 MB |
 
+## Architecture
+
+\`\`\`mermaid
+flowchart LR
+  Rust[Rust core] -- file text --> CM[CodeMirror]
+  CM -- debounced doc --> Worker[markdown-it worker]
+  Worker -- HTML --> Preview
+\`\`\`
+
 ## Code blocks
 
 \`\`\`rust

@@ -12,14 +12,14 @@ Latest run: 27 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a
 
 | Metric                            | Measured           | Target   | Hard limit | Status |
 | --------------------------------- | ------------------ | -------- | ---------- | ------ |
-| Installer (NSIS) | 1.75 MB | ≤ 6 MB | 10 MB | ✅ |
-| App exe | 4.49 MB | ≤ 8 MB | 12 MB | ✅ |
-| Cold start to editable | 938 ms (932–999) | ≤ 800 ms | 1,000 ms | ⚠️ |
+| Installer (NSIS) | 3.55 MB | ≤ 6 MB | 10 MB | ✅ |
+| App exe | 5.78 MB | ≤ 8 MB | 12 MB | ✅ |
+| Cold start to editable | 819 ms (777–1,041) | ≤ 800 ms | 1,000 ms | ⚠️ |
 | Preview update after typing stops | ~160 ms            | ≤ 200 ms | 400 ms     | ✅     |
-| Idle RAM (app + WebView2) | 109.6 MB | ≤ 90 MB | 120 MB | ⚠️ |
+| Idle RAM (app + WebView2) | 109.2 MB | ≤ 90 MB | 120 MB | ⚠️ |
 | Idle CPU                          | 0%                 | 0%       | < 0.5%     | ✅     |
 
-Cold start breaks down into about 620–650 ms for WebView2 to create its browser process (before any app code runs) and about 250–300 ms in the frontend, most of it one first-layout task. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (39 MB), the browser process (33 MB) and the GPU process (18 MB). The app's own JavaScript heap is about 12 MB. M3 tried pre-reading the startup file in Rust, V8 compile hints and seven WebView2 flag sets; none moved either number beyond noise. Code highlighting in the preview added about 6 MB when the open file has fenced code (parsers load in the preview worker on first use), and the link opener added about 0.5 MB to the exe.
+Cold start breaks down into about 620–650 ms for WebView2 to create its browser process (before any app code runs) and about 250–300 ms in the frontend, most of it one first-layout task. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (39 MB), the browser process (33 MB) and the GPU process (18 MB). The app's own JavaScript heap is about 12 MB. M3 tried pre-reading the startup file in Rust, V8 compile hints and seven WebView2 flag sets; none moved either number beyond noise. Code highlighting in the preview added about 6 MB when the open file has fenced code (parsers load in the preview worker on first use). Mermaid added 1.8 MB to the installer and 1.3 MB to the exe, since its assets are embedded in it, but nothing at startup: it loads only when a document contains a diagram.
 To reproduce:
 
 ```bash
@@ -47,6 +47,8 @@ Working now:
 - Code blocks highlighted in the preview with the same parsers and colours as the editor (100+ languages, loaded on first use)
 - YAML frontmatter highlighted in both panes (SKILL.md, docs sites, AI config files)
 - GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) rendered as callouts
+- Mermaid diagrams (`` ```mermaid `` fences), drawn with `securityLevel: 'strict'`, following the light/dark theme; loaded only when a document has one, and syntax errors show inline
+- Outline sidebar (Ctrl+Shift+O): headings from the Markdown syntax tree, highlighting the section under the cursor; click to jump
 - Links: `#heading` links jump within the document (GitHub-style heading ids), relative `.md` links open in a new tab, and web links open in your browser
 - Local images in the preview: relative paths resolve against the file's folder; remote images are blocked
 - Raw HTML in Markdown is shown as text, never executed
@@ -79,6 +81,7 @@ Not yet built: optional auto-save (F13, waits for a settings surface) and taskba
 | Ctrl+W          | Close tab (the last tab closes the window)          |
 | Ctrl+Tab        | Next tab (Ctrl+Shift+Tab: previous)                 |
 | Ctrl+Shift+V    | Toggle preview                                      |
+| Ctrl+Shift+O    | Toggle outline sidebar                              |
 | Ctrl+F          | Find                                                |
 | Ctrl+H          | Find and replace                                    |
 | Ctrl+Z / Ctrl+Y | Undo / redo                                         |
@@ -161,6 +164,8 @@ src/
   preview.worker.ts     markdown-it rendering and local-image resolution off the main thread
   markdown-plugins.ts   Frontmatter, GitHub alerts, heading anchors
   code-highlight.ts     Lezer-based code highlighting for preview fences
+  mermaid-blocks.ts     Lazy Mermaid rendering with an SVG cache
+  outline.ts            Outline sidebar from the syntax tree
   scroll-sync.ts        Editor-to-preview synced scroll via source-line markers
   recent-picker.ts      Ctrl+R recent-files list
   tab-strip.ts          Tab strip rendering (tablist semantics)

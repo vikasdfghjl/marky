@@ -44,7 +44,7 @@ export function syncPreviewToEditor(view: EditorView, preview: HTMLElement): () 
 }
 
 /** Fractional 0-based source line at the top of the editor viewport. */
-function sourceLineAtTop(view: EditorView): number {
+export function sourceLineAtTop(view: EditorView): number {
   // lineBlockAtHeight is relative to documentTop (screen coordinates of the first line).
   const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop;
   const block = view.lineBlockAtHeight(Math.max(0, height));

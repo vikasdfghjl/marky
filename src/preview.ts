@@ -1,5 +1,6 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { isTauri } from './ipc';
+import { drawMermaidBlocks, onMermaidThemeChange } from './mermaid-blocks';
 import type { RenderRequest, RenderResult } from './preview.worker';
 
 export interface Preview {
@@ -24,12 +25,18 @@ export function createPreview(
   let seq = 0;
   let visible = true;
   let documentFolder: string | null = null;
+  let lastText = '';
 
-  worker.onmessage = (e: MessageEvent<RenderResult>) => {
-    if (e.data.id !== seq) return; // stale result, a newer render is in flight
+  worker.onmessage = async (e: MessageEvent<RenderResult>) => {
+    const { id } = e.data;
+    if (id !== seq) return; // stale result, a newer render is in flight
     el.innerHTML = e.data.html;
+    await drawMermaidBlocks(el, () => id === seq);
+    if (id !== seq) return;
     requestAnimationFrame(() => onRendered(e.data.ms));
   };
+
+  onMermaidThemeChange(() => render(lastText));
 
   el.addEventListener('click', (e) => {
     const link = (e.target as Element).closest('a');
@@ -39,11 +46,14 @@ export function createPreview(
     if (href) onLinkClick(href);
   });
 
+  function render(text: string) {
+    lastText = text;
+    if (!visible) return;
+    worker.postMessage({ id: ++seq, text, documentFolder, assetBase } satisfies RenderRequest);
+  }
+
   return {
-    render(text) {
-      if (!visible) return;
-      worker.postMessage({ id: ++seq, text, documentFolder, assetBase } satisfies RenderRequest);
-    },
+    render,
     setVisible(v) {
       visible = v;
       el.hidden = !v;

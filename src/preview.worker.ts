@@ -46,8 +46,12 @@ md.core.ruler.push('source_lines', (state) => {
 const renderDefaultFence = md.renderer.rules.fence!;
 md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
-  const html = renderDefaultFence(tokens, idx, options, env, self);
   const line = token.map ? ` data-line="${token.map[0]}"` : '';
+  // Mermaid needs the DOM, so the main thread draws it (mermaid-blocks.ts) from this escaped source.
+  if (fenceLanguage(token) === 'mermaid') {
+    return `<div class="mermaid"${line}>${md.utils.escapeHtml(token.content)}</div>\n`;
+  }
+  const html = renderDefaultFence(tokens, idx, options, env, self);
   const frontmatterClass = token.attrGet('class') === 'frontmatter' ? ' class="frontmatter"' : '';
   return html.replace(/^<pre/, `<pre${line}${frontmatterClass}`);
 };
@@ -99,12 +103,17 @@ function joinWindowsPath(folder: string, relative: string): string {
   return prefix + parts.join('\\');
 }
 
-/** First word of each fence's info string (```ts title="x" → ts). */
+/** First word of a fence's info string (```ts title="x" → ts), lower-cased. */
+function fenceLanguage(token: Token): string {
+  return token.info.trim().split(/\s+/)[0].toLowerCase();
+}
+
+/** Languages whose parsers the fences need; Mermaid is drawn, not highlighted. */
 function fenceLanguages(tokens: Token[]): Set<string> {
   const names = new Set<string>();
   for (const token of tokens) {
-    const name = token.type === 'fence' ? token.info.trim().split(/\s+/)[0] : '';
-    if (name) names.add(name);
+    const name = token.type === 'fence' ? fenceLanguage(token) : '';
+    if (name && name !== 'mermaid') names.add(name);
   }
   return names;
 }

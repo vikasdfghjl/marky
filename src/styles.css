@@ -134,6 +134,76 @@ body {
   flex: 1;
 }
 
+/* ---- outline sidebar ---- */
+
+#outline {
+  flex: 0 0 220px;
+  overflow: auto;
+  padding: 8px 4px;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 13px;
+}
+
+#outline[hidden] {
+  display: none;
+}
+
+#outline ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#outline button {
+  display: block;
+  width: 100%;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 8px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+#outline button:hover {
+  background: var(--active-line);
+  color: var(--fg);
+}
+
+#outline button[aria-current] {
+  color: var(--fg);
+  box-shadow: inset 2px 0 0 var(--link);
+}
+
+.outline-empty {
+  margin: 8px;
+  color: var(--muted);
+}
+
+/* ---- mermaid ---- */
+
+.markdown-body .mermaid {
+  margin: 0 0 1em;
+  text-align: center;
+}
+
+.markdown-body .mermaid-error {
+  padding: 8px 12px;
+  border-left: 4px solid var(--alert-caution);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
 /* ---- tabs ---- */
 
 #tabs {

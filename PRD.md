@@ -245,6 +245,8 @@ MVP in 3 weeks and v1.0 in 7 weeks, assuming one developer part-time (\~20 h/wee
 
 **F14 status (27 Sep 2026):** tabs shipped early with a native menu bar and multi-file drag and drop. Measured memory growth is 2.5 MB per extra 100 KB tab (budget 3 MB).
 
+**F16/F17 status (27 Sep 2026):** Mermaid (lazy, strict security, cached) and the outline sidebar shipped; KaTeX is still to do. Installer is 3.55 MB with Mermaid.
+
 ## Risks and open questions
 
 The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike exists to measure it before any feature work.

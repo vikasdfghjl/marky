@@ -17,7 +17,8 @@ Marky is a Windows Markdown editor: Tauri 2 (Rust) + WebView2 + CodeMirror 6 + m
 - **One command table.** Menu items (`menu.rs`) and keyboard shortcuts (`SHORTCUTS`) both dispatch through `commands` in `main.ts`. Menu labels show shortcut hints (`\tCtrl+S`) but register no native accelerators, so each key is handled once, in the frontend.
 - **Preview Markdown extensions live in `markdown-plugins.ts`** (frontmatter, GitHub alerts, heading anchors) and must keep `data-line` source maps, because synced scroll and `#anchor` jumps depend on them. Code highlighting (`code-highlight.ts`) reuses the editor's Lezer parsers and `tok-*` classes mapped to the `--hl-*` tokens, so both panes always agree on colours.
 - **Links never navigate the webview.** Preview clicks go to `followLink`: http(s) and mailto open through the Rust `open_external` (no opener plugin or JS permission); relative links go through `resolve_link`, which only follows .md/.markdown/.txt targets from user-chosen files.
-- **Lazy by default.** Language packs, and later KaTeX and Mermaid, load through dynamic `import()`. The initial JS (entry chunk plus its modulepreloads) stays ≤ 250 KB gzipped. The preview worker stays a separate emitted file because the CSP allows `worker-src 'self'` only.
+- **Mermaid draws on the main thread** (it needs the DOM) from placeholders the worker emits, with `securityLevel: 'strict'` and an SVG cache keyed by source and theme. The outline reads headings from the editor's syntax tree and does no work while hidden.
+- **Lazy by default.** Language packs and Mermaid (and later KaTeX) load through dynamic `import()`. The initial JS (entry chunk plus its modulepreloads) stays ≤ 250 KB gzipped. The preview worker stays a separate emitted file because the CSP allows `worker-src 'self'` only.
 
 ## Performance budgets
 
@@ -26,6 +27,8 @@ Budgets are release-blocking. Measure on a release build (`npx tauri build --no-
 The README's **Benchmarks** section is the single record of current numbers. After any benchmark run, update that table, its date and the breakdown sentence in the same change.
 
 Known cost structure: about 610 ms of cold start is WebView2 creating its browser process before `setup` runs, and flags don't move it. Optimise the frontend part: bundle size, first layout, IPC round trips. The WebView2 flags in `tauri.conf.json` (`additionalBrowserArgs`) replace Tauri's defaults, so keep the `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` prefix. Keep the GPU enabled; it protects typing and scroll latency.
+
+Known bundle quirk: Rolldown places its module helpers in a shared d3 chunk (from Mermaid), so the entry preloads about 16 KB gzipped of d3. The initial JS is 225 KB, within budget. Chunk groups can't move the helpers, because they aren't modules; don't retry that.
 
 Tried in M3 with no effect beyond noise, so don't repeat them without new evidence: V8 explicit compile hints on the startup chunks; pre-reading the startup file (kept for simpler startup, not speed); WebView2 flags `--in-process-gpu`, `--js-flags=--lite-mode`, `--disable-crash-reporter`, `--renderer-process-limit=1`. Idle RAM is about 90% WebView2 (renderer 39 MB, browser 33 MB, GPU 18 MB); the app's JS heap is about 12 MB. The remaining startup cost is one 60–120 ms first-layout task after `showDocument`. Warm, the same load costs about 15 ms of JS.
 
@@ -61,7 +64,7 @@ The beta ships **unsigned** (PRD decision). Release builds use plain `npx tauri 
 
 ## Dependencies and licensing
 
-Marky is MIT. After adding, removing or upgrading any npm or Cargo dependency, run `node scripts/third-party-notices.mjs` and commit the regenerated `THIRD_PARTY_NOTICES.txt`; CI fails if it is stale. The file ships in the installer (`bundle.resources`) and the portable ZIP. Prefer MIT, Apache-2.0, BSD, ISC or Zlib dependencies. Flag anything copyleft (GPL, LGPL, AGPL) before adding it, and keep MPL-2.0 to unmodified crates.
+Marky is MIT. After adding, removing or upgrading any npm or Cargo dependency, run `node scripts/third-party-notices.mjs` and commit the regenerated `THIRD_PARTY_NOTICES.txt`; CI fails if it is stale. The file ships in the installer (`bundle.resources`) and the portable ZIP. Prefer MIT, Apache-2.0, BSD, ISC or Zlib dependencies. `package.json` overrides `lodash-es` to ^4.18.1 to clear advisories in Mermaid's `chevrotain` pin; drop the override once Mermaid no longer needs it. Flag anything copyleft (GPL, LGPL, AGPL) before adding it, and keep MPL-2.0 to unmodified crates.
 
 ## Environment gotchas
 

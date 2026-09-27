@@ -6,6 +6,7 @@ import { createPreview } from './preview';
 import { syncPreviewToEditor } from './scroll-sync';
 import { pickRecentFile } from './recent-picker';
 import { createTabStrip } from './tab-strip';
+import { createOutline } from './outline';
 import { api, isTauri, type FileMeta, type OpenedFile, type Snapshot } from './ipc';
 import { SAMPLE } from './sample';
 
@@ -68,6 +69,7 @@ const editor = createEditor($('editor'), onEditorUpdate);
 performance.mark('editor-ready');
 const preview = createPreview($('preview'), onPreviewRendered, (href) => void followLink(href));
 const syncPreviewScroll = syncPreviewToEditor(editor.view, $('preview'));
+const outline = createOutline($('outline'), editor.view, (line) => editor.goToLine(line));
 const tabStrip = createTabStrip($('tabs'), {
   onActivate: (id) => activate(tabById(id)),
   onClose: (id) => void closeTab(tabById(id)),
@@ -174,7 +176,10 @@ function renderTabs() {
 // ---- editor events ----
 
 function onEditorUpdate(update: ViewUpdate) {
-  if (update.selectionSet || update.docChanged) updateCursorPosition();
+  if (update.selectionSet || update.docChanged) {
+    updateCursorPosition();
+    outline.highlightCurrent();
+  }
   if (!update.docChanged) return;
 
   lastEditAt = performance.now();
@@ -205,6 +210,7 @@ function renderAfterTypingPause() {
   const text = editor.text();
   preview.render(text);
   updateWordCount(text);
+  outline.refresh();
 }
 
 function onPreviewRendered(parseMs: number) {
@@ -263,6 +269,7 @@ function refreshAllViews() {
   const text = editor.text();
   preview.render(text);
   updateWordCount(text);
+  outline.refresh();
   updateCursorPosition();
   updateFileFormatStatus();
   updateTitle();
@@ -273,6 +280,26 @@ function applyPreviewVisibility() {
   if (visible === preview.visible) return;
   preview.setVisible(visible);
   if (visible) preview.render(editor.text());
+}
+
+const OUTLINE_KEY = 'marky.outline';
+
+/** A per-install convenience, so browser storage is enough; it may be unavailable, which is fine. */
+function toggleOutline() {
+  outline.setVisible(!outline.visible);
+  try {
+    localStorage.setItem(OUTLINE_KEY, outline.visible ? '1' : '0');
+  } catch {
+    // Private mode or blocked storage: the choice just is not remembered.
+  }
+}
+
+function restoreOutlineVisibility() {
+  try {
+    outline.setVisible(localStorage.getItem(OUTLINE_KEY) === '1');
+  } catch {
+    // Stays hidden.
+  }
 }
 
 function togglePreview() {
@@ -548,6 +575,7 @@ const commands = {
   find: editor.openFind,
   replace: editor.openReplace,
   'toggle-preview': togglePreview,
+  'toggle-outline': toggleOutline,
   'next-tab': () => activateNeighbour(1),
   'previous-tab': () => activateNeighbour(-1),
 } satisfies Record<string, () => unknown>;
@@ -569,6 +597,7 @@ const SHORTCUTS: Record<string, CommandId> = {
   'Ctrl+W': 'close',
   'Ctrl+H': 'replace',
   'Ctrl+Shift+V': 'toggle-preview',
+  'Ctrl+Shift+O': 'toggle-outline',
   'Ctrl+Tab': 'next-tab',
   'Ctrl+Shift+Tab': 'previous-tab',
 };
@@ -598,6 +627,7 @@ window.addEventListener(
 // ---- startup ----
 
 function startInBrowser() {
+  restoreOutlineVisibility();
   loadIntoTab(active, { ...NEW_DOCUMENT, text: SAMPLE });
   requestAnimationFrame(() => {
     $('st-perf').textContent = `start ${Math.round(performance.now())} ms (browser)`;
@@ -616,6 +646,7 @@ async function start() {
     api.startupState(),
   ]);
   performance.mark('ipc-ready');
+  restoreOutlineVisibility();
 
   // Paint first: the file was pre-read in Rust while WebView2 started.
   if (startup.file) loadIntoTab(active, startup.file);

@@ -31,6 +31,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .build()?;
     let view = SubmenuBuilder::new(app, "&View")
         .text("toggle-preview", "Toggle &Preview\tCtrl+Shift+V")
+        .text("toggle-outline", "Toggle &Outline\tCtrl+Shift+O")
         .separator()
         .text("next-tab", "Ne&xt Tab\tCtrl+Tab")
         .text("previous-tab", "Pre&vious Tab\tCtrl+Shift+Tab")

@@ -176,6 +176,27 @@ await sleep(1500);
 check('relative .md link opens in a new tab', (await activeTab()) === 'second.md', JSON.stringify(await tabTitles()));
 await pressCtrl('w', 'KeyW', 87);
 await sleep(300);
+// Mermaid loads lazily, draws under the app's CSP, and reports bad syntax inline.
+await evaluate(`document.querySelector('.cm-content').focus()`);
+await pressKey('End', 'End', 35, 2); // Ctrl+End
+await send('Input.insertText', {
+  text: '\n\n```mermaid\nflowchart LR\n  A[Editor] --> B[Preview]\n```\n\n```mermaid\nflowchart LR\n  A[ --> \n```\n',
+});
+await sleep(4000);
+check('mermaid diagram drawn as SVG', await evaluate(`!!document.querySelector('#preview .mermaid[data-drawn="svg"] svg')`));
+check('mermaid syntax error shown inline', await evaluate(`!!document.querySelector('#preview .mermaid-error')`));
+
+// Outline sidebar (F17): headings from the syntax tree, click to jump.
+await emitMenu('toggle-outline');
+await sleep(300);
+const outlineItems = await evaluate(`[...document.querySelectorAll('#outline button')].map((b) => b.textContent)`);
+check('outline lists the document headings', outlineItems.includes('Docs Section'), JSON.stringify(outlineItems));
+await evaluate(`[...document.querySelectorAll('#outline button')].find((b) => b.textContent === 'Docs Section').click()`);
+await sleep(300);
+check('outline click moves the editor to the heading', (await evaluate(`document.getElementById('st-pos').textContent`)).startsWith('Ln ') &&
+  (await evaluate(`document.querySelector('#outline [aria-current]')?.textContent`)) === 'Docs Section');
+await emitMenu('toggle-outline'); // leave it hidden: visibility persists across launches
+
 const outside = await invoke('resolve_link', { from: fixture, target: '../../../Windows/win.ini' });
 check('links to non-Markdown files are refused', !!outside.err, outside.err ?? 'FOLLOWED');
 const script = await invoke('open_external', { url: 'javascript:alert(1)' });

@@ -47,3 +47,6 @@ dist-winget/
 # Release assets built locally (scripts/package-portable.ps1)
 marky-*-portable-x64.zip
 SHA256SUMS.txt
+
+# Serena code-assistant cache
+.serena/
