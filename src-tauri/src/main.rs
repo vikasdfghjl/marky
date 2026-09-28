@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod files;
+mod memory;
 mod menu;
 mod store;
 mod watcher;
@@ -421,6 +422,7 @@ fn on_window_event(window: &Window, event: &WindowEvent) {
             api.prevent_close();
             let _ = window.emit_to("main", "close-requested", ());
         }
+        WindowEvent::Resized(_) => memory::follow_minimized(window),
         _ => {}
     }
 }

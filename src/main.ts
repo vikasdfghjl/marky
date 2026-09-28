@@ -80,7 +80,11 @@ const tabStrip = createTabStrip($('tabs'), {
   onClose: (id) => void closeTab(tabById(id)),
 });
 
-const settings = createSettingsStore((current) => void api.saveSettings(current));
+/** Settings saves run one at a time: async commands can finish out of order and share a temp file. */
+let settingsSaving: Promise<unknown> = Promise.resolve();
+const settings = createSettingsStore((current) => {
+  settingsSaving = settingsSaving.then(() => api.saveSettings(current)).catch(() => {});
+});
 settings.onChange(applySettings);
 const settingsPanel = createSettingsPanel($('settings-button') as HTMLButtonElement, settings);
 $('new-tab-button').addEventListener('click', () => runCommand('new'));

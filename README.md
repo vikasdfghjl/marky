@@ -8,18 +8,18 @@ Marky opens a `.md` file, lets you edit it with syntax highlighting and a live s
 
 ## Benchmarks
 
-Latest run: 27 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with README.md open. Each figure is the median of 5 runs.
+Latest run: 28 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with README.md open. Each figure is the median of 7 runs.
 
 | Metric                            | Measured           | Target   | Hard limit | Status |
 | --------------------------------- | ------------------ | -------- | ---------- | ------ |
 | Installer (NSIS)                  | 4.46 MB            | ≤ 6 MB   | 10 MB      | ✅     |
-| App exe                           | 6.67 MB            | ≤ 8 MB   | 12 MB      | ✅     |
-| Cold start to editable            | 829 ms (803–1,053) | ≤ 800 ms | 1,000 ms   | ⚠️     |
+| App exe                           | 6.70 MB            | ≤ 8 MB   | 12 MB      | ✅     |
+| Cold start to editable            | 816 ms (785–962)   | ≤ 800 ms | 1,000 ms   | ⚠️     |
 | Preview update after typing stops | ~160 ms            | ≤ 200 ms | 400 ms     | ✅     |
-| Idle RAM (app + WebView2)         | 113.0 MB           | ≤ 90 MB  | 120 MB     | ⚠️     |
+| Idle RAM (app + WebView2)         | 104.3 MB           | ≤ 105 MB | 120 MB     | ✅     |
 | Idle CPU                          | 0%                 | 0%       | < 0.5%     | ✅     |
 
-Cold start breaks down into about 620–650 ms for WebView2 to create its browser process (before any app code runs) and about 250–300 ms in the frontend, most of it one first-layout task. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (39 MB), the browser process (33 MB) and the GPU process (18 MB). The app's own JavaScript heap is about 12 MB. M3 tried pre-reading the startup file in Rust, V8 compile hints and seven WebView2 flag sets; none moved either number beyond noise. Code highlighting in the preview added about 6 MB when the open file has fenced code (parsers load in the preview worker on first use). Mermaid added 1.8 MB to the installer and 1.3 MB to the exe, since its assets are embedded in it, but nothing at startup: it loads only when a document contains a diagram. KaTeX added 0.9 MB to the installer and nothing at startup; it ships twice (about 250 KB each, both lazy), once in the preview worker and once inside Mermaid for diagram labels, because the worker and the page are separate bundles. Idle RAM is within noise of the previous run (one outlier at 132 MB) but is now close to the 120 MB limit.
+Cold start breaks down into about 520–550 ms for WebView2 to create its browser process (before any app code runs) and about 270 ms in the frontend: 90 ms to load and compile the startup JavaScript, then one ~80 ms task that lays out the opened file. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (44 MB), the browser process (33 MB) and the GPU process (18 MB); Marky's own process is 4 MB. Minimised, Marky asks WebView2 to trim memory and drops to about 70 MB. The 28 Sep performance pass cut cold start from 924 to 816 ms and idle RAM from 110 to 104 MB: the network service now runs inside the browser process (one process fewer to start, 5 MB less), and Markdown no longer pulls the JavaScript and CSS parsers into the startup bundle (initial JS 229 → 175 KB gzipped). Mermaid and KaTeX load only when a document uses them, and code-block parsers load in the preview worker on first use.
 To reproduce:
 
 ```bash
@@ -166,6 +166,7 @@ index.html              App shell: editor pane, preview pane, status bar
 src/
   main.ts               App wiring: documents, save/open, external changes, recovery, shortcuts
   editor.ts             CodeMirror 6 setup and highlight theme
+  markdown-html.ts      Slim HTML language for inline tags in Markdown (keeps JS/CSS parsers out of startup)
   preview.ts            Preview pane; sends text to the worker, swaps in HTML
   preview.worker.ts     markdown-it rendering and local-image resolution off the main thread
   markdown-plugins.ts   Frontmatter, GitHub alerts, heading anchors
@@ -192,6 +193,7 @@ src-tauri/
   src/watcher.rs        External change detection (watches the file's folder)
   src/store.rs          Recent-files list and crash-recovery snapshots (JSON in app folders)
   src/menu.rs           Native menu bar
+  src/memory.rs         Asks WebView2 to trim memory while the window is minimised
   tauri.conf.json       Window, CSP, asset protocol, bundle and file-association config
   capabilities/         Webview permissions (least privilege)
 scripts/

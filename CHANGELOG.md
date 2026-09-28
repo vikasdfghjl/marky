@@ -4,6 +4,15 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Changed
+
+- Faster startup: a cold start now takes about 816 ms instead of 924 ms on the test laptop. The startup code is 23% smaller, and WebView2 starts one process fewer.
+- Lower memory use: about 104 MB idle instead of 110 MB, and about 70 MB while Marky is minimised.
+
+### Fixed
+
+- Changing two settings in quick succession could save the older value.
+
 ## [0.2.4] - 2026-09-28
 
 ### Added

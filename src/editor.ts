@@ -97,7 +97,8 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     highlightSelectionMatches(),
     search({ top: true }),
     // YAML frontmatter (SKILL.md, docs sites, AI config files) is highlighted as YAML.
-    yamlFrontmatter({ content: markdown({ base: markdownLanguage, codeLanguages: languages }) }),
+    // No tag completion: the editor has no autocompletion UI, and markdown-html.ts stubs it out.
+    yamlFrontmatter({ content: markdown({ base: markdownLanguage, codeLanguages: languages, completeHTMLTags: false }) }),
     syntaxHighlighting(highlight),
     wrap.of(wrapExtension()),
     EditorView.contentAttributes.of({ spellcheck: 'false', 'aria-label': 'Markdown source' }),
@@ -120,6 +121,8 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     view.setState(state);
     // A background tab may predate the last word-wrap change.
     if (wrap.get(state) !== wrapExtension()) view.dispatch({ effects: wrap.reconfigure(wrapExtension()) });
+    // Focusing here forces the layout synchronously. Keep it: deferring it to the next frame
+    // lets the preview's HTML land before the first paint and delays it by ~100 ms (measured).
     view.focus();
     // Wait for the new document's layout before scrolling.
     if (scrollTop) requestAnimationFrame(() => (view.scrollDOM.scrollTop = scrollTop));

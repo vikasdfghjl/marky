@@ -4,7 +4,7 @@ Sep 26, 2026 · @Vikas Singh
 
 ## Overview
 
-Build a Windows-native Markdown editor that opens in under 500 ms, ships as a sub-10 MB installer and idles under 120 MB total RAM, using Tauri 2 and CodeMirror 6.
+Build a Windows-native Markdown editor that opens in under 800 ms, ships as a sub-10 MB installer and idles under 105 MB total RAM, using Tauri 2 and CodeMirror 6.
 
 **Problem.** Popular Markdown editors on Windows are either Electron apps (150–300 MB RAM, 80–150 MB installers) or bare text editors with no live preview. Opening a single README should not cost the memory of a browser.
 
@@ -39,7 +39,7 @@ v1.0 succeeds when every performance budget below holds on a mid-range Windows 1
 | Open 1 MB file | ≤ 150 ms | 300 ms | Rust read + editor state init |
 | Typing latency (keypress to paint) | ≤ 16 ms | 33 ms | Chrome DevTools performance trace in WebView2 |
 | Preview update after typing stops | ≤ 200 ms | 400 ms | Debounced render timer |
-| Idle RAM, one 100 KB file | ≤ 90 MB | 120 MB | Task Manager, app + WebView2 child processes |
+| Idle RAM, one 100 KB file | ≤ 105 MB | 120 MB | Task Manager, app + WebView2 child processes |
 | Idle CPU | 0% | < 0.5% | Task Manager over 60 s |
 
 RAM is measured across all WebView2 helper processes, not just the main process, so the number stays honest against Electron comparisons.
@@ -270,7 +270,7 @@ The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike
 - [ ] Should raw HTML in Markdown render (sanitized) by default, or stay off?
 - [x] Open source under the MIT license (decided 27 Sep 2026).
 - [ ] Is an ARM64 Windows build needed for v1.0?
-- [ ] Idle RAM target: WebView2's own baseline is about 95–100 MB on the test laptop. Revise the target to ≤ 105 MB (hard limit 120 MB unchanged), or keep 90 MB as aspirational?
+- [x] Idle RAM target revised from ≤ 90 MB to ≤ 105 MB, hard limit 120 MB unchanged (decided 28 Sep 2026). WebView2's own processes use about 95 MB on the test laptop, so 90 MB was out of reach for any WebView2 app.
 - [x] Cold-start budget revised to ≤ 800 ms target / 1,000 ms hard limit after M0 measured a ~610 ms WebView2 floor.
 
 ## Sources
