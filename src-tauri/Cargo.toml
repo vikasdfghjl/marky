@@ -1,6 +1,6 @@
 [package]
 name = "marky"
-version = "0.2.2"
+version = "0.2.3"
 description = "A fast Markdown editor for Windows"
 license = "MIT"
 edition = "2021"
