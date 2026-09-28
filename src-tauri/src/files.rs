@@ -122,7 +122,7 @@ fn replace(target: &Path, tmp: &Path) -> io::Result<()> {
     fs::rename(tmp, target)
 }
 
-fn mtime_ms(path: &Path) -> io::Result<u64> {
+pub fn mtime_ms(path: &Path) -> io::Result<u64> {
     let modified = fs::metadata(path)?.modified()?;
     Ok(modified.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0))
 }

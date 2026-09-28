@@ -93,7 +93,7 @@ Performance budgets are release-blocking; the rest are v1.0 quality gates.
 - **Large-file preview:** Markdown parsing runs in a Web Worker so the UI thread never parses more than the visible diff.
 - **Security:** strict CSP, sanitized preview, least-privilege Tauri capabilities (see Security model). No telemetry by default.
 - **Accessibility:** WCAG 2.2 AA contrast in both themes; full keyboard navigation; CodeMirror screen-reader support verified with NVDA and Windows Narrator.
-- **Input:** IME composition works for Hindi, Chinese, Japanese and Korean input methods without dropped characters.
+- **Input:** IME composition (e.g. Chinese, Japanese, Korean input methods) works without dropped characters.
 - **Reliability:** atomic saves; crash-recovery snapshots; zero data loss on forced termination during save.
 - **Offline:** 100% offline; no network calls except the opt-in update check.
 - **Localization-ready:** all UI strings in one JSON catalogue; English only in v1.
@@ -239,6 +239,16 @@ MVP in 3 weeks and v1.0 in 7 weeks, assuming one developer part-time (\~20 h/wee
 | M3 v1.0 | 6–7 | Signing, winget, accessibility and IME pass, docs | All budgets met at target (not hard limit); signed installer published |
 | M4 v1.x | 8+ | P2: tabs, export, Mermaid/KaTeX, outline, auto-update | Per-feature, without breaching budgets |
 
+**M2 status (27 Sep 2026):** F8, F10, F11, F12, F13 crash recovery, and F9's recent list (Ctrl+R) are done; CI, size budgets and the portable ZIP are in `.github/workflows/ci.yml`. Deferred: F9 taskbar jump-list entries (need Win32 code outside Tauri's API). Synced scroll is one-way (editor drives preview).
+
+**M3 status (27 Sep 2026):** WCAG AA contrast is verified by script in both themes; keyboard and screen-reader fixes are in (focusable preview, no live-region spam, listbox semantics); IME composition is covered by the end-to-end test. Signing is wired route-agnostically (`scripts/build-signed.ps1`, CI secret `MARKY_SIGN_COMMAND`) and the winget manifest generator is validated; both wait on the signing decision and a first public release. The exit gate 'all budgets at target' is not met: cold start is about 940 ms (target 800) and idle RAM about 103 MB (target 90). Both are dominated by WebView2 itself; see the README Benchmarks section and AGENTS.md for what was tried. Manual NVDA and Narrator passes are still to do.
+
+**F14 status (27 Sep 2026):** tabs shipped early with a native menu bar and multi-file drag and drop. Measured memory growth is 2.5 MB per extra 100 KB tab (budget 3 MB).
+
+**F16/F17 status (27 Sep 2026):** Mermaid (lazy, strict security, cached), KaTeX math (worker-rendered, lazy CSS and fonts) and the outline sidebar shipped. The installer is 4.46 MB with both.
+
+**Settings (28 Sep 2026):** a settings panel (gear, Ctrl+,) covers theme, font size, word wrap, auto-save (completing F13, off by default), the line ending for new files, and preview and outline visibility.
+
 ## Risks and open questions
 
 The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike exists to measure it before any feature work.
@@ -255,11 +265,12 @@ The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike
 
 **Open questions**
 
-- [ ] Which code-signing route: OV cert with cloud HSM, Microsoft Store, or unsigned beta first?
+- [x] Code signing: unsigned beta first (decided 27 Sep 2026). SmartScreen warnings are accepted for the beta; the signing hook stays wired so a certificate can be added before v1.0 without code changes.
 - [ ] Support non-UTF-8 encodings (UTF-16, Windows-1252) in v1, or read-only warning only?
 - [ ] Should raw HTML in Markdown render (sanitized) by default, or stay off?
-- [ ] Free and open source, or paid/freemium? This affects the Store route and update infrastructure.
+- [x] Open source under the MIT license (decided 27 Sep 2026).
 - [ ] Is an ARM64 Windows build needed for v1.0?
+- [ ] Idle RAM target: WebView2's own baseline is about 95–100 MB on the test laptop. Revise the target to ≤ 105 MB (hard limit 120 MB unchanged), or keep 90 MB as aspirational?
 - [x] Cold-start budget revised to ≤ 800 ms target / 1,000 ms hard limit after M0 measured a ~610 ms WebView2 floor.
 
 ## Sources

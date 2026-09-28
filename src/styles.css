@@ -1,59 +1,47 @@
+/* Every colour token is a light-dark() pair: the root's color-scheme picks the half.
+   "light dark" follows Windows; the theme setting forces one via data-theme (theme.ts). */
 :root {
   color-scheme: light dark;
   --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, monospace;
 
-  --bg: #ffffff;
-  --fg: #1f2328;
-  --muted: #59636e;
-  --border: #d1d9e0;
-  --panel: #f6f8fa;
-  --selection: #b6d6fd;
-  --active-line: #f6f8fa;
-  --match: #fff1a8;
-  --code-bg: #f3f4f6;
-  --link: #0969da;
+  --bg: light-dark(#ffffff, #1e1f22);
+  --fg: light-dark(#1f2328, #e6e6e6);
+  --muted: light-dark(#59636e, #9da5b0);
+  --border: light-dark(#d1d9e0, #3a3d44);
+  --panel: light-dark(#f6f8fa, #26282c);
+  --selection: light-dark(#b6d6fd, #264f78);
+  --active-line: light-dark(#f6f8fa, #25272b);
+  --match: light-dark(#fff1a8, #4b4521);
+  --code-bg: light-dark(#f3f4f6, #2b2d31);
+  --link: light-dark(#0969da, #58a6ff);
 
-  --hl-heading: #0550ae;
-  --hl-link: #0969da;
-  --hl-code: #953800;
-  --hl-quote: #59636e;
-  --hl-muted: #6e7781;
-  --hl-keyword: #cf222e;
-  --hl-string: #0a3069;
-  --hl-number: #0550ae;
-  --hl-comment: #59636e;
-  --hl-fn: #8250df;
-  --hl-type: #953800;
-  --hl-prop: #0550ae;
+  --hl-heading: light-dark(#0550ae, #79c0ff);
+  --hl-link: light-dark(#0969da, #58a6ff);
+  --hl-code: light-dark(#953800, #ffa657);
+  --hl-quote: light-dark(#59636e, #9da5b0);
+  --hl-muted: light-dark(#636c76, #9198a1);
+  --hl-keyword: light-dark(#cf222e, #ff7b72);
+  --hl-string: light-dark(#0a3069, #a5d6ff);
+  --hl-number: light-dark(#0550ae, #79c0ff);
+  --hl-comment: light-dark(#59636e, #9198a1);
+  --hl-fn: light-dark(#8250df, #d2a8ff);
+  --hl-type: light-dark(#953800, #ffa657);
+  --hl-prop: light-dark(#0550ae, #79c0ff);
+
+  --alert-note: light-dark(#0969da, #4493f8);
+  --alert-tip: light-dark(#1a7f37, #3fb950);
+  --alert-important: light-dark(#8250df, #ab7df8);
+  --alert-warning: light-dark(#9a6700, #d29922);
+  --alert-caution: light-dark(#d1242f, #f85149);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1e1f22;
-    --fg: #e6e6e6;
-    --muted: #9da5b0;
-    --border: #3a3d44;
-    --panel: #26282c;
-    --selection: #264f78;
-    --active-line: #25272b;
-    --match: #4b4521;
-    --code-bg: #2b2d31;
-    --link: #58a6ff;
+:root[data-theme='light'] {
+  color-scheme: light;
+}
 
-    --hl-heading: #79c0ff;
-    --hl-link: #58a6ff;
-    --hl-code: #ffa657;
-    --hl-quote: #9da5b0;
-    --hl-muted: #8b949e;
-    --hl-keyword: #ff7b72;
-    --hl-string: #a5d6ff;
-    --hl-number: #79c0ff;
-    --hl-comment: #8b949e;
-    --hl-fn: #d2a8ff;
-    --hl-type: #ffa657;
-    --hl-prop: #79c0ff;
-  }
+:root[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 * {
@@ -102,6 +90,11 @@ body {
   display: none;
 }
 
+#preview:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: -2px;
+}
+
 #status {
   display: flex;
   gap: 16px;
@@ -115,6 +108,313 @@ body {
 
 #status .spacer {
   flex: 1;
+}
+
+/* ---- outline sidebar ---- */
+
+#outline {
+  flex: 0 0 220px;
+  overflow: auto;
+  padding: 8px 4px;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 13px;
+}
+
+#outline[hidden] {
+  display: none;
+}
+
+#outline ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#outline button {
+  display: block;
+  width: 100%;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 8px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+#outline button:hover {
+  background: var(--active-line);
+  color: var(--fg);
+}
+
+#outline button[aria-current] {
+  color: var(--fg);
+  box-shadow: inset 2px 0 0 var(--link);
+}
+
+.outline-empty {
+  margin: 8px;
+  color: var(--muted);
+}
+
+/* ---- mermaid ---- */
+
+.markdown-body .mermaid {
+  margin: 0 0 1em;
+  text-align: center;
+}
+
+.markdown-body .mermaid-error {
+  padding: 8px 12px;
+  border-left: 4px solid var(--alert-caution);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+/* ---- toolbar: tabs + settings ---- */
+
+#toolbar {
+  display: flex;
+  align-items: stretch;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+#settings-button {
+  flex: 0 0 auto;
+  width: 36px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  font-size: 17px;
+  cursor: pointer;
+}
+
+#settings-button:hover,
+#settings-button[aria-expanded='true'] {
+  background: var(--active-line);
+  color: var(--fg);
+}
+
+#settings-panel {
+  position: fixed;
+  top: 34px;
+  right: 8px;
+  z-index: 20;
+  width: 280px;
+  padding: 4px 16px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.3);
+  font-size: 13px;
+}
+
+#settings-panel[hidden] {
+  display: none;
+}
+
+#settings-panel h2 {
+  margin: 10px 0 8px;
+  font-size: 14px;
+}
+
+#settings-panel fieldset {
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+}
+
+#settings-panel legend {
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+
+#settings-panel label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+
+#settings-panel fieldset label {
+  display: inline-flex;
+  margin-right: 10px;
+}
+
+#settings-panel .row {
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+#settings-panel select {
+  font: inherit;
+}
+
+/* ---- tabs ---- */
+
+#tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  font-size: 13px;
+  user-select: none;
+}
+
+#tabs [role='tab'] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 6px 5px 12px;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  cursor: default;
+  white-space: nowrap;
+}
+
+#tabs [role='tab'][aria-selected='true'] {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: inset 0 2px 0 var(--link);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-close {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 20px;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+#tabs [role='tab']:hover .tab-close,
+#tabs [role='tab'][aria-selected='true'] .tab-close,
+.tab-close.dirty {
+  visibility: visible;
+}
+
+.tab-close:hover {
+  background: var(--active-line);
+}
+
+/* The unsaved dot turns into × on hover so the tab can still be closed. */
+.tab-close.dirty:hover {
+  font-size: 0;
+}
+
+.tab-close.dirty:hover::after {
+  content: '×';
+  font-size: 13px;
+}
+
+/* ---- drag and drop ---- */
+
+#app {
+  position: relative;
+}
+
+/* Overlay layers so the panes cannot paint over the drop target. */
+body.drag-over #app::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border: 2px dashed var(--link);
+  border-radius: 8px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+body.drag-over #app::after {
+  content: 'Drop to open';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  padding: 10px 18px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 15px;
+  pointer-events: none;
+}
+
+/* ---- recent-files picker ---- */
+
+.picker-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: rgb(0 0 0 / 0.25);
+  z-index: 10;
+}
+
+.picker {
+  width: min(640px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.3);
+  outline: none;
+}
+
+.picker ul {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+
+.picker li {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.picker li[aria-selected='true'] {
+  background: var(--selection);
+}
+
+.picker-name {
+  font-weight: 600;
+}
+
+.picker-folder,
+.picker-empty {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---- preview typography ---- */
@@ -203,3 +503,100 @@ body {
 .markdown-body .task-list-item input {
   margin: 0 0.4em 0 -1.4em;
 }
+
+.picker ul:focus {
+  outline: none;
+}
+
+/* ---- preview: code highlighting (same colours as the editor) ---- */
+
+.markdown-body .tok-keyword,
+.markdown-body .tok-deleted {
+  color: var(--hl-keyword);
+}
+
+.markdown-body .tok-string,
+.markdown-body .tok-string2,
+.markdown-body .tok-literal,
+.markdown-body .tok-inserted {
+  color: var(--hl-string);
+}
+
+.markdown-body .tok-number,
+.markdown-body .tok-bool,
+.markdown-body .tok-atom {
+  color: var(--hl-number);
+}
+
+.markdown-body .tok-comment {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+
+.markdown-body .tok-typeName,
+.markdown-body .tok-className,
+.markdown-body .tok-namespace,
+.markdown-body .tok-macroName {
+  color: var(--hl-type);
+}
+
+.markdown-body .tok-propertyName,
+.markdown-body .tok-labelName {
+  color: var(--hl-prop);
+}
+
+.markdown-body .tok-meta,
+.markdown-body .tok-punctuation {
+  color: var(--hl-muted);
+}
+
+.markdown-body .tok-heading {
+  color: var(--hl-heading);
+  font-weight: 700;
+}
+
+.markdown-body .tok-link,
+.markdown-body .tok-url {
+  color: var(--hl-link);
+}
+
+.markdown-body .tok-invalid {
+  text-decoration: underline wavy var(--hl-keyword);
+}
+
+/* ---- preview: YAML frontmatter ---- */
+
+.markdown-body pre.frontmatter {
+  border-left: 3px solid var(--border);
+  font-size: 0.82em;
+}
+
+/* ---- preview: GitHub alerts ---- */
+
+.markdown-body .markdown-alert {
+  color: inherit;
+  border-left: 4px solid var(--alert-color);
+  padding: 4px 16px;
+}
+
+.markdown-body .markdown-alert-title {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 6px;
+  color: var(--alert-color);
+  font-weight: 600;
+}
+
+.markdown-alert-note { --alert-color: var(--alert-note); }
+.markdown-alert-tip { --alert-color: var(--alert-tip); }
+.markdown-alert-important { --alert-color: var(--alert-important); }
+.markdown-alert-warning { --alert-color: var(--alert-warning); }
+.markdown-alert-caution { --alert-color: var(--alert-caution); }
+/* ---- math (KaTeX styles load lazily) ---- */
+
+.markdown-body .math-block {
+  margin: 0 0 1em;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+

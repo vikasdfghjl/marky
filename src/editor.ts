@@ -1,4 +1,4 @@
-import { EditorState, type Extension } from '@codemirror/state';
+import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import {
   EditorView,
   keymap,
@@ -9,10 +9,11 @@ import {
   rectangularSelection,
   type ViewUpdate,
 } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from '@codemirror/commands';
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
+import { yamlFrontmatter } from '@codemirror/lang-yaml';
 import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tags as t } from '@lezer/highlight';
 
@@ -38,7 +39,8 @@ const highlight = HighlightStyle.define([
 const theme = EditorView.theme({
   '&': { height: '100%', color: 'var(--fg)', backgroundColor: 'var(--bg)' },
   '&.cm-focused': { outline: 'none' },
-  '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.6', padding: '16px 0' },
+  // Font size is a CSS variable (settings), so it applies to every tab's state at once.
+  '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: 'var(--editor-font-size, 14px)', lineHeight: '1.6', padding: '16px 0' },
   '.cm-content': { caretColor: 'var(--fg)', padding: '0 24px', maxWidth: '100ch' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--fg)' },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground':
@@ -52,13 +54,37 @@ const theme = EditorView.theme({
 
 export interface Editor {
   view: EditorView;
+  /** A fresh state (own undo history) for a tab that is not shown yet. */
+  createState(text: string, opts?: { readOnly?: boolean }): EditorState;
+  /** Shows a tab's state, keeping its undo history and selection, and restores its scroll position. */
+  show(state: EditorState, scrollTop?: number): void;
   /** Replace the document and reset undo history (used when opening a file). */
   load(text: string, opts?: { readOnly?: boolean }): void;
   text(): string;
+  undo(): void;
+  redo(): void;
+  openFind(): void;
+  /** Opens the search panel with the cursor in its replace field. */
   openReplace(): void;
+  /** Puts the cursor at the start of a 0-based source line and scrolls it to the top. */
+  goToLine(line: number): void;
+  setWordWrap(on: boolean): void;
+  /** Cursor offset and scroll position, to restore after reloading the same file. */
+  viewPosition(): ViewPosition;
+  restoreViewPosition(position: ViewPosition): void;
+}
+
+export interface ViewPosition {
+  cursor: number;
+  scrollTop: number;
 }
 
 export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => void): Editor {
+  // Each tab owns a state, so word wrap lives in a compartment that show() re-applies.
+  const wrap = new Compartment();
+  let wordWrap = true;
+  const wrapExtension = () => (wordWrap ? EditorView.lineWrapping : []);
+
   const extensions = (ro: boolean): Extension[] => [
     highlightSpecialChars(),
     history(),
@@ -70,9 +96,10 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     highlightActiveLine(),
     highlightSelectionMatches(),
     search({ top: true }),
-    markdown({ base: markdownLanguage, codeLanguages: languages }),
+    // YAML frontmatter (SKILL.md, docs sites, AI config files) is highlighted as YAML.
+    yamlFrontmatter({ content: markdown({ base: markdownLanguage, codeLanguages: languages }) }),
     syntaxHighlighting(highlight),
-    EditorView.lineWrapping,
+    wrap.of(wrapExtension()),
     EditorView.contentAttributes.of({ spellcheck: 'false', 'aria-label': 'Markdown source' }),
     theme,
     EditorState.readOnly.of(ro),
@@ -81,14 +108,52 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
   ];
 
   const view = new EditorView({ parent, state: EditorState.create({ extensions: extensions(false) }) });
+  // Menu commands arrive while focus is on the menu bar; return it to the editor.
+  const runAndFocus = (command: (target: EditorView) => boolean) => {
+    view.focus();
+    command(view);
+  };
+
+  const createState = (text: string, opts: { readOnly?: boolean } = {}) =>
+    EditorState.create({ doc: text, extensions: extensions(!!opts.readOnly) });
+  const show = (state: EditorState, scrollTop = 0) => {
+    view.setState(state);
+    // A background tab may predate the last word-wrap change.
+    if (wrap.get(state) !== wrapExtension()) view.dispatch({ effects: wrap.reconfigure(wrapExtension()) });
+    view.focus();
+    // Wait for the new document's layout before scrolling.
+    if (scrollTop) requestAnimationFrame(() => (view.scrollDOM.scrollTop = scrollTop));
+  };
 
   return {
     view,
-    load(text, opts = {}) {
-      view.setState(EditorState.create({ doc: text, extensions: extensions(!!opts.readOnly) }));
+    createState,
+    show,
+    load: (text, opts) => show(createState(text, opts)),
+    text: () => view.state.doc.toString(),
+    undo: () => runAndFocus(undo),
+    redo: () => runAndFocus(redo),
+    openFind: () => runAndFocus(openSearchPanel),
+    openReplace() {
+      openSearchPanel(view);
+      view.dom.querySelector<HTMLInputElement>('.cm-search input[name=replace]')?.focus();
+    },
+    goToLine(line) {
+      const { doc } = view.state;
+      const pos = doc.line(Math.min(Math.max(line + 1, 1), doc.lines)).from;
+      view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'start' }) });
       view.focus();
     },
-    text: () => view.state.doc.toString(),
-    openReplace: () => openSearchPanel(view),
+    setWordWrap(on) {
+      if (on === wordWrap) return;
+      wordWrap = on;
+      view.dispatch({ effects: wrap.reconfigure(wrapExtension()) });
+    },
+    viewPosition: () => ({ cursor: view.state.selection.main.head, scrollTop: view.scrollDOM.scrollTop }),
+    restoreViewPosition({ cursor, scrollTop }) {
+      view.dispatch({ selection: { anchor: Math.min(cursor, view.state.doc.length) } });
+      // Wait for the new document's layout before scrolling.
+      requestAnimationFrame(() => (view.scrollDOM.scrollTop = scrollTop));
+    },
   };
 }

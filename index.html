@@ -7,11 +7,18 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <header id="toolbar">
+      <nav id="tabs"></nav>
+      <button id="settings-button" type="button" aria-label="Settings" title="Settings (Ctrl+,)">&#9881;&#xFE0E;</button>
+    </header>
     <main id="app">
+      <nav id="outline" aria-label="Outline" hidden></nav>
       <section id="editor" aria-label="Editor"></section>
-      <article id="preview" class="markdown-body" aria-label="Preview"></article>
+      <!-- Focusable so keyboard users can scroll it with arrow keys / Page Up / Page Down. -->
+      <article id="preview" class="markdown-body" aria-label="Preview" tabindex="0"></article>
     </main>
-    <footer id="status" role="status">
+    <!-- Not a live region: it changes on every keystroke and would flood screen readers. -->
+    <footer id="status" aria-label="Status bar">
       <span id="st-pos"></span>
       <span id="st-count"></span>
       <span class="spacer"></span>

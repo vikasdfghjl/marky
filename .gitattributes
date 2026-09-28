@@ -1,0 +1,6 @@
+# LF in the repo and working tree on every machine, regardless of core.autocrlf,
+# so generated files (THIRD_PARTY_NOTICES.txt) diff cleanly in CI.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
