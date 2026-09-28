@@ -10,8 +10,7 @@ import { createOutline } from './outline';
 import { statusBar } from './status-bar';
 import { listenForShortcuts } from './shortcuts';
 import { URL_SCHEME, UNTITLED, fileName, folderOf } from './paths';
-import { api, isTauri, type FileMeta, type OpenedFile, type Snapshot } from './ipc';
-import { SAMPLE } from './sample';
+import { api, type FileMeta, type OpenedFile, type Snapshot } from './ipc';
 
 const TYPING_PAUSE_MS = 150;
 /** Bursts of watcher events (a save is several events) collapse into one check. */
@@ -208,7 +207,7 @@ function syncWindowDirty() {
   const anyDirty = tabs.some((t) => t.dirty);
   if (anyDirty === windowDirty) return;
   windowDirty = anyDirty;
-  if (isTauri) void api.setDirty(anyDirty);
+  void api.setDirty(anyDirty);
 }
 
 function renderAfterTypingPause() {
@@ -232,7 +231,7 @@ function onPreviewRendered(parseMs: number) {
 function updateTitle() {
   const title = `${active.dirty ? '● ' : ''}${fileName(active.path)} — Marky`;
   document.title = title;
-  if (isTauri) void api.setTitle(title);
+  void api.setTitle(title);
 }
 
 function refreshAllViews() {
@@ -260,14 +259,12 @@ function togglePreview() {
 // ---- documents ----
 
 async function notifyError(message: string) {
-  if (!isTauri) return window.alert(message);
   await api.showError(message);
 }
 
 /** Save / Don't save / Cancel for the active tab. True means its content may be discarded. */
 async function resolveUnsavedChanges(): Promise<boolean> {
   if (!active.dirty) return true;
-  if (!isTauri) return window.confirm(`Discard unsaved changes to ${fileName(active.path)}?`);
 
   const choice = await api.askUnsavedChanges(fileName(active.path));
   if (choice === 'cancel') return false;
@@ -316,13 +313,11 @@ async function closeTab(tab: Tab = active) {
 }
 
 async function closeLastTab() {
-  if (isTauri) return api.closeWindow();
-  loadIntoTab(active, { ...NEW_DOCUMENT });
+  await api.closeWindow();
 }
 
 /** Asks about every unsaved tab in turn; Cancel on any of them keeps the window open. */
 async function closeWindow() {
-  if (!isTauri) return;
   for (const tab of tabs.filter((t) => t.dirty)) {
     activate(tab);
     if (!(await resolveUnsavedChanges())) return;
@@ -331,14 +326,12 @@ async function closeWindow() {
 }
 
 async function openWithDialog() {
-  if (!isTauri) return;
   const path = await api.pickOpen();
   if (!path) return;
   queueOpen(path);
 }
 
 async function openRecent() {
-  if (!isTauri) return;
   const path = await pickRecentFile(await api.recentFiles());
   if (!path) return;
   queueOpen(path);
@@ -353,7 +346,7 @@ async function resolveSavePath(forceSaveAs: boolean): Promise<string | null> {
 
 /** Saves the active tab. True when it is on disk afterwards; false if cancelled or failed. */
 async function save(forceSaveAs = false): Promise<boolean> {
-  if (!isTauri || active.readOnly) return false;
+  if (active.readOnly) return false;
   const tab = active;
   const path = await resolveSavePath(forceSaveAs);
   if (!path) return false;
@@ -386,7 +379,7 @@ async function save(forceSaveAs = false): Promise<boolean> {
 async function followLink(href: string) {
   if (href.startsWith('#')) return jumpToAnchor(decodeURIComponent(href.slice(1)));
   if (/^(https?|mailto):/i.test(href)) return void api.openExternal(href).catch((err) => notifyError(String(err)));
-  if (URL_SCHEME.test(href) || !isTauri) return;
+  if (URL_SCHEME.test(href)) return;
   if (!active.path) return void notifyError('Save this document first so its relative links have a folder to resolve from.');
 
   const [target, anchor] = href.split('#', 2);
@@ -411,7 +404,6 @@ function jumpToAnchor(id: string) {
 
 /** Moves a tab's file watch from `previous` to `next` (either may be null). Best-effort, e.g. on network shares. */
 function watchPath(next: string | null, previous: string | null) {
-  if (!isTauri) return;
   if (previous && !tabByPath(previous)) void api.unwatchFile(previous);
   if (next) api.watchFile(next).catch(() => {});
 }
@@ -467,7 +459,6 @@ function onDeletedOnDisk(tab: Tab) {
 
 /** Writes every unsaved tab to the recovery file, or clears it when none are left. */
 function snapshotDirtyTabs() {
-  if (!isTauri) return;
   const snapshots: Snapshot[] = tabs
     .filter((t) => t.dirty)
     .map((t) => ({ path: t.path, text: tabText(t), meta: t.meta }));
@@ -552,15 +543,7 @@ listenForShortcuts(SHORTCUTS, runCommand);
 
 // ---- startup ----
 
-function startInBrowser() {
-  outline.restoreVisibility();
-  loadIntoTab(active, { ...NEW_DOCUMENT, text: SAMPLE });
-  requestAnimationFrame(() => statusBar.startup(performance.now(), true));
-}
-
 async function start() {
-  if (!isTauri) return startInBrowser();
-
   const [, , , , , startup] = await Promise.all([
     api.onOpenRequest(queueOpen),
     api.onMenuCommand(runCommand),

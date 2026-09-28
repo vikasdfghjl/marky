@@ -1,9 +1,8 @@
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { browserApi } from './browser-api';
 
-/** False when the frontend runs in a plain browser via `npm run dev` (no Rust core). */
-export const isTauri = '__TAURI_INTERNALS__' in window;
 
 export type LineEnding = 'lf' | 'crlf';
 
@@ -24,7 +23,7 @@ export interface OpenedFile {
 
 // Paths are only ever produced by the Rust side (dialog, drag-drop, CLI arg),
 // which records them in an allowlist; open/save refuse anything else.
-export const api = {
+const tauriApi = {
   /** One-shot at startup: the pre-read CLI/Explorer file and any crash-recovery snapshot. */
   startupState: () => invoke<StartupState>('startup_state'),
   /** `jsMs` is time since navigation start, so Rust can split webview vs. frontend cost. */
@@ -66,7 +65,17 @@ export const api = {
   /** Fired only when the window is closed with unsaved changes; clean windows close natively. */
   onCloseRequested: (cb: () => void): Promise<UnlistenFn> => listen('close-requested', cb),
   setTitle: (title: string) => getCurrentWindow().setTitle(title),
+  /** URL prefix of the asset protocol that serves preview images from opened folders. */
+  assetBase: () => convertFileSrc(''),
 };
+
+export type MarkyApi = typeof tauriApi;
+
+/**
+ * The Rust core, or an in-memory stand-in when the frontend runs in a plain browser
+ * (`npm run dev`). Callers never branch on which one they got.
+ */
+export const api: MarkyApi = '__TAURI_INTERNALS__' in window ? tauriApi : browserApi;
 
 export type UnsavedChoice = 'save' | 'discard' | 'cancel';
 

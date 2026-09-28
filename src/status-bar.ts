@@ -31,7 +31,7 @@ export const statusBar = {
     $('st-render').textContent = `preview ${Math.round(latencyMs)} ms (parse ${parseMs.toFixed(1)})`;
   },
 
-  startup(ms: number, browser = false) {
-    $('st-perf').textContent = `start ${Math.round(ms)} ms${browser ? ' (browser)' : ''}`;
+  startup(ms: number) {
+    $('st-perf').textContent = `start ${Math.round(ms)} ms`;
   },
 };

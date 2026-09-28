@@ -1,5 +1,4 @@
-import { convertFileSrc } from '@tauri-apps/api/core';
-import { isTauri } from './ipc';
+import { api } from './ipc';
 import { drawMermaidBlocks, onMermaidThemeChange } from './mermaid-blocks';
 import type { RenderRequest, RenderResult } from './preview.worker';
 
@@ -29,7 +28,7 @@ export function createPreview(
   onLinkClick: (href: string) => void,
 ): Preview {
   const worker = new Worker(new URL('./preview.worker.ts', import.meta.url), { type: 'module' });
-  const assetBase = isTauri ? convertFileSrc('') : '';
+  const assetBase = api.assetBase();
   let seq = 0;
   let visible = true;
   let documentFolder: string | null = null;

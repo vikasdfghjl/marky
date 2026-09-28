@@ -14,6 +14,7 @@ Marky is a Windows Markdown editor: Tauri 2 (Rust) + WebView2 + CodeMirror 6 + m
 - **Startup is one IPC call.** `startup_state` returns the startup file (pre-read on a Rust thread while WebView2 starts) and any recovery snapshot. The file paints first; recovery is offered after. `showDocument` clears only a snapshot this session wrote, so a crash snapshot survives until the user answers.
 - **Dirty state has one writer.** `setDirty(dirty, tab)` in `main.ts` updates the tab, the title and the tab strip, and tells Rust (`set_dirty`) only when the window-level "any tab dirty" state flips. Rust then holds the window close only when something is dirty. Route every dirty change through it.
 - **Tabs share one editor view.** Each `Tab` owns a CodeMirror `EditorState` (document, undo history, selection). The active tab's `state` field is stale while the view owns it: read the live text with `tabText(tab)`, and switch only through `activate` or `closeTab`. Watchers, recovery snapshots and the Reload / Keep mine prompt are per tab.
+- **Callers never branch on the runtime.** `ipc.ts` picks `tauriApi` or `browserApi` once; both implement `MarkyApi`. A new command gets a real implementation and a stand-in, and no code outside `ipc.ts` checks for Tauri.
 - **One command table.** Menu items (`menu.rs`) and keyboard shortcuts (`SHORTCUTS`) both dispatch through `commands` in `main.ts`. Menu labels show shortcut hints (`\tCtrl+S`) but register no native accelerators, so each key is handled once, in the frontend.
 - **Preview Markdown extensions live in `markdown-plugins.ts`** (frontmatter, GitHub alerts, heading anchors) and must keep `data-line` source maps, because synced scroll and `#anchor` jumps depend on them. Code highlighting (`code-highlight.ts`) reuses the editor's Lezer parsers and `tok-*` classes mapped to the `--hl-*` tokens, so both panes always agree on colours.
 - **Links never navigate the webview.** Preview clicks go to `followLink`: http(s) and mailto open through the Rust `open_external` (no opener plugin or JS permission); relative links go through `resolve_link`, which only follows .md/.markdown/.txt targets from user-chosen files.
@@ -71,7 +72,7 @@ Marky is MIT. After adding, removing or upgrading any npm or Cargo dependency, r
 
 - Shells are PowerShell on Windows. Shells opened before Rust was installed lack cargo on PATH; prepend `$env:USERPROFILE\.cargo\bin`.
 - Vite uses port 1420 with `strictPort`. Stop any other dev server before `npm run tauri dev`.
-- `npm run dev` runs in a plain browser: `isTauri` is false, a sample document loads, and open/save are no-ops.
+- `npm run dev` runs in a plain browser against `browser-api.ts`, an in-memory stand-in for the Rust core. The sample opens as `C:\Marky\sample.md`; save, Save As, recent files and relative links work in memory; native prompts become `alert`/`confirm`; closing reloads the page. There is no open dialog, file watching or asset protocol.
 - Tauri `async` commands that take `State<'_, _>` must return `Result`.
 - The `STATIC_VCRUNTIME is deprecated` build warning comes from the Tauri CLI, not this repo.
 - markdown-it 15 ships its own types (`import MarkdownIt, { type Token } from 'markdown-it'`); `@types/markdown-it` conflicts with them.

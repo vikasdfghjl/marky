@@ -144,7 +144,7 @@ npm run tauri dev
 
 | Command                                           | What it does                                                                                            |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `npm run dev`                                     | Frontend only, in a browser at http://localhost:1420 (loads a sample document; file open/save disabled) |
+| `npm run dev`                                     | Frontend only, in a browser at http://localhost:1420, against an in-memory stand-in for the Rust core (sample file; save and recent files work in memory) |
 | `npm run tauri dev`                               | Full native app with hot reload                                                                         |
 | `npm run tauri build`                             | Release build and NSIS installer in `src-tauri/target/release/bundle/`                                  |
 | `npm run typecheck`                               | TypeScript type-check                                                                                   |
@@ -175,7 +175,8 @@ src/
   shortcuts.ts          Keyboard dispatch into the command table (blocks reload keys)
   paths.ts              File-name, folder and path helpers shared by page and worker
   perf.ts               Cold-start instrumentation
-  ipc.ts                Typed wrappers around Tauri commands and events
+  ipc.ts                Typed wrappers around Tauri commands and events; picks the real core or the stand-in
+  browser-api.ts        In-memory stand-in for the Rust core, used by `npm run dev`
   styles.css            Theme variables (light/dark), picker and preview typography
 src-tauri/
   src/main.rs           Commands, path allowlist, dialogs, window lifecycle, single instance
