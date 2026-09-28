@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-28
+
 ### Added
 
 - Hide the editor for a preview-only reading view: the panel button beside the settings gear, View → Editor, Ctrl+Shift+E, or Settings → Show editor. The choice is remembered.
