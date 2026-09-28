@@ -180,7 +180,7 @@ body {
   white-space: pre-wrap;
 }
 
-/* ---- toolbar: tabs + settings ---- */
+/* ---- toolbar: tabs, new tab, settings ---- */
 
 #toolbar {
   display: flex;
@@ -189,21 +189,30 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-#settings-button {
+.toolbar-button {
   flex: 0 0 auto;
-  width: 36px;
+  width: 34px;
   border: 0;
-  border-left: 1px solid var(--border);
   background: none;
   color: var(--muted);
   font-size: 17px;
   cursor: pointer;
 }
 
-#settings-button:hover,
-#settings-button[aria-expanded='true'] {
+.toolbar-button:hover,
+.toolbar-button[aria-expanded='true'] {
   background: var(--active-line);
   color: var(--fg);
+}
+
+/* + follows the last tab, as in browsers; the gear stays at the right edge. */
+#new-tab-button {
+  font-size: 20px;
+}
+
+#settings-button {
+  margin-left: auto;
+  border-left: 1px solid var(--border);
 }
 
 #settings-panel {
@@ -264,7 +273,7 @@ body {
 /* ---- tabs ---- */
 
 #tabs {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   overflow-x: auto;

@@ -60,7 +60,7 @@ Working now:
 - Crash-safe saves (temp file, flush, atomic rename; follows symlinks), verified by a test that kills the process mid-save
 - Native Save / Don't save / Cancel prompt before closing, opening another file or starting a new one
 - External change detection: a clean buffer reloads silently when git or an AI agent rewrites the file; an edited buffer asks Reload / Keep mine
-- Tabs: up to 20 files, each with its own undo history, cursor and scroll position. Opening a file that is already open focuses its tab; a second launch from Explorer opens in a new tab
+- Tabs: up to 20 files, each with its own undo history, cursor and scroll position. The + after the last tab (or Ctrl+N) opens a new one. Opening a file that is already open focuses its tab; a second launch from Explorer opens in a new tab
 - Drag and drop files onto the window to open them, one tab each
 - Native menu bar (File, Edit, View, Help), with Alt and arrow-key navigation. Toggles (Preview, Outline, Word Wrap, Auto Save) show a tick when on
 - Settings (gear at the top right, or Ctrl+,): theme (System, Light or Dark, including the title bar and menu), editor font size, word wrap, auto-save, the line ending for new files, and preview and outline visibility. Saved to `settings.json` in the app's config folder

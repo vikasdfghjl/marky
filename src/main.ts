@@ -83,6 +83,7 @@ const tabStrip = createTabStrip($('tabs'), {
 const settings = createSettingsStore((current) => void api.saveSettings(current));
 settings.onChange(applySettings);
 const settingsPanel = createSettingsPanel($('settings-button') as HTMLButtonElement, settings);
+$('new-tab-button').addEventListener('click', () => runCommand('new'));
 
 const tabs: Tab[] = [];
 let active: Tab = createTab({ ...NEW_DOCUMENT }, editor.view.state);

@@ -4,6 +4,10 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- A + button after the last tab opens a new tab, like Ctrl+N.
+
 ## [0.2.2] - 2026-09-28
 
 ### Added
