@@ -20,6 +20,7 @@ const TEMPLATE = `
     <label><input type="radio" name="newFileLineEnding" value="crlf" data-setting="newFileLineEnding"> CRLF (Windows)</label>
     <label><input type="radio" name="newFileLineEnding" value="lf" data-setting="newFileLineEnding"> LF (Unix)</label>
   </fieldset>
+  <label><input type="checkbox" data-setting="showEditor"> Show editor</label>
   <label><input type="checkbox" data-setting="showPreview"> Show preview</label>
   <label><input type="checkbox" data-setting="showOutline"> Show outline</label>
 `;

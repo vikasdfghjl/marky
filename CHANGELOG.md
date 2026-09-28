@@ -4,6 +4,15 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- Hide the editor for a preview-only reading view: the panel button beside the settings gear, View → Editor, Ctrl+Shift+E, or Settings → Show editor. The choice is remembered.
+
+### Changed
+
+- Hiding the editor or the preview turns the other one on, so the window never goes empty.
+- Find and Replace bring the editor back when it is hidden.
+
 ## [0.2.3] - 2026-09-28
 
 ### Added

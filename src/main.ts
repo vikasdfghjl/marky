@@ -84,6 +84,8 @@ const settings = createSettingsStore((current) => void api.saveSettings(current)
 settings.onChange(applySettings);
 const settingsPanel = createSettingsPanel($('settings-button') as HTMLButtonElement, settings);
 $('new-tab-button').addEventListener('click', () => runCommand('new'));
+const editorToggle = $('editor-toggle');
+editorToggle.addEventListener('click', () => runCommand('toggle-editor'));
 
 const tabs: Tab[] = [];
 let active: Tab = createTab({ ...NEW_DOCUMENT }, editor.view.state);
@@ -140,7 +142,7 @@ function showInEditor(tab: Tab, scrollTop: number) {
 /** Brings every view in line with the active tab. */
 function showActiveTab() {
   preview.setDocumentFolder(folderOf(active.path));
-  applyPreviewVisibility();
+  applyPaneVisibility();
   refreshAllViews();
   renderTabs();
 }
@@ -265,11 +267,37 @@ function refreshAllViews() {
   updateTitle();
 }
 
-function applyPreviewVisibility() {
-  const visible = settings.get().showPreview && editor.view.state.doc.length <= PREVIEW_AUTO_OFF_BYTES;
-  if (visible === preview.visible) return;
-  preview.setVisible(visible);
-  if (visible) preview.render(editor.text());
+/**
+ * Shows the panes the settings ask for, but never neither: hiding the editor brings the
+ * preview back, and the editor stays when a very large file has no preview.
+ */
+function applyPaneVisibility() {
+  const { showEditor, showPreview } = settings.get();
+  const previewVisible = (showPreview || !showEditor) && editor.view.state.doc.length <= PREVIEW_AUTO_OFF_BYTES;
+  const editorVisible = showEditor || !previewVisible;
+  setEditorVisible(editorVisible);
+  if (previewVisible === preview.visible) return;
+  preview.setVisible(previewVisible);
+  if (previewVisible) preview.render(editor.text());
+}
+
+function setEditorVisible(visible: boolean) {
+  const pane = $('editor');
+  editorToggle.setAttribute('aria-pressed', String(visible));
+  if (pane.hidden === !visible) return;
+  const hadFocus = pane.contains(document.activeElement);
+  pane.hidden = !visible;
+  // Keep keyboard focus on something visible.
+  if (visible) editor.view.focus();
+  else if (hadFocus) $('preview').focus();
+}
+
+/** Find and replace work in the editor, so they bring it back when it is hidden. */
+function inEditor(action: () => void) {
+  return () => {
+    if (!settings.get().showEditor) settings.update({ showEditor: true });
+    action();
+  };
 }
 
 // ---- settings ----
@@ -282,7 +310,7 @@ function applySettings(current: Settings, changed: Partial<Settings>) {
     editor.view.requestMeasure();
   }
   if ('wordWrap' in changed) editor.setWordWrap(current.wordWrap);
-  if ('showPreview' in changed) applyPreviewVisibility();
+  if ('showEditor' in changed || 'showPreview' in changed) applyPaneVisibility();
   if ('showOutline' in changed) outline.setVisible(current.showOutline);
   // autoSave and newFileLineEnding are read when they are used.
   syncMenuChecks(current, changed);
@@ -290,6 +318,7 @@ function applySettings(current: Settings, changed: Partial<Settings>) {
 
 /** Native menu check items (ids in menu.rs) and the boolean setting each one toggles. */
 const MENU_TOGGLES = {
+  'toggle-editor': 'showEditor',
   'toggle-preview': 'showPreview',
   'toggle-outline': 'showOutline',
   'toggle-word-wrap': 'wordWrap',
@@ -303,7 +332,12 @@ function syncMenuChecks(current: Settings, changed: Partial<Settings>) {
 }
 
 function toggleSetting(setting: (typeof MENU_TOGGLES)[keyof typeof MENU_TOGGLES]) {
-  settings.update({ [setting]: !settings.get()[setting] });
+  const on = !settings.get()[setting];
+  const changes: Partial<Settings> = { [setting]: on };
+  // Hiding one pane turns the other on, so the window never goes empty and the ticks stay true.
+  if (!on && setting === 'showEditor') changes.showPreview = true;
+  if (!on && setting === 'showPreview') changes.showEditor = true;
+  settings.update(changes);
 }
 
 /** An empty untitled document with the configured line ending. */
@@ -564,8 +598,9 @@ const commands = {
   close: () => closeTab(),
   undo: editor.undo,
   redo: editor.redo,
-  find: editor.openFind,
-  replace: editor.openReplace,
+  find: inEditor(editor.openFind),
+  replace: inEditor(editor.openReplace),
+  'toggle-editor': () => toggleSetting('showEditor'),
   'toggle-preview': () => toggleSetting('showPreview'),
   'toggle-outline': () => toggleSetting('showOutline'),
   'toggle-word-wrap': () => toggleSetting('wordWrap'),
@@ -591,6 +626,7 @@ const SHORTCUTS: Record<string, CommandId> = {
   'Ctrl+Shift+S': 'save-as',
   'Ctrl+W': 'close',
   'Ctrl+H': 'replace',
+  'Ctrl+Shift+E': 'toggle-editor',
   'Ctrl+Shift+V': 'toggle-preview',
   'Ctrl+Shift+O': 'toggle-outline',
   'Alt+Z': 'toggle-word-wrap',

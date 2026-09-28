@@ -60,14 +60,15 @@ public static bool IsChecked(IntPtr bar, int menu, uint item) {
   $bar = [Win32.Menu]::GetMenu($app.MainWindowHandle)
   $menuCount = [Win32.Menu]::GetMenuItemCount($bar)
   Write-Check 'native menu bar has File, Edit, View, Help' ($menuCount -eq 4) "$menuCount top-level menus"
-  # e2e.mjs ends with preview on, outline off, auto-save off and word wrap turned off by Alt+Z.
+  # e2e.mjs ends with editor and preview on, outline and auto-save off, and word wrap turned off by Alt+Z.
   $ticks = @{
-    preview  = [Win32.Menu]::IsChecked($bar, 2, 0)
-    outline  = [Win32.Menu]::IsChecked($bar, 2, 1)
-    wordWrap = [Win32.Menu]::IsChecked($bar, 2, 2)
+    editor   = [Win32.Menu]::IsChecked($bar, 2, 0)
+    preview  = [Win32.Menu]::IsChecked($bar, 2, 1)
+    outline  = [Win32.Menu]::IsChecked($bar, 2, 2)
+    wordWrap = [Win32.Menu]::IsChecked($bar, 2, 3)
     autoSave = [Win32.Menu]::IsChecked($bar, 0, 6)
   }
-  $ticksMatch = $ticks.preview -and -not ($ticks.outline -or $ticks.wordWrap -or $ticks.autoSave)
+  $ticksMatch = $ticks.editor -and $ticks.preview -and -not ($ticks.outline -or $ticks.wordWrap -or $ticks.autoSave)
   Write-Check 'menu ticks follow the settings' $ticksMatch (($ticks.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
 
   $app.CloseMainWindow() | Out-Null

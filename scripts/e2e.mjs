@@ -131,9 +131,17 @@ const hiddenAfterToggle = await evaluate(`document.getElementById('preview').hid
 await emitMenu('toggle-preview');
 await sleep(200);
 check('menu command toggles preview', hiddenAfterToggle && !(await evaluate(`document.getElementById('preview').hidden`)));
+// Hiding the editor leaves a preview-only reading view; Replace then brings the editor back.
+await emitMenu('toggle-editor');
+await sleep(200);
+const readingView = await evaluate(`[document.getElementById('editor').hidden, document.getElementById('preview').hidden,
+  document.getElementById('editor-toggle').getAttribute('aria-pressed')].join()`);
+check('hiding the editor leaves the preview', readingView === 'true,false,false', readingView);
 await emitMenu('replace');
 await sleep(200);
-check('menu Replace focuses the replace field', await evaluate(`document.activeElement?.getAttribute('name') === 'replace'`));
+check('menu Replace shows the editor and focuses the replace field',
+  !(await evaluate(`document.getElementById('editor').hidden`)) &&
+  (await evaluate(`document.activeElement?.getAttribute('name') === 'replace'`)));
 await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
 
 // ---- tabs (F14) and single instance: a second launch opens its file in a new tab ----

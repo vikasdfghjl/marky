@@ -38,6 +38,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .text("replace", "&Replace\tCtrl+H")
         .build()?;
     let view = SubmenuBuilder::new(app, "&View")
+        .check("toggle-editor", "&Editor\tCtrl+Shift+E")
         .check("toggle-preview", "&Preview\tCtrl+Shift+V")
         .check("toggle-outline", "&Outline\tCtrl+Shift+O")
         .check("toggle-word-wrap", "&Word Wrap\tAlt+Z")

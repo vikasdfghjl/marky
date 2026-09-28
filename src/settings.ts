@@ -9,6 +9,8 @@ export interface Settings {
   /** Save files (not untitled documents) shortly after typing stops. PRD F13: off by default. */
   autoSave: boolean;
   newFileLineEnding: LineEnding;
+  /** Off gives a preview-only reading view; the preview then shows even if showPreview is off. */
+  showEditor: boolean;
   showPreview: boolean;
   showOutline: boolean;
 }
@@ -19,6 +21,7 @@ export const DEFAULT_SETTINGS: Settings = {
   wordWrap: true,
   autoSave: false,
   newFileLineEnding: 'crlf',
+  showEditor: true,
   showPreview: true,
   showOutline: false,
 };
@@ -41,6 +44,7 @@ export function readSettings(raw: unknown): Settings {
     wordWrap: flag(saved.wordWrap, DEFAULT_SETTINGS.wordWrap),
     autoSave: flag(saved.autoSave, DEFAULT_SETTINGS.autoSave),
     newFileLineEnding: pick(saved.newFileLineEnding, ['crlf', 'lf'] as const, DEFAULT_SETTINGS.newFileLineEnding),
+    showEditor: flag(saved.showEditor, DEFAULT_SETTINGS.showEditor),
     showPreview: flag(saved.showPreview, DEFAULT_SETTINGS.showPreview),
     showOutline: flag(saved.showOutline, DEFAULT_SETTINGS.showOutline),
   };

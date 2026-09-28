@@ -81,6 +81,10 @@ body {
   overflow: hidden;
 }
 
+#editor[hidden] {
+  display: none;
+}
+
 #preview {
   border-left: 1px solid var(--border);
   padding: 16px 32px 48px;
@@ -210,9 +214,16 @@ body {
   font-size: 20px;
 }
 
-#settings-button {
+/* The pane toggle and the gear sit together at the right edge. */
+#editor-toggle {
+  display: grid;
+  place-items: center;
   margin-left: auto;
   border-left: 1px solid var(--border);
+}
+
+#editor-toggle[aria-pressed='false'] .editor-pane {
+  opacity: 0;
 }
 
 #settings-panel {
