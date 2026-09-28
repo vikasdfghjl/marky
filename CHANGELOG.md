@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-28
+
 ### Added
 
 - Tick marks on the native menu's toggle items: View → Preview, Outline and Word Wrap, and File → Auto Save. They stay in step with the shortcuts and the settings panel.
