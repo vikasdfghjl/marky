@@ -12,11 +12,11 @@ Latest run: 27 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a
 
 | Metric                            | Measured           | Target   | Hard limit | Status |
 | --------------------------------- | ------------------ | -------- | ---------- | ------ |
-| Installer (NSIS) | 4.46 MB | ≤ 6 MB | 10 MB | ✅ |
-| App exe | 6.67 MB | ≤ 8 MB | 12 MB | ✅ |
-| Cold start to editable | 829 ms (803–1,053) | ≤ 800 ms | 1,000 ms | ⚠️ |
+| Installer (NSIS)                  | 4.46 MB            | ≤ 6 MB   | 10 MB      | ✅     |
+| App exe                           | 6.67 MB            | ≤ 8 MB   | 12 MB      | ✅     |
+| Cold start to editable            | 829 ms (803–1,053) | ≤ 800 ms | 1,000 ms   | ⚠️     |
 | Preview update after typing stops | ~160 ms            | ≤ 200 ms | 400 ms     | ✅     |
-| Idle RAM (app + WebView2) | 113.0 MB | ≤ 90 MB | 120 MB | ⚠️ |
+| Idle RAM (app + WebView2)         | 113.0 MB           | ≤ 90 MB  | 120 MB     | ⚠️     |
 | Idle CPU                          | 0%                 | 0%       | < 0.5%     | ✅     |
 
 Cold start breaks down into about 620–650 ms for WebView2 to create its browser process (before any app code runs) and about 250–300 ms in the frontend, most of it one first-layout task. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (39 MB), the browser process (33 MB) and the GPU process (18 MB). The app's own JavaScript heap is about 12 MB. M3 tried pre-reading the startup file in Rust, V8 compile hints and seven WebView2 flag sets; none moved either number beyond noise. Code highlighting in the preview added about 6 MB when the open file has fenced code (parsers load in the preview worker on first use). Mermaid added 1.8 MB to the installer and 1.3 MB to the exe, since its assets are embedded in it, but nothing at startup: it loads only when a document contains a diagram. KaTeX added 0.9 MB to the installer and nothing at startup; it ships twice (about 250 KB each, both lazy), once in the preview worker and once inside Mermaid for diagram labels, because the worker and the page are separate bundles. Idle RAM is within noise of the previous run (one outlier at 132 MB) but is now close to the 120 MB limit.
@@ -36,7 +36,7 @@ Add `-Details` to see the per-phase timeline, or `-BrowserArgs "..."` to try oth
 
 Download the latest installer (`Marky_<version>_x64-setup.exe`) or the portable ZIP from the repository's **Releases** page; `SHA256SUMS.txt` there lists the checksums. Every 0.x release is a beta and is marked as a pre-release.
 
-Beta builds are **unsigned**, so Windows SmartScreen shows *Windows protected your PC* on first run. Choose **More info**, then **Run anyway**. The installer is per-user and needs no admin rights. A portable ZIP (just `marky.exe`) is also built; it needs the WebView2 runtime, which Windows 11 and current Windows 10 already have.
+Beta builds are **unsigned**, so Windows SmartScreen shows _Windows protected your PC_ on first run. Choose **More info**, then **Run anyway**. The installer is per-user and needs no admin rights. A portable ZIP (just `marky.exe`) is also built; it needs the WebView2 runtime, which Windows 11 and current Windows 10 already have.
 
 ## Features
 
@@ -47,8 +47,8 @@ Working now:
 - Code blocks highlighted in the preview with the same parsers and colours as the editor (100+ languages, loaded on first use)
 - YAML frontmatter highlighted in both panes (SKILL.md, docs sites, AI config files)
 - GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) rendered as callouts
-- Mermaid diagrams (`` ```mermaid `` fences), drawn with `securityLevel: 'strict'`, following the light/dark theme; loaded only when a document has one, and syntax errors show inline
-- Math with KaTeX, using GitHub's syntax: `$…$` inline, `$$…$$` blocks and `` ```math `` fences. Prices like $5 stay text, bad TeX shows inline, and MathML is included for screen readers; it loads only for documents with math
+- Mermaid diagrams (` ```mermaid ` fences), drawn with `securityLevel: 'strict'`, following the light/dark theme; loaded only when a document has one, and syntax errors show inline
+- Math with KaTeX, using GitHub's syntax: `$…$` inline, `$$…$$` blocks and ` ```math ` fences. Prices like $5 stay text, bad TeX shows inline, and MathML is included for screen readers; it loads only for documents with math
 - Outline sidebar (Ctrl+Shift+O): headings from the Markdown syntax tree, highlighting the section under the cursor; click to jump
 - Links: `#heading` links jump within the document (GitHub-style heading ids), relative `.md` links open in a new tab, and web links open in your browser
 - Local images in the preview: relative paths resolve against the file's folder; remote images are blocked
@@ -62,7 +62,7 @@ Working now:
 - External change detection: a clean buffer reloads silently when git or an AI agent rewrites the file; an edited buffer asks Reload / Keep mine
 - Tabs: up to 20 files, each with its own undo history, cursor and scroll position. Opening a file that is already open focuses its tab; a second launch from Explorer opens in a new tab
 - Drag and drop files onto the window to open them, one tab each
-- Native menu bar (File, Edit, View, Help), with Alt and arrow-key navigation
+- Native menu bar (File, Edit, View, Help), with Alt and arrow-key navigation. Toggles (Preview, Outline, Word Wrap, Auto Save) show a tick when on
 - Settings (gear at the top right, or Ctrl+,): theme (System, Light or Dark, including the title bar and menu), editor font size, word wrap, auto-save, the line ending for new files, and preview and outline visibility. Saved to `settings.json` in the app's config folder
 - Recent files (last 10), Ctrl+R
 - Crash recovery: unsaved changes are snapshotted every 30 s and offered back after a crash
@@ -84,6 +84,7 @@ Not yet built: taskbar jump-list entries for recent files (F9, needs Win32 code)
 | Ctrl+Tab        | Next tab (Ctrl+Shift+Tab: previous)                 |
 | Ctrl+Shift+V    | Toggle preview                                      |
 | Ctrl+Shift+O    | Toggle outline sidebar                              |
+| Alt+Z           | Toggle word wrap                                    |
 | Ctrl+,          | Settings                                            |
 | Ctrl+F          | Find                                                |
 | Ctrl+H          | Find and replace                                    |
@@ -119,17 +120,17 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--wait
 
 ### Releasing
 
-Versions are plain `X.Y.Z`, and `package.json` is the single source (`tauri.conf.json` points at it). To cut a release from a clean `main`:
+Versions are plain `X.Y.Z`, and `package.json` is the single source (`tauri.conf.json` points at it). User-visible changes go under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) as they land. To cut a release from a clean `main`:
 
 ```bash
-./scripts/release.ps1 -Version 0.2.0
+./scripts/release.ps1 -Version 0.3.0
 ```
 
 ```bash
 git push origin HEAD --follow-tags
 ```
 
-The script bumps `package.json` and `Cargo.toml`, commits, and creates the annotated tag `v0.2.0`. Pushing the tag runs `.github/workflows/release.yml`, which checks that the tag matches the version, runs the checks, builds, enforces the size budgets and publishes a GitHub Release with the installer, the portable ZIP and `SHA256SUMS.txt`.
+The script refuses to run if the Unreleased section is empty. It bumps `package.json` and `Cargo.toml`, renames Unreleased to `[0.3.0] - <date>`, commits, and creates the annotated tag `v0.3.0`. Pushing the tag runs `.github/workflows/release.yml`, which checks that the tag matches the version, runs the checks, builds, enforces the size budgets and publishes a GitHub Release with the installer, the portable ZIP and `SHA256SUMS.txt`. The release notes are that version's CHANGELOG section plus install instructions.
 
 - **Signed build** (not used during the unsigned beta): set `MARKY_SIGN_COMMAND` to your signing command with `{file}` where the file path goes, then run `./scripts/build-signed.ps1`. Tauri calls the hook for the app, the installer, the uninstaller and the NSIS plugins, and the script verifies every Authenticode signature afterwards. In CI, set the same value as a repository secret. Plain `npx tauri build` stays unsigned.
 - **winget:** after uploading the installer to a release, run `./scripts/winget-manifest.ps1 -InstallerUrl <url>`. It writes validated 1.12.0 manifests to `dist-winget/` for a pull request to microsoft/winget-pkgs.
@@ -144,15 +145,15 @@ npm install
 npm run tauri dev
 ```
 
-| Command                                           | What it does                                                                                            |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Command                                           | What it does                                                                                                                                              |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `npm run dev`                                     | Frontend only, in a browser at http://localhost:1420, against an in-memory stand-in for the Rust core (sample file; save and recent files work in memory) |
-| `npm run tauri dev`                               | Full native app with hot reload                                                                         |
-| `npm run tauri build`                             | Release build and NSIS installer in `src-tauri/target/release/bundle/`                                  |
-| `npm run typecheck`                               | TypeScript type-check                                                                                   |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust tests: encoding, atomic save, kill-mid-save, recent/recovery                                       |
-| `./scripts/e2e.ps1`                               | End-to-end smoke test of the release build (needs `npx tauri build --no-bundle` first)                  |
-| `./scripts/check-size.ps1`                        | Fail if the exe or installer exceeds the PRD hard limits (needs a full `npx tauri build`)               |
+| `npm run tauri dev`                               | Full native app with hot reload                                                                                                                           |
+| `npm run tauri build`                             | Release build and NSIS installer in `src-tauri/target/release/bundle/`                                                                                    |
+| `npm run typecheck`                               | TypeScript type-check                                                                                                                                     |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust tests: encoding, atomic save, kill-mid-save, recent/recovery                                                                                         |
+| `./scripts/e2e.ps1`                               | End-to-end smoke test of the release build (needs `npx tauri build --no-bundle` first)                                                                    |
+| `./scripts/check-size.ps1`                        | Fail if the exe or installer exceeds the PRD hard limits (needs a full `npx tauri build`)                                                                 |
 
 The status bar shows two development metrics: `start` (process start to first editable frame) and `preview` (last keystroke to preview paint). Set `MARKY_PERF_LOG=<file>` to have the app append its startup timeline to that file.
 
@@ -201,7 +202,7 @@ scripts/
   build-signed.ps1      Signed release build plus signature verification
   winget-manifest.ps1   winget manifests for a published release
   third-party-notices.mjs  THIRD_PARTY_NOTICES.txt from the npm and Cargo dependency graphs
-  release.ps1           Version bump + commit + annotated tag (does not push)
+  release.ps1           Version bump + CHANGELOG stamp + commit + annotated tag (does not push)
   package-portable.ps1  Portable ZIP with LICENSE and notices
 .github/workflows/
   ci.yml                Windows CI: checks, tests, audits, build, budgets, e2e, installer + portable ZIP

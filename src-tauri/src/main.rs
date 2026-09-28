@@ -329,6 +329,12 @@ fn apply_window_theme(window: &WebviewWindow, settings: &serde_json::Value) {
     let _ = window.set_theme(theme);
 }
 
+/// Menu ticks for toggle settings; the frontend sends them whenever one changes.
+#[tauri::command]
+fn set_menu_checks(app: AppHandle, checks: HashMap<String, bool>) {
+    menu::set_checks(&app, &checks);
+}
+
 // ---- prompts & window lifecycle ----
 
 /// Every message box: app title, modal to the window that asked.
@@ -483,6 +489,7 @@ fn main() {
             recent_files,
             snapshot_buffers,
             save_settings,
+            set_menu_checks,
             set_dirty,
             ask_unsaved_changes,
             ask_choice,

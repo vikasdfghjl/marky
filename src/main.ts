@@ -284,14 +284,25 @@ function applySettings(current: Settings, changed: Partial<Settings>) {
   if ('showPreview' in changed) applyPreviewVisibility();
   if ('showOutline' in changed) outline.setVisible(current.showOutline);
   // autoSave and newFileLineEnding are read when they are used.
+  syncMenuChecks(current, changed);
 }
 
-function togglePreview() {
-  settings.update({ showPreview: !preview.visible });
+/** Native menu check items (ids in menu.rs) and the boolean setting each one toggles. */
+const MENU_TOGGLES = {
+  'toggle-preview': 'showPreview',
+  'toggle-outline': 'showOutline',
+  'toggle-word-wrap': 'wordWrap',
+  'toggle-auto-save': 'autoSave',
+} as const satisfies Record<string, keyof Settings>;
+
+function syncMenuChecks(current: Settings, changed: Partial<Settings>) {
+  const checks = Object.entries(MENU_TOGGLES).filter(([, setting]) => setting in changed);
+  if (!checks.length) return;
+  void api.setMenuChecks(Object.fromEntries(checks.map(([id, setting]) => [id, current[setting]])));
 }
 
-function toggleOutline() {
-  settings.update({ showOutline: !outline.isVisible() });
+function toggleSetting(setting: (typeof MENU_TOGGLES)[keyof typeof MENU_TOGGLES]) {
+  settings.update({ [setting]: !settings.get()[setting] });
 }
 
 /** An empty untitled document with the configured line ending. */
@@ -554,8 +565,10 @@ const commands = {
   redo: editor.redo,
   find: editor.openFind,
   replace: editor.openReplace,
-  'toggle-preview': togglePreview,
-  'toggle-outline': toggleOutline,
+  'toggle-preview': () => toggleSetting('showPreview'),
+  'toggle-outline': () => toggleSetting('showOutline'),
+  'toggle-word-wrap': () => toggleSetting('wordWrap'),
+  'toggle-auto-save': () => toggleSetting('autoSave'),
   settings: () => settingsPanel.toggle(),
   'next-tab': () => activateNeighbour(1),
   'previous-tab': () => activateNeighbour(-1),
@@ -579,6 +592,7 @@ const SHORTCUTS: Record<string, CommandId> = {
   'Ctrl+H': 'replace',
   'Ctrl+Shift+V': 'toggle-preview',
   'Ctrl+Shift+O': 'toggle-outline',
+  'Alt+Z': 'toggle-word-wrap',
   'Ctrl+,': 'settings',
   'Ctrl+Tab': 'next-tab',
   'Ctrl+Shift+Tab': 'previous-tab',

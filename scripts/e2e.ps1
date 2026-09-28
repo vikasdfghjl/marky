@@ -21,8 +21,11 @@ $fixture = Join-Path $dir 'fixture.md'
 [IO.File]::WriteAllText((Join-Path $dir 'second.md'), "# Second file`n")
 [IO.File]::WriteAllBytes((Join-Path $dir 'img\dot.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='))
 
-# Settings persist between launches; every run starts from defaults.
-Remove-Item (Join-Path $env:APPDATA 'dev.marky.editor\settings.json') -ErrorAction SilentlyContinue
+# Settings persist between launches and are shared with an installed Marky: every run
+# starts from defaults, and the user's own settings come back afterwards.
+$settingsFile = Join-Path $env:APPDATA 'dev.marky.editor\settings.json'
+$settingsBackup = Join-Path $dir 'settings.backup.json'
+if (Test-Path $settingsFile) { Move-Item $settingsFile $settingsBackup }
 
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
 
@@ -46,10 +49,26 @@ try {
   Add-Type -Namespace Win32 -Name Menu -MemberDefinition @'
 [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr hWnd);
 [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr hMenu);
+[DllImport("user32.dll")] public static extern IntPtr GetSubMenu(IntPtr hMenu, int pos);
+[DllImport("user32.dll")] public static extern uint GetMenuState(IntPtr hMenu, uint pos, uint flags);
+public static bool IsChecked(IntPtr bar, int menu, uint item) {
+  const uint MF_BYPOSITION = 0x400, MF_CHECKED = 0x8;
+  return (GetMenuState(GetSubMenu(bar, menu), item, MF_BYPOSITION) & MF_CHECKED) != 0;
+}
 '@
   $app.Refresh()
-  $menuCount = [Win32.Menu]::GetMenuItemCount([Win32.Menu]::GetMenu($app.MainWindowHandle))
+  $bar = [Win32.Menu]::GetMenu($app.MainWindowHandle)
+  $menuCount = [Win32.Menu]::GetMenuItemCount($bar)
   Write-Check 'native menu bar has File, Edit, View, Help' ($menuCount -eq 4) "$menuCount top-level menus"
+  # e2e.mjs ends with preview on, outline off, auto-save off and word wrap turned off by Alt+Z.
+  $ticks = @{
+    preview  = [Win32.Menu]::IsChecked($bar, 2, 0)
+    outline  = [Win32.Menu]::IsChecked($bar, 2, 1)
+    wordWrap = [Win32.Menu]::IsChecked($bar, 2, 2)
+    autoSave = [Win32.Menu]::IsChecked($bar, 0, 6)
+  }
+  $ticksMatch = $ticks.preview -and -not ($ticks.outline -or $ticks.wordWrap -or $ticks.autoSave)
+  Write-Check 'menu ticks follow the settings' $ticksMatch (($ticks.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
 
   $app.CloseMainWindow() | Out-Null
   Start-Sleep -Seconds 2
@@ -92,5 +111,7 @@ public static bool HasVisibleDialog(uint processId) {
 }
 finally {
   Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+  Remove-Item $settingsFile -ErrorAction SilentlyContinue
+  if (Test-Path $settingsBackup) { Move-Item $settingsBackup $settingsFile }
 }
 exit $script:failures

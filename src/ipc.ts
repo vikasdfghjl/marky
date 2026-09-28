@@ -67,6 +67,8 @@ const tauriApi = {
   setTitle: (title: string) => getCurrentWindow().setTitle(title),
   /** Persists settings; Rust also applies the theme to the title bar and native menu. */
   saveSettings: (settings: object) => invoke<void>('save_settings', { settings }),
+  /** Ticks native menu check items, keyed by command id. */
+  setMenuChecks: (checks: Record<string, boolean>) => invoke<void>('set_menu_checks', { checks }),
   /** URL prefix of the asset protocol that serves preview images from opened folders. */
   assetBase: () => convertFileSrc(''),
 };

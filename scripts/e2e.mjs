@@ -235,6 +235,11 @@ await setSetting('[value=system]', true);
 await setSetting('select', '14');
 await setSetting('[data-setting=autoSave]', false);
 await evaluate(`document.getElementById('settings-button').click()`);
+// Left off on purpose: e2e.ps1 checks that the native menu's Word Wrap tick followed the key.
+await evaluate(`document.querySelector('.cm-content').focus()`);
+await pressKey('z', 'KeyZ', 90, 1); // Alt+Z
+await sleep(300);
+check('Alt+Z turns word wrap off', !(await evaluate(`document.querySelector('.cm-content').classList.contains('cm-lineWrapping')`)));
 
 const outside = await invoke('resolve_link', { from: fixture, target: '../../../Windows/win.ini' });
 check('links to non-Markdown files are refused', !!outside.err, outside.err ?? 'FOLLOWED');

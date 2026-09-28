@@ -22,6 +22,13 @@ jobs:
           if ("v$version" -ne '${{ github.ref_name }}') { throw "Tag ${{ github.ref_name }} does not match package.json version $version" }
           "VERSION=$version" >> $env:GITHUB_ENV
 
+      - name: Release notes from CHANGELOG.md
+        shell: pwsh
+        run: |
+          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), "(?ms)^## \[$([regex]::Escape($env:VERSION))\][^\n]*\n(.*?)(?=^## \[|\z)").Groups[1].Value.Trim()
+          if (-not $section) { throw "CHANGELOG.md has no section for $env:VERSION" }
+          Set-Content release-notes.md $section
+
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -71,9 +78,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $prerelease = if ($env:VERSION.StartsWith('0.')) { '--prerelease' } else { $null }
-          $notes = @"
+          $install = @"
+          ## Install
+
           Windows x64. Download ``Marky_${env:VERSION}_x64-setup.exe`` (per-user install, no admin prompt) or the portable ZIP.
 
           Beta builds are unsigned: if SmartScreen says *Windows protected your PC*, choose **More info**, then **Run anyway**. Verify downloads against ``SHA256SUMS.txt``.
           "@
-          gh release create '${{ github.ref_name }}' $env:ASSETS.Split(';') --title "Marky $env:VERSION" --notes $notes --generate-notes $prerelease
+          "`n`n$install" | Add-Content release-notes.md
+          gh release create '${{ github.ref_name }}' $env:ASSETS.Split(';') --title "Marky $env:VERSION" --notes-file release-notes.md $prerelease
