@@ -68,6 +68,8 @@ struct StartupState {
     file_error: Option<String>,
     /// Unsaved tabs left by a session that did not end cleanly (empty when none).
     recovery: Vec<Snapshot>,
+    /// Saved settings, or null for defaults; the frontend owns the schema.
+    settings: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -116,17 +118,23 @@ async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<Sta
         state.remember_user_choice(PathBuf::from(path));
     }
 
+    let settings = store::load_settings(&config_dir(&app)?);
     let pending_read = state.startup_read.lock().unwrap().take();
     let Some(pending_read) = pending_read else {
-        return Ok(StartupState { file: None, file_error: None, recovery });
+        return Ok(StartupState { file: None, file_error: None, recovery, settings });
     };
     let (path, read) = pending_read.join().map_err(|_| "startup file reader panicked".to_string())?;
     match read {
         Ok(file) => {
             record_file_access(&app, &path);
-            Ok(StartupState { file: Some(file), file_error: None, recovery })
+            Ok(StartupState { file: Some(file), file_error: None, recovery, settings })
         }
-        Err(e) => Ok(StartupState { file: None, file_error: Some(format!("Could not open {}\n\n{e}", display(&path))), recovery }),
+        Err(e) => Ok(StartupState {
+            file: None,
+            file_error: Some(format!("Could not open {}\n\n{e}", display(&path))),
+            recovery,
+            settings,
+        }),
     }
 }
 
@@ -292,6 +300,35 @@ async fn snapshot_buffers(app: AppHandle, snapshots: Vec<Snapshot>) -> Result<()
 }
 
 
+// ---- settings ----
+
+/// Settings are small; anything larger is not ours.
+const SETTINGS_MAX_BYTES: usize = 16 * 1024;
+
+#[tauri::command]
+async fn save_settings(app: AppHandle, window: WebviewWindow, settings: serde_json::Value) -> Result<(), String> {
+    if !settings.is_object() {
+        return Err("settings must be a JSON object".into());
+    }
+    if settings.to_string().len() > SETTINGS_MAX_BYTES {
+        return Err("settings are too large".into());
+    }
+    store::save_settings(&config_dir(&app)?, &settings).map_err(|e| e.to_string())?;
+    apply_window_theme(&window, &settings);
+    Ok(())
+}
+
+/// Title bar and native menu follow the theme setting; `system` (or anything else) follows Windows.
+/// Done here rather than from JS so the webview needs no set-theme permission.
+fn apply_window_theme(window: &WebviewWindow, settings: &serde_json::Value) {
+    let theme = match settings.get("theme").and_then(|t| t.as_str()) {
+        Some("light") => Some(tauri::Theme::Light),
+        Some("dark") => Some(tauri::Theme::Dark),
+        _ => None,
+    };
+    let _ = window.set_theme(theme);
+}
+
 // ---- prompts & window lifecycle ----
 
 /// Every message box: app title, modal to the window that asked.
@@ -418,7 +455,11 @@ fn main() {
         .menu(menu::build)
         .on_menu_event(menu::on_event)
         .manage(state)
-        .setup(move |_| {
+        .setup(move |app| {
+            // Theme the title bar before the first paint, from the last saved settings.
+            if let (Some(window), Ok(dir)) = (app.get_webview_window("main"), config_dir(app.handle())) {
+                apply_window_theme(&window, &store::load_settings(&dir));
+            }
             perf_log(&format!("setup_ms={:.0}", started.elapsed().as_secs_f64() * 1000.0));
             Ok(())
         })
@@ -441,6 +482,7 @@ fn main() {
             unwatch_file,
             recent_files,
             snapshot_buffers,
+            save_settings,
             set_dirty,
             ask_unsaved_changes,
             ask_choice,

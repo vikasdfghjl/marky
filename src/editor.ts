@@ -1,4 +1,4 @@
-import { EditorState, type Extension } from '@codemirror/state';
+import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import {
   EditorView,
   keymap,
@@ -39,7 +39,8 @@ const highlight = HighlightStyle.define([
 const theme = EditorView.theme({
   '&': { height: '100%', color: 'var(--fg)', backgroundColor: 'var(--bg)' },
   '&.cm-focused': { outline: 'none' },
-  '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.6', padding: '16px 0' },
+  // Font size is a CSS variable (settings), so it applies to every tab's state at once.
+  '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: 'var(--editor-font-size, 14px)', lineHeight: '1.6', padding: '16px 0' },
   '.cm-content': { caretColor: 'var(--fg)', padding: '0 24px', maxWidth: '100ch' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--fg)' },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground':
@@ -67,6 +68,7 @@ export interface Editor {
   openReplace(): void;
   /** Puts the cursor at the start of a 0-based source line and scrolls it to the top. */
   goToLine(line: number): void;
+  setWordWrap(on: boolean): void;
   /** Cursor offset and scroll position, to restore after reloading the same file. */
   viewPosition(): ViewPosition;
   restoreViewPosition(position: ViewPosition): void;
@@ -78,6 +80,11 @@ export interface ViewPosition {
 }
 
 export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => void): Editor {
+  // Each tab owns a state, so word wrap lives in a compartment that show() re-applies.
+  const wrap = new Compartment();
+  let wordWrap = true;
+  const wrapExtension = () => (wordWrap ? EditorView.lineWrapping : []);
+
   const extensions = (ro: boolean): Extension[] => [
     highlightSpecialChars(),
     history(),
@@ -92,7 +99,7 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     // YAML frontmatter (SKILL.md, docs sites, AI config files) is highlighted as YAML.
     yamlFrontmatter({ content: markdown({ base: markdownLanguage, codeLanguages: languages }) }),
     syntaxHighlighting(highlight),
-    EditorView.lineWrapping,
+    wrap.of(wrapExtension()),
     EditorView.contentAttributes.of({ spellcheck: 'false', 'aria-label': 'Markdown source' }),
     theme,
     EditorState.readOnly.of(ro),
@@ -111,6 +118,8 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     EditorState.create({ doc: text, extensions: extensions(!!opts.readOnly) });
   const show = (state: EditorState, scrollTop = 0) => {
     view.setState(state);
+    // A background tab may predate the last word-wrap change.
+    if (wrap.get(state) !== wrapExtension()) view.dispatch({ effects: wrap.reconfigure(wrapExtension()) });
     view.focus();
     // Wait for the new document's layout before scrolling.
     if (scrollTop) requestAnimationFrame(() => (view.scrollDOM.scrollTop = scrollTop));
@@ -134,6 +143,11 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
       const pos = doc.line(Math.min(Math.max(line + 1, 1), doc.lines)).from;
       view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'start' }) });
       view.focus();
+    },
+    setWordWrap(on) {
+      if (on === wordWrap) return;
+      wordWrap = on;
+      view.dispatch({ effects: wrap.reconfigure(wrapExtension()) });
     },
     viewPosition: () => ({ cursor: view.state.selection.main.head, scrollTop: view.scrollDOM.scrollTop }),
     restoreViewPosition({ cursor, scrollTop }) {

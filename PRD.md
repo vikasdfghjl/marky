@@ -239,13 +239,15 @@ MVP in 3 weeks and v1.0 in 7 weeks, assuming one developer part-time (\~20 h/wee
 | M3 v1.0 | 6–7 | Signing, winget, accessibility and IME pass, docs | All budgets met at target (not hard limit); signed installer published |
 | M4 v1.x | 8+ | P2: tabs, export, Mermaid/KaTeX, outline, auto-update | Per-feature, without breaching budgets |
 
-**M2 status (27 Sep 2026):** F8, F10, F11, F12, F13 crash recovery, and F9's recent list (Ctrl+R) are done; CI, size budgets and the portable ZIP are in `.github/workflows/ci.yml`. Deferred: F13 optional auto-save (needs a settings surface) and F9 taskbar jump-list entries (need Win32 code outside Tauri's API). Synced scroll is one-way (editor drives preview).
+**M2 status (27 Sep 2026):** F8, F10, F11, F12, F13 crash recovery, and F9's recent list (Ctrl+R) are done; CI, size budgets and the portable ZIP are in `.github/workflows/ci.yml`. Deferred: F9 taskbar jump-list entries (need Win32 code outside Tauri's API). Synced scroll is one-way (editor drives preview).
 
 **M3 status (27 Sep 2026):** WCAG AA contrast is verified by script in both themes; keyboard and screen-reader fixes are in (focusable preview, no live-region spam, listbox semantics); IME composition is covered by the end-to-end test. Signing is wired route-agnostically (`scripts/build-signed.ps1`, CI secret `MARKY_SIGN_COMMAND`) and the winget manifest generator is validated; both wait on the signing decision and a first public release. The exit gate 'all budgets at target' is not met: cold start is about 940 ms (target 800) and idle RAM about 103 MB (target 90). Both are dominated by WebView2 itself; see the README Benchmarks section and AGENTS.md for what was tried. Manual NVDA and Narrator passes are still to do.
 
 **F14 status (27 Sep 2026):** tabs shipped early with a native menu bar and multi-file drag and drop. Measured memory growth is 2.5 MB per extra 100 KB tab (budget 3 MB).
 
 **F16/F17 status (27 Sep 2026):** Mermaid (lazy, strict security, cached), KaTeX math (worker-rendered, lazy CSS and fonts) and the outline sidebar shipped. The installer is 4.46 MB with both.
+
+**Settings (28 Sep 2026):** a settings panel (gear, Ctrl+,) covers theme, font size, word wrap, auto-save (completing F13, off by default), the line ending for new files, and preview and outline visibility.
 
 ## Risks and open questions
 

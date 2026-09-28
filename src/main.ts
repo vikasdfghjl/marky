@@ -9,6 +9,9 @@ import { createTabStrip } from './tab-strip';
 import { createOutline } from './outline';
 import { statusBar } from './status-bar';
 import { listenForShortcuts } from './shortcuts';
+import { createSettingsStore, readSettings, type Settings } from './settings';
+import { createSettingsPanel } from './settings-panel';
+import { applyTheme } from './theme';
 import { URL_SCHEME, UNTITLED, fileName, folderOf } from './paths';
 import { api, type FileMeta, type OpenedFile, type Snapshot } from './ipc';
 
@@ -18,6 +21,8 @@ const FILE_CHANGE_SETTLE_MS = 100;
 const SNAPSHOT_INTERVAL_MS = 30_000;
 /** Above this size the preview starts hidden (PRD: files > 5 MB open with preview off). */
 const PREVIEW_AUTO_OFF_BYTES = 5 * 1024 * 1024;
+/** Auto-save waits for a real pause, not every typing pause, to keep disk writes and watcher events rare. */
+const AUTO_SAVE_DELAY_MS = 1000;
 /** PRD F14: up to 20 open files. */
 const MAX_TABS = 20;
 
@@ -51,6 +56,7 @@ const NEW_DOCUMENT: EditorDocument = {
 };
 
 let typingPauseTimer: number | undefined;
+let autoSaveTimer: number | undefined;
 let lastEditAt = 0;
 let nextTabId = 1;
 /** Mirrors Rust's close guard: true while any tab has unsaved changes. */
@@ -59,8 +65,6 @@ let windowDirty = false;
 let lastSnapshotJson = '[]';
 /** `#anchor` of a cross-file link, applied once the linked file's preview has rendered. */
 let pendingAnchor: string | null = null;
-/** User's Ctrl+Shift+V choice; large files additionally force the preview off. */
-let previewWanted = true;
 /** Opens run one at a time, so a multi-file drop creates tabs in order. */
 let openQueue: Promise<void> = Promise.resolve();
 const fileChangeTimers = new Map<number, number>();
@@ -75,6 +79,10 @@ const tabStrip = createTabStrip($('tabs'), {
   onActivate: (id) => activate(tabById(id)),
   onClose: (id) => void closeTab(tabById(id)),
 });
+
+const settings = createSettingsStore((current) => void api.saveSettings(current));
+settings.onChange(applySettings);
+const settingsPanel = createSettingsPanel($('settings-button') as HTMLButtonElement, settings);
 
 const tabs: Tab[] = [];
 let active: Tab = createTab({ ...NEW_DOCUMENT }, editor.view.state);
@@ -190,6 +198,18 @@ function onEditorUpdate(update: ViewUpdate) {
   setDirty(true);
   clearTimeout(typingPauseTimer);
   typingPauseTimer = window.setTimeout(renderAfterTypingPause, TYPING_PAUSE_MS);
+  scheduleAutoSave();
+}
+
+/** Saves the active tab once typing has paused, if auto-save is on. Untitled and read-only tabs are never auto-saved. */
+function scheduleAutoSave() {
+  clearTimeout(autoSaveTimer);
+  const tab = active;
+  if (!settings.get().autoSave || !tab.path || tab.readOnly) return;
+  autoSaveTimer = window.setTimeout(() => {
+    // save() writes the editor's text, so only while this tab is still the one shown.
+    if (tab === active && tab.dirty) void save();
+  }, AUTO_SAVE_DELAY_MS);
 }
 
 /** Single place that changes dirty state; Rust hears only window-level transitions, never keystrokes. */
@@ -245,15 +265,38 @@ function refreshAllViews() {
 }
 
 function applyPreviewVisibility() {
-  const visible = previewWanted && editor.view.state.doc.length <= PREVIEW_AUTO_OFF_BYTES;
+  const visible = settings.get().showPreview && editor.view.state.doc.length <= PREVIEW_AUTO_OFF_BYTES;
   if (visible === preview.visible) return;
   preview.setVisible(visible);
   if (visible) preview.render(editor.text());
 }
 
+// ---- settings ----
+
+/** Applies changed settings; at startup `changed` is every setting. */
+function applySettings(current: Settings, changed: Partial<Settings>) {
+  if ('theme' in changed) applyTheme(current.theme);
+  if ('fontSize' in changed) {
+    document.documentElement.style.setProperty('--editor-font-size', `${current.fontSize}px`);
+    editor.view.requestMeasure();
+  }
+  if ('wordWrap' in changed) editor.setWordWrap(current.wordWrap);
+  if ('showPreview' in changed) applyPreviewVisibility();
+  if ('showOutline' in changed) outline.setVisible(current.showOutline);
+  // autoSave and newFileLineEnding are read when they are used.
+}
+
 function togglePreview() {
-  previewWanted = !preview.visible;
-  applyPreviewVisibility();
+  settings.update({ showPreview: !preview.visible });
+}
+
+function toggleOutline() {
+  settings.update({ showOutline: !outline.isVisible() });
+}
+
+/** An empty untitled document with the configured line ending. */
+function newDocumentContent(): EditorDocument {
+  return { ...NEW_DOCUMENT, meta: { bom: false, lineEnding: settings.get().newFileLineEnding } };
 }
 
 // ---- documents ----
@@ -293,7 +336,7 @@ async function openPath(path: string) {
 
 function newDocument() {
   if (isPristine(active)) return editor.view.focus();
-  addTab({ ...NEW_DOCUMENT });
+  addTab(newDocumentContent());
 }
 
 /** Closing the last tab closes the window, as in Windows Notepad. */
@@ -512,7 +555,8 @@ const commands = {
   find: editor.openFind,
   replace: editor.openReplace,
   'toggle-preview': togglePreview,
-  'toggle-outline': outline.toggle,
+  'toggle-outline': toggleOutline,
+  settings: () => settingsPanel.toggle(),
   'next-tab': () => activateNeighbour(1),
   'previous-tab': () => activateNeighbour(-1),
 } satisfies Record<string, () => unknown>;
@@ -535,6 +579,7 @@ const SHORTCUTS: Record<string, CommandId> = {
   'Ctrl+H': 'replace',
   'Ctrl+Shift+V': 'toggle-preview',
   'Ctrl+Shift+O': 'toggle-outline',
+  'Ctrl+,': 'settings',
   'Ctrl+Tab': 'next-tab',
   'Ctrl+Shift+Tab': 'previous-tab',
 };
@@ -553,7 +598,7 @@ async function start() {
     api.startupState(),
   ]);
   performance.mark('ipc-ready');
-  outline.restoreVisibility();
+  settings.load(readSettings(startup.settings));
 
   // Paint first: the file was pre-read in Rust while WebView2 started.
   if (startup.file) loadIntoTab(active, startup.file);

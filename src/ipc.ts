@@ -65,6 +65,8 @@ const tauriApi = {
   /** Fired only when the window is closed with unsaved changes; clean windows close natively. */
   onCloseRequested: (cb: () => void): Promise<UnlistenFn> => listen('close-requested', cb),
   setTitle: (title: string) => getCurrentWindow().setTitle(title),
+  /** Persists settings; Rust also applies the theme to the title bar and native menu. */
+  saveSettings: (settings: object) => invoke<void>('save_settings', { settings }),
   /** URL prefix of the asset protocol that serves preview images from opened folders. */
   assetBase: () => convertFileSrc(''),
 };
@@ -84,6 +86,8 @@ export interface StartupState {
   fileError: string | null;
   /** Unsaved tabs left by a session that did not end cleanly; empty when none. */
   recovery: Snapshot[];
+  /** Saved settings as written, or null; read them through `readSettings`. */
+  settings: unknown;
 }
 
 /** Crash-recovery copy of an unsaved buffer. */

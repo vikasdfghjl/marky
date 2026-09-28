@@ -21,6 +21,9 @@ $fixture = Join-Path $dir 'fixture.md'
 [IO.File]::WriteAllText((Join-Path $dir 'second.md'), "# Second file`n")
 [IO.File]::WriteAllBytes((Join-Path $dir 'img\dot.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='))
 
+# Settings persist between launches; every run starts from defaults.
+Remove-Item (Join-Path $env:APPDATA 'dev.marky.editor\settings.json') -ErrorAction SilentlyContinue
+
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
 
 . (Join-Path $PSScriptRoot 'lib.ps1')

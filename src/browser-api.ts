@@ -35,8 +35,27 @@ function readFile(path: string): OpenedFile {
 
 const noListener = () => Promise.resolve(() => {});
 
+// Settings survive reloads through browser storage; it may be unavailable, then defaults apply.
+const SETTINGS_KEY = 'marky.settings';
+
+function loadSettings(): unknown {
+  try {
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
+  } catch {
+    return null;
+  }
+}
+
+function storeSettings(settings: object) {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // Not remembered across reloads.
+  }
+}
+
 export const browserApi: MarkyApi = {
-  startupState: async () => ({ file: readFile(SAMPLE_PATH), fileError: null, recovery: [] }),
+  startupState: async () => ({ file: readFile(SAMPLE_PATH), fileError: null, recovery: [], settings: loadSettings() }),
   // No process start to measure against: report time since navigation.
   startupMs: async (jsMs) => jsMs,
   pickOpen: async () => null,
@@ -71,6 +90,7 @@ export const browserApi: MarkyApi = {
   onDragHover: noListener,
   onCloseRequested: noListener,
   setTitle: async () => {},
+  saveSettings: async (settings) => storeSettings(settings),
   // No asset protocol: relative images stay unresolved in the browser.
   assetBase: () => '',
 };

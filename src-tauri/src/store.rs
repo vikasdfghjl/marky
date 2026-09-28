@@ -33,6 +33,18 @@ pub fn push_recent(config_dir: &Path, path: &Path) -> io::Result<()> {
     write_json(&config_dir.join(RECENT_FILE), &recent)
 }
 
+const SETTINGS_FILE: &str = "settings.json";
+
+/// The user's settings as the frontend wrote them (it owns the schema and fills defaults).
+/// Missing or corrupt reads as `Null`, which means "all defaults".
+pub fn load_settings(config_dir: &Path) -> serde_json::Value {
+    read_json(&config_dir.join(SETTINGS_FILE)).unwrap_or(serde_json::Value::Null)
+}
+
+pub fn save_settings(config_dir: &Path, settings: &serde_json::Value) -> io::Result<()> {
+    write_json(&config_dir.join(SETTINGS_FILE), settings)
+}
+
 /// One entry per unsaved tab.
 pub fn save_snapshots(data_dir: &Path, snapshots: &[Snapshot]) -> io::Result<()> {
     write_json(&data_dir.join(SNAPSHOT_FILE), snapshots)
@@ -119,6 +131,15 @@ mod tests {
         clear_snapshot(&dir).unwrap();
         assert!(read_snapshots(&dir).is_empty());
         clear_snapshot(&dir).unwrap();
+    }
+
+    #[test]
+    fn settings_round_trip_and_default_to_null() {
+        let dir = temp_dir("settings");
+        assert_eq!(load_settings(&dir), serde_json::Value::Null);
+        let settings = serde_json::json!({ "theme": "dark", "fontSize": 15 });
+        save_settings(&dir, &settings).unwrap();
+        assert_eq!(load_settings(&dir), settings);
     }
 
     #[test]

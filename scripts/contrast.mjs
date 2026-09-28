@@ -4,11 +4,12 @@ import { readFileSync } from 'node:fs';
 
 const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 
-function tokens(block) {
-  return Object.fromEntries([...block.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1], m[2]]));
-}
-const light = tokens(css.slice(0, css.indexOf('@media (prefers-color-scheme: dark)')));
-const dark = { ...light, ...tokens(css.slice(css.indexOf('@media (prefers-color-scheme: dark)'))) };
+// Tokens are `--name: light-dark(#light, #dark);` (or one colour for both themes).
+const HEX = '(#[0-9a-f]{6})';
+const themedTokens = [...css.matchAll(new RegExp(`--([\\w-]+):\\s*light-dark\\(${HEX},\\s*${HEX}\\)`, 'gi'))];
+const plainTokens = [...css.matchAll(new RegExp(`--([\\w-]+):\\s*${HEX};`, 'gi'))];
+const light = Object.fromEntries([...plainTokens.map((m) => [m[1], m[2]]), ...themedTokens.map((m) => [m[1], m[2]])]);
+const dark = Object.fromEntries([...plainTokens.map((m) => [m[1], m[2]]), ...themedTokens.map((m) => [m[1], m[3]])]);
 
 function luminance(hex) {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);

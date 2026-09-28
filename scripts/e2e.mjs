@@ -204,6 +204,38 @@ check('outline click moves the editor to the heading', (await evaluate(`document
   (await evaluate(`document.querySelector('#outline [aria-current]')?.textContent`)) === 'Docs Section');
 await emitMenu('toggle-outline'); // leave it hidden: visibility persists across launches
 
+// Settings: the gear panel (opened here through its menu command) changes the app live.
+await emitMenu('settings');
+await sleep(300);
+check('Settings opens the settings panel', await evaluate(`!document.getElementById('settings-panel').hidden`));
+const setSetting = (selector, value) =>
+  evaluate(`(() => {
+    const control = document.querySelector('#settings-panel ${selector}');
+    if (control.type === 'checkbox' || control.type === 'radio') control.checked = ${JSON.stringify(value)};
+    else control.value = ${JSON.stringify(value)};
+    control.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+await setSetting('[value=dark]', true);
+await setSetting('select', '18');
+await sleep(300);
+check('theme and font size apply live', (await evaluate(`document.documentElement.dataset.theme`)) === 'dark' &&
+  (await evaluate(`getComputedStyle(document.querySelector('.cm-scroller')).fontSize`)) === '18px');
+await setSetting('[data-setting=autoSave]', true);
+await evaluate(`document.querySelector('.cm-content').focus()`);
+await pressKey('End', 'End', 35, 2); // Ctrl+End
+await send('Input.insertText', { text: '\nauto-saved line\n' });
+await sleep(2000);
+check('auto-save writes the file after typing stops', readFileSync(fixture, 'utf8').includes('auto-saved line') &&
+  !(await title()).startsWith('● '), await title());
+const settingsFile = `${process.env.APPDATA}\\dev.marky.editor\\settings.json`;
+const savedSettings = JSON.parse(readFileSync(settingsFile, 'utf8'));
+check('settings persist to settings.json', savedSettings.theme === 'dark' && savedSettings.autoSave === true, JSON.stringify(savedSettings));
+// Back to defaults, so later checks and the next run start clean.
+await setSetting('[value=system]', true);
+await setSetting('select', '14');
+await setSetting('[data-setting=autoSave]', false);
+await evaluate(`document.getElementById('settings-button').click()`);
+
 const outside = await invoke('resolve_link', { from: fixture, target: '../../../Windows/win.ini' });
 check('links to non-Markdown files are refused', !!outside.err, outside.err ?? 'FOLLOWED');
 const script = await invoke('open_external', { url: 'javascript:alert(1)' });

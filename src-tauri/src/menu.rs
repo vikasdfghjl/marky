@@ -20,6 +20,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .text("save", "&Save\tCtrl+S")
         .text("save-as", "Save &As…\tCtrl+Shift+S")
         .separator()
+        .text("settings", "Se&ttings…\tCtrl+,")
+        .separator()
         .text("close", "&Close Tab\tCtrl+W")
         .build()?;
     let edit = SubmenuBuilder::new(app, "&Edit")

@@ -1,4 +1,5 @@
 import type { Mermaid } from 'mermaid';
+import { isDark, onThemeChange } from './theme';
 
 // Draws ```mermaid fences (PRD F16). Mermaid is about 1 MB, so it loads only when a
 // document contains a diagram, and each SVG is cached by source and theme: the preview
@@ -9,11 +10,9 @@ const svgCache = new Map<string, string>();
 let mermaid: Promise<Mermaid> | null = null;
 let renderCount = 0;
 
-const darkScheme = window.matchMedia('(prefers-color-scheme: dark)');
-
 /** 'strict' encodes HTML in labels and disables click handlers: the source is untrusted. */
 function configure(m: Mermaid): Mermaid {
-  m.initialize({ startOnLoad: false, securityLevel: 'strict', theme: darkScheme.matches ? 'dark' : 'default' });
+  m.initialize({ startOnLoad: false, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default' });
   return m;
 }
 
@@ -22,9 +21,9 @@ function loadMermaid(): Promise<Mermaid> {
   return mermaid;
 }
 
-/** Re-renders diagrams when the OS theme flips (the cache is keyed by theme). */
+/** Re-renders diagrams when the app theme flips (the cache is keyed by theme). */
 export function onMermaidThemeChange(rerender: () => void) {
-  darkScheme.addEventListener('change', () => {
+  onThemeChange(() => {
     if (!mermaid) return;
     void mermaid.then((m) => {
       configure(m);
@@ -40,7 +39,7 @@ export function onMermaidThemeChange(rerender: () => void) {
 export async function drawMermaidBlocks(container: HTMLElement, isCurrent: () => boolean) {
   const blocks = [...container.querySelectorAll<HTMLElement>('.mermaid:not([data-drawn])')];
   if (blocks.length === 0) return;
-  const theme = darkScheme.matches ? 'dark' : 'default';
+  const theme = isDark() ? 'dark' : 'default';
 
   for (const block of blocks) {
     const source = block.textContent ?? '';

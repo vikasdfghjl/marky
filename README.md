@@ -63,12 +63,13 @@ Working now:
 - Tabs: up to 20 files, each with its own undo history, cursor and scroll position. Opening a file that is already open focuses its tab; a second launch from Explorer opens in a new tab
 - Drag and drop files onto the window to open them, one tab each
 - Native menu bar (File, Edit, View, Help), with Alt and arrow-key navigation
+- Settings (gear at the top right, or Ctrl+,): theme (System, Light or Dark, including the title bar and menu), editor font size, word wrap, auto-save, the line ending for new files, and preview and outline visibility. Saved to `settings.json` in the app's config folder
 - Recent files (last 10), Ctrl+R
 - Crash recovery: unsaved changes are snapshotted every 30 s and offered back after a crash
 
 Built, not yet tested end to end: the open dialog, the native drop itself (the overlay and the open path are tested), and the Reload / Keep mine and crash-recovery prompts.
 
-Not yet built: optional auto-save (F13, waits for a settings surface) and taskbar jump-list entries for recent files (F9, needs Win32 code).
+Not yet built: taskbar jump-list entries for recent files (F9, needs Win32 code).
 
 ## Keyboard shortcuts
 
@@ -83,6 +84,7 @@ Not yet built: optional auto-save (F13, waits for a settings surface) and taskba
 | Ctrl+Tab        | Next tab (Ctrl+Shift+Tab: previous)                 |
 | Ctrl+Shift+V    | Toggle preview                                      |
 | Ctrl+Shift+O    | Toggle outline sidebar                              |
+| Ctrl+,          | Settings                                            |
 | Ctrl+F          | Find                                                |
 | Ctrl+H          | Find and replace                                    |
 | Ctrl+Z / Ctrl+Y | Undo / redo                                         |
@@ -172,6 +174,9 @@ src/
   recent-picker.ts      Ctrl+R recent-files list
   tab-strip.ts          Tab strip rendering (tablist semantics)
   status-bar.ts         Footer: cursor, counts, file format, timings
+  settings.ts           Settings model, defaults, defensive reading, store
+  settings-panel.ts     The gear's settings panel
+  theme.ts              Effective light/dark theme (System, Light or Dark)
   shortcuts.ts          Keyboard dispatch into the command table (blocks reload keys)
   paths.ts              File-name, folder and path helpers shared by page and worker
   perf.ts               Cold-start instrumentation
