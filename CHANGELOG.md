@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-28
+
 ### Changed
 
 - Faster startup: a cold start now takes about 816 ms instead of 924 ms on the test laptop. The startup code is 23% smaller, and WebView2 starts one process fewer.
