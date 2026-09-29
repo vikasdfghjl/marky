@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-09-29
+
 ### Changed
 
 - Marky gives memory back when you leave it alone: after 30 seconds without a key press, click or scroll (and while minimised) it drops from about 99 MB to about 77 MB for a typical document. The first key press afterwards takes a few milliseconds longer.
