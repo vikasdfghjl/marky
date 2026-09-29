@@ -1,5 +1,6 @@
 import { api } from './ipc';
 import { drawMermaidBlocks, onMermaidThemeChange } from './mermaid-blocks';
+import { createBlockDom } from './preview-blocks';
 import type { RenderRequest, RenderResult } from './preview.worker';
 
 export interface Preview {
@@ -19,8 +20,9 @@ function loadMathStylesIfNeeded(el: HTMLElement) {
 }
 
 /**
- * Parsing runs in a worker; the main thread only swaps in the HTML. Link clicks never
- * navigate the webview: they go to `onLinkClick` with the raw href.
+ * Parsing runs in a worker; the main thread only replaces the blocks that changed (see
+ * preview-blocks.ts). Link clicks never navigate the webview: they go to `onLinkClick`
+ * with the raw href.
  */
 export function createPreview(
   el: HTMLElement,
@@ -33,18 +35,22 @@ export function createPreview(
   let visible = true;
   let documentFolder: string | null = null;
   let lastText = '';
+  const blockDom = createBlockDom(el);
 
   worker.onmessage = async (e: MessageEvent<RenderResult>) => {
     const { id } = e.data;
     if (id !== seq) return; // stale result, a newer render is in flight
-    el.innerHTML = e.data.html;
+    blockDom.apply(e.data.blocks);
     loadMathStylesIfNeeded(el);
     await drawMermaidBlocks(el, () => id === seq);
     if (id !== seq) return;
     requestAnimationFrame(() => onRendered(e.data.ms));
   };
 
-  onMermaidThemeChange(() => render(lastText));
+  onMermaidThemeChange(() => {
+    blockDom.replaceEverythingNextTime(); // drawn diagrams are theme-specific
+    render(lastText);
+  });
 
   el.addEventListener('click', (e) => {
     const link = (e.target as Element).closest('a');

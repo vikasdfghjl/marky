@@ -6,6 +6,7 @@ mod memory;
 mod menu;
 mod store;
 mod watcher;
+mod window;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -322,12 +323,7 @@ async fn save_settings(app: AppHandle, window: WebviewWindow, settings: serde_js
 /// Title bar and native menu follow the theme setting; `system` (or anything else) follows Windows.
 /// Done here rather than from JS so the webview needs no set-theme permission.
 fn apply_window_theme(window: &WebviewWindow, settings: &serde_json::Value) {
-    let theme = match settings.get("theme").and_then(|t| t.as_str()) {
-        Some("light") => Some(tauri::Theme::Light),
-        Some("dark") => Some(tauri::Theme::Dark),
-        _ => None,
-    };
-    let _ = window.set_theme(theme);
+    let _ = window.set_theme(window::saved_theme(settings));
 }
 
 /// Menu ticks for toggle settings; the frontend sends them whenever one changes.
@@ -464,10 +460,10 @@ fn main() {
         .on_menu_event(menu::on_event)
         .manage(state)
         .setup(move |app| {
-            // Theme the title bar before the first paint, from the last saved settings.
-            if let (Some(window), Ok(dir)) = (app.get_webview_window("main"), config_dir(app.handle())) {
-                apply_window_theme(&window, &store::load_settings(&dir));
-            }
+            // The window is created here, not from config, so its title bar and background
+            // already match the saved theme when it first appears (no white flash).
+            let settings = config_dir(app.handle()).map(|dir| store::load_settings(&dir)).unwrap_or_default();
+            window::create_main(app.handle(), &settings)?;
             perf_log(&format!("setup_ms={:.0}", started.elapsed().as_secs_f64() * 1000.0));
             Ok(())
         })

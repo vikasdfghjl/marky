@@ -201,6 +201,35 @@ check('inline and display math rendered', await evaluate(`!!document.querySelect
 check('prices with $ stay plain text', await evaluate(`document.getElementById('preview').textContent.includes('costs $5 and $10')`));
 check('KaTeX fonts load under the CSP', await evaluate(`document.fonts.ready.then(() => document.fonts.check('16px KaTeX_Main'))`));
 
+// Incremental preview: an edit replaces only the block it changed. Untouched blocks keep their DOM
+// nodes (a drawn Mermaid diagram included), and lines added above only renumber data-line.
+await evaluate(`document.querySelectorAll('#preview > *').forEach((node) => (node.__kept = true))`);
+await evaluate(`document.querySelector('.cm-content').focus()`);
+await pressKey('End', 'End', 35, 2); // Ctrl+End
+await send('Input.insertText', { text: '\nOne more paragraph.\n' });
+await sleep(1500);
+const afterTyping = await evaluate(`(() => {
+  const blocks = [...document.querySelectorAll('#preview > *')];
+  return { total: blocks.length, rebuilt: blocks.filter((n) => !n.__kept).length,
+    diagramKept: !!document.querySelector('#preview .mermaid[data-drawn="svg"]')?.__kept };
+})()`);
+check('typing rebuilds only the changed preview block', afterTyping.rebuilt <= 2 && afterTyping.diagramKept, JSON.stringify(afterTyping));
+
+const linesBefore = await evaluate(`(() => {
+  const nodes = [...document.querySelectorAll('#preview [data-line]')];
+  nodes.forEach((node) => (node.__line = Number(node.dataset.line)));
+  return nodes.length;
+})()`);
+await pressKey('Home', 'Home', 36, 2); // Ctrl+Home
+await send('Input.insertText', { text: '\n' });
+await sleep(1500);
+const afterInsert = await evaluate(`(() => {
+  const nodes = [...document.querySelectorAll('#preview [data-line]')].filter((n) => n.__line !== undefined);
+  return { kept: nodes.length, shiftedByOne: nodes.every((n) => Number(n.dataset.line) === n.__line + 1) };
+})()`);
+check('a line added above renumbers the preview instead of rebuilding it',
+  afterInsert.kept === linesBefore && linesBefore > 5 && afterInsert.shiftedByOne, `${linesBefore} before, ${JSON.stringify(afterInsert)}`);
+
 // Outline sidebar (F17): headings from the syntax tree, click to jump.
 await emitMenu('toggle-outline');
 await sleep(300);
@@ -259,6 +288,20 @@ check('only http(s)/mailto links open externally', !!script.err && !!fileUrl.err
 await send('Input.insertText', { text: 'unsaved ' });
 await sleep(300);
 check('dirty again before close test', (await title()).startsWith('● '));
+
+// Recovery snapshots are written on a 30 s timer, and a tick that lands while the buffer is clean
+// clears the file. Wait for one that holds this edit so the relaunch check in e2e.ps1 is deterministic.
+const recoveryFile = `${process.env.LOCALAPPDATA}\\dev.marky.editor\\recovery.json`;
+let snapshotted = false;
+for (let waited = 0; waited < 35_000 && !snapshotted; waited += 1000) {
+  await sleep(1000);
+  try {
+    snapshotted = readFileSync(recoveryFile, 'utf8').includes('unsaved ');
+  } catch {
+    // not written yet
+  }
+}
+check('unsaved edits are snapshotted for crash recovery', snapshotted);
 
 ws.close();
 process.exit(failures ? 1 : 0);

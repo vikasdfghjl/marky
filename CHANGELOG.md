@@ -4,6 +4,14 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Changed
+
+- Editing large documents is much smoother: the preview now updates only the part you changed instead of redrawing everything. On a 1 MB file the longest freeze drops from 0.9 s to 0.09 s, typing latency from 31 ms to 20 ms, and memory while typing from 1.5 GB to 0.57 GB. On a 4 MB file typing goes from 66 ms to 19 ms. Diagrams stay drawn while you edit elsewhere.
+
+### Fixed
+
+- No more white flash when opening Marky in dark mode: the window used to show white for about 0.65 s before the editor appeared. It now starts in the theme's own colour, for System, Light and Dark.
+
 ## [0.2.5] - 2026-09-28
 
 ### Changed

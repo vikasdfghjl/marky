@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Marky",
         "width": 1200,
         "height": 800,

@@ -4,6 +4,7 @@ import { highlightFence, prepareLanguages } from './code-highlight';
 import { dataLineAttr, fenceLanguage, frontmatter, githubAlerts, headingAnchors } from './markdown-plugins';
 import { mathPlugin, prepareMath, renderMathFence } from './math';
 import { URL_SCHEME, joinWindowsPath } from './paths';
+import type { RenderedBlock } from './preview-blocks';
 
 export interface RenderRequest {
   id: number;
@@ -16,7 +17,7 @@ export interface RenderRequest {
 
 export interface RenderResult {
   id: number;
-  html: string;
+  blocks: RenderedBlock[];
   ms: number;
 }
 
@@ -96,6 +97,52 @@ function fenceLanguages(tokens: Token[]): Set<string> {
   return names;
 }
 
+/**
+ * Renders each top-level block on its own, so the page can replace only the blocks an edit
+ * changed (preview-blocks.ts). A block is a level-0 token, or a level-0 open token through
+ * its matching close.
+ */
+function renderBlocks(tokens: Token[], env: RenderEnv): RenderedBlock[] {
+  const blocks: RenderedBlock[] = [];
+  for (let start = 0; start < tokens.length; ) {
+    const end = blockEnd(tokens, start);
+    const block = tokens.slice(start, end + 1);
+    const html = md.renderer.render(block, md.options, env);
+    const line = block[0].map?.[0] ?? 0;
+    blocks.push({ html, line, signature: signatureOf(html, line) });
+    start = end + 1;
+  }
+  return blocks;
+}
+
+function blockEnd(tokens: Token[], start: number): number {
+  if (tokens[start].nesting !== 1) return start;
+  for (let i = start + 1; i < tokens.length; i++) {
+    if (tokens[i].level === 0 && tokens[i].nesting === -1) return i;
+  }
+  return tokens.length - 1;
+}
+
+/** Content identity ignoring position: `data-line` becomes an offset from the block's own line. */
+function signatureOf(html: string, line: number): string {
+  const relative = html.replace(/ data-line="(\d+)"/g, (_, value) => ` data-line="+${Number(value) - line}"`);
+  return `${relative.length}:${hash(relative)}`;
+}
+
+/** cyrb53: a fast 53-bit string hash; with the length it makes an accidental clash negligible. */
+function hash(text: string): number {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   const start = performance.now();
   const { id, text, documentFolder, assetBase } = e.data;
@@ -103,7 +150,6 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   // Parse once; load any fence languages (async, first use only), then render synchronously.
   const tokens = md.parse(text, env);
   await Promise.all([prepareLanguages(fenceLanguages(tokens)), prepareMath(tokens)]);
-  const html = md.renderer.render(tokens, md.options, env);
-  const result: RenderResult = { id, html, ms: performance.now() - start };
+  const result: RenderResult = { id, blocks: renderBlocks(tokens, env), ms: performance.now() - start };
   self.postMessage(result);
 };
