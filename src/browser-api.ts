@@ -92,6 +92,7 @@ export const browserApi: MarkyApi = {
   setTitle: async () => {},
   saveSettings: async (settings) => storeSettings(settings),
   setMenuChecks: async () => {},
+  setIdle: async () => {},
   // No asset protocol: relative images stay unresolved in the browser.
   assetBase: () => '',
 };

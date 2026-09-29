@@ -69,6 +69,8 @@ const tauriApi = {
   saveSettings: (settings: object) => invoke<void>('save_settings', { settings }),
   /** Ticks native menu check items, keyed by command id. */
   setMenuChecks: (checks: Record<string, boolean>) => invoke<void>('set_menu_checks', { checks }),
+  /** Reports the user going idle or active again, so Rust can trim WebView2's memory while idle. */
+  setIdle: (idle: boolean) => invoke<void>('set_idle', { idle }),
   /** URL prefix of the asset protocol that serves preview images from opened folders. */
   assetBase: () => convertFileSrc(''),
 };

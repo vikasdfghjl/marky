@@ -8,41 +8,50 @@ Marky opens a `.md` file, lets you edit it with syntax highlighting and a live s
 
 ## Benchmarks
 
-Latest run: 29 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with README.md open. Each figure is the median of 9 runs.
+Latest run: 29 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with `scripts/fixtures/typical.md` open: a 5 KB document with YAML frontmatter, `bash` and `json` code fences and a table, about the median Markdown file on a developer machine. Each figure is the median of 5–7 runs. The budgets are in [PRD.md](PRD.md), where the evidence for them is too.
 
-| Metric                            | Measured           | Target   | Hard limit | Status |
-| --------------------------------- | ------------------ | -------- | ---------- | ------ |
-| Installer (NSIS)                  | 4.46 MB            | ≤ 6 MB   | 10 MB      | ✅     |
-| App exe                           | 6.70 MB            | ≤ 8 MB   | 12 MB      | ✅     |
-| Cold start to editable            | 848 ms (832–941)   | ≤ 800 ms | 1,000 ms   | ⚠️     |
-| Preview update after typing stops | ~175 ms            | ≤ 200 ms | 400 ms     | ✅     |
-| Idle RAM (app + WebView2)         | 106.8 MB           | ≤ 105 MB | 120 MB     | ⚠️     |
-| Idle CPU                          | 0%                 | 0%       | < 0.5%     | ✅     |
+| Metric                                 | Measured             | Target   | Hard limit | Status |
+| -------------------------------------- | -------------------- | -------- | ---------- | ------ |
+| Installer (NSIS)                       | 4.46 MB              | ≤ 6 MB   | 10 MB      | ✅     |
+| App exe                                | 6.70 MB              | ≤ 8 MB   | 12 MB      | ✅     |
+| Window visible in theme colour         | 187 ms (119–207)     | ≤ 300 ms | 500 ms     | ✅     |
+| White flash at launch (dark mode)      | 0 ms                 | 0 ms     | 0 ms       | ✅     |
+| Cold start to editable                 | 899 ms (858–947)     | ≤ 900 ms | 1,000 ms   | ✅     |
+| Typing latency, p50 (input to painted) | 11 ms                | ≤ 20 ms  | 33 ms      | ✅     |
+| Preview update after typing stops      | ~163 ms              | ≤ 200 ms | 400 ms     | ✅     |
+| Idle RAM in use                        | 98.8 MB              | ≤ 105 MB | 120 MB     | ✅     |
+| Idle RAM after 30 s with no input      | 77.5 MB              | ≤ 85 MB  | 100 MB     | ✅     |
+| First keystroke after an idle trim     | 35–38 ms             | ≤ 60 ms  | 100 ms     | ✅     |
+| Idle CPU                               | 0.25% of the machine | ≈ 0%     | < 0.5%     | ✅     |
 
-Cold start breaks down into about 520–550 ms for WebView2 to create its browser process (before any app code runs) and about 270 ms in the frontend: 90 ms to load and compile the startup JavaScript, then one ~80 ms task that lays out the opened file. Run-to-run spread on this machine is about ±150 ms. Idle RAM is almost all WebView2 itself: the renderer (44 MB), the browser process (33 MB) and the GPU process (18 MB); Marky's own process is 4 MB. Minimised, Marky asks WebView2 to trim memory and drops to about 70 MB. The 28 Sep performance pass cut cold start from 924 to 816 ms and idle RAM from 110 to 104 MB: the network service now runs inside the browser process (one process fewer to start, 5 MB less), and Markdown no longer pulls the JavaScript and CSS parsers into the startup bundle (initial JS 229 → 175 KB gzipped). Mermaid and KaTeX load only when a document uses them, and code-block parsers load in the preview worker on first use. The machine drifts from day to day: on 29 Sep the build from before the preview change measured 851 ms and 105.5 MB, against 816 ms and 104 MB the day before, so treat differences of about 30 ms and 2 MB as noise.
+Real documents cost a little more than the fixture. On a developer workstation the median real file (5.7 KB, frontmatter plus two fences) idles at 102 MB and the 95th-percentile files (30 KB) at 110–114 MB, inside the 120 MB limit. Each ordinary feature adds memory: a code-fence language 3–6 MB, YAML frontmatter about 6 MB, a table about 2 MB.
 
-**Launch flash.** With Windows in dark mode the window used to show white for 630–730 ms before the UI painted. `window.rs` now creates the window with the theme's background colour, and `./scripts/bench-flash.ps1` measures 0 ms of white. Cold start did not change (826 ms).
+Cold start breaks down into about 545–590 ms for WebView2 to create its browser process (before any app code runs) and about 270–300 ms in the frontend: 90 ms to load and compile the startup JavaScript, then one ~80 ms task that lays out the opened file. Run-to-run spread on this machine is about ±50 ms, and larger on busy days; it drifts by 1–2 MB and 30 ms from day to day, so compare figures only within one session. Idle RAM is almost all WebView2 itself: the renderer (44 MB), the browser process (33 MB) and the GPU process (18 MB); Marky's own process is 4 MB. After 30 seconds without input (and while minimised) Marky asks WebView2 to trim its memory, which takes a typical document from about 99 MB to about 77 MB; a minimised window drops to about 60–70 MB. Hovering does not count as activity, so a resting mouse does not stop the trim.
 
-**Larger documents.** Measured 29 Sep 2026 with `./scripts/bench-large.ps1` on generated docs-style Markdown (headings, tables, fenced code in four languages). The 8 MB file is above the 5 MB threshold, so its preview turns itself off. RAM is idle memory after the preview has been drawn; for the 4 MB file Windows trims an untouched window's working set to about 570 MB, and any use pages it back in.
+**Launch flash.** With Windows in dark mode the window used to show white for 630–730 ms before the UI painted. `window.rs` now creates the window with the theme's background colour, and `./scripts/bench-flash.ps1` measures 0 ms of white. Cold start did not change.
 
-| Document           | Cold start with file | Idle RAM | Typing p50 / p95 | Preview update after typing stops | Longest main-thread stall |
-| ------------------ | -------------------- | -------- | ---------------- | --------------------------------- | ------------------------- |
-| 18 KB (README)     | 848 ms               | 107 MB   | 19 / 22 ms       | 175 ms (parse 11 ms)              | none                      |
-| 100 KB             | 873 ms               | 155 MB   | 20 / 24 ms       | 240 ms (parse 70 ms)              | none                      |
-| 1 MB               | 877 ms               | 470 MB   | 20 / 29 ms       | 492 ms (parse 294 ms)             | 93 ms                     |
-| 4 MB               | 1,000 ms             | 1,139 MB | 19 / 32 ms       | 1,596 ms (parse 1,288 ms)         | 379 ms                    |
-| 8 MB (preview off) | 1,091 ms             | 201 MB   | 19 / 21 ms       | –                                 | 117 ms                    |
+**Larger documents.** Measured 29 Sep 2026 with `./scripts/bench-large.ps1` on generated docs-style Markdown (headings, tables, fenced code in four languages; denser in code than real files, so it overstates cost). The 8 MB file is above the 5 MB threshold, so its preview turns itself off. Files over 100 KB are about 1 in 700 on a real workstation (see the PRD), so these are held to "stays usable", not to a memory budget.
 
-The preview used to replace its whole DOM on every render. It now updates by block: the worker renders each top-level block separately, and the page replaces only the blocks that changed (untouched blocks keep their DOM, drawn diagrams included, and lines added above only renumber `data-line`). CSS containment on the panes also stops editor keystrokes from re-walking the preview. Change from the 28 Sep measurements:
+| Document           | Cold start with file | Idle RAM   | Typing p50 / p95 | Preview update after typing stops | Longest main-thread stall |
+| ------------------ | -------------------- | ---------- | ---------------- | --------------------------------- | ------------------------- |
+| 5 KB (typical)     | 899 ms               | 99 MB      | 11 / 18 ms       | 163 ms (parse 2 ms)               | none                      |
+| 100 KB             | 877 ms               | 151 MB     | 11 / 18 ms       | 198 ms (parse 34 ms)              | none                      |
+| 1 MB               | 938 ms               | 470 MB     | 12 / 18 ms       | 488 ms (parse 298 ms)             | 100 ms                    |
+| 4 MB               | 1,022 ms             | 0.3–1.1 GB | 12 / 27 ms       | 1,439 ms (parse 1,181 ms)         | 544 ms                    |
+| 8 MB (preview off) | 1,098 ms             | 197 MB     | 10 / 15 ms       | –                                 | 90 ms                     |
 
-| Before → after               | 100 KB          | 1 MB              | 4 MB                |
-| ---------------------------- | --------------- | ----------------- | ------------------- |
-| Longest main-thread stall    | 83 ms → none    | 901 → 93 ms       | 3,268 → 379 ms      |
-| Typing p50                   | 23 → 20 ms      | 31 → 20 ms        | 66 → 19 ms          |
-| Preview update after typing  | 291 → 240 ms    | 1,228 → 492 ms    | 4,676 → 1,596 ms    |
-| RAM after typing 40 keys     | 291 → 182 MB    | 1,498 → 567 MB    | 2,464 → 1,552 MB    |
+RAM for the 4 MB file varies between runs because Windows trims an untouched window's working set at times, so it is shown as a range. The preview used to replace its whole DOM on every render. It now updates by block: the worker renders each top-level block separately, and the page replaces only the blocks that changed (untouched blocks keep their DOM, drawn diagrams included, and lines added above only renumber `data-line`). CSS containment on the panes also stops editor keystrokes from re-walking the preview. What that changed on the same machine:
 
-**What is still open: the PRD's "idle RAM, one 100 KB file ≤ 105 MB" row fails at 155 MB** (hard limit 120 MB); the headline table above uses this 18 KB README. Idle RAM did not change because the first render still builds the whole preview DOM, so memory grows about 0.4 MB per KB of document. Parsing is still done over the whole document in the worker (1.3 s at 4 MB). Typing latency is input to the next painted frame, so it includes one frame: the README baseline is 19 ms, not 0. Memory while typing peaks above idle and settles after about 30 s (no leak). Opening a 1 MB file costs about 100 ms between IPC ready and loaded (budget 150 ms).
+| Before → after               | 100 KB       | 1 MB           | 4 MB             |
+| ---------------------------- | ------------ | -------------- | ---------------- |
+| Longest main-thread stall    | 83 ms → none | 901 → 100 ms   | 3,268 → 544 ms   |
+| Typing p50 (containment A/B) | –            | 30 → 18 ms     | 67 → 19 ms       |
+| Preview update after typing  | 291 → 198 ms | 1,228 → 488 ms | 4,676 → 1,439 ms |
+| RAM after typing 40 keys     | 291 → 176 MB | 1,498 → 567 MB | 2,464 → 1,388 MB |
+
+What is still open: the first render builds the whole preview DOM, so memory grows about 0.4 MB per KB of document (151 MB at 100 KB), and parsing is done over the whole document in the worker (1.2 s at 4 MB). The PRD deliberately does not budget for this; windowed rendering is the fix if large files turn out to matter. Typing latency is input to the next painted frame, so it includes one frame; it was 19–20 ms in an earlier, busier session on the same machine, which is why it is compared only within a session. Opening a 1 MB file costs about 100 ms between IPC ready and loaded (budget 150 ms).
+
+Two things skew benchmarks, and the scripts now guard against both: a crash-recovery snapshot left by a killed run (an 8.5 MB one once added about 150 ms to every start and 20+ MB of RAM), which the harnesses delete; and Windows trimming an untouched window's memory, which is why RAM is quoted in use and after the idle trim.
 
 To reproduce:
 
@@ -54,7 +63,7 @@ npx tauri build --no-bundle
 ./scripts/bench.ps1
 ```
 
-Add `-Details` to see the per-phase timeline, or `-BrowserArgs "..."` to try other WebView2 flags without rebuilding. `./scripts/bench-large.ps1` runs the large-document table, and `./scripts/bench-flash.ps1` checks the launch flash (it needs a visible desktop).
+Add `-Details` to see the per-phase timeline, `-SkipTrimmedSample` to skip the 32 s idle wait, `-File` to benchmark another document, or `-BrowserArgs "..."` to try other WebView2 flags without rebuilding. `./scripts/bench-large.ps1` runs the large-document table, and `./scripts/bench-flash.ps1` checks the launch flash (it needs a visible desktop).
 
 ## Install (beta)
 
@@ -209,6 +218,7 @@ src/
   shortcuts.ts          Keyboard dispatch into the command table (blocks reload keys)
   paths.ts              File-name, folder and path helpers shared by page and worker
   perf.ts               Cold-start instrumentation
+  idle.ts               Reports going idle / active to Rust after 30 s without input (memory trimming)
   ipc.ts                Typed wrappers around Tauri commands and events; picks the real core or the stand-in
   browser-api.ts        In-memory stand-in for the Rust core, used by `npm run dev`
   styles.css            Theme variables (light/dark), picker and preview typography
@@ -219,11 +229,12 @@ src-tauri/
   src/store.rs          Recent-files list and crash-recovery snapshots (JSON in app folders)
   src/menu.rs           Native menu bar
   src/window.rs         Creates the main window with the theme's background colour (no launch flash)
-  src/memory.rs         Asks WebView2 to trim memory while the window is minimised
+  src/memory.rs         Asks WebView2 to trim memory while the window is minimised or the user is idle
   tauri.conf.json       Window, CSP, asset protocol, bundle and file-association config
   capabilities/         Webview permissions (least privilege)
 scripts/
-  bench.ps1             Release-build benchmark: cold start, WebView2 ready, idle RAM, sizes
+  fixtures/typical.md   The benchmark document: 5 KB, frontmatter, code fences, a table (about the median real file)
+  bench.ps1             Release-build benchmark on scripts/fixtures/typical.md: cold start, WebView2 ready, idle RAM in use and after the idle trim, sizes
   bench-large.ps1, .mjs Large-document benchmark: cold start, RAM, typing latency, preview update, stalls
   bench-flash.ps1       Times the white flash at launch (pixel probe; needs a desktop)
   lib.ps1               Shared script helpers (process-tree walk and stop)

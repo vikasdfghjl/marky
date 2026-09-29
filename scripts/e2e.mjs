@@ -284,6 +284,12 @@ const script = await invoke('open_external', { url: 'javascript:alert(1)' });
 const fileUrl = await invoke('open_external', { url: 'file:///C:/Windows/win.ini' });
 check('only http(s)/mailto links open externally', !!script.err && !!fileUrl.err);
 
+// Idle memory trimming: the frontend reports going idle and coming back (waiting 30 s here would
+// only prove the timer; the RAM effect is measured by bench.ps1).
+const wentIdle = await invoke('set_idle', { idle: true });
+const cameBack = await invoke('set_idle', { idle: false });
+check('idle and active reports reach Rust', !wentIdle.err && !cameBack.err, JSON.stringify([wentIdle, cameBack]));
+
 // ---- leave the buffer dirty for the close-guard check in e2e.ps1 ----
 await send('Input.insertText', { text: 'unsaved ' });
 await sleep(300);

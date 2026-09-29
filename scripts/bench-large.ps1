@@ -69,4 +69,7 @@ foreach ($kb in $SizesKb) {
   Stop-ProcessTree $app.Id
   Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 2
+  # The app was killed with typed-in edits, so it left a crash-recovery snapshot (megabytes for the
+  # large files). Left in place it is offered at the next launch and slows every later benchmark.
+  Remove-Item (Join-Path $env:LOCALAPPDATA 'dev.marky.editor\recovery.json') -ErrorAction SilentlyContinue
 }

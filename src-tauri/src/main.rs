@@ -326,6 +326,12 @@ fn apply_window_theme(window: &WebviewWindow, settings: &serde_json::Value) {
     let _ = window.set_theme(window::saved_theme(settings));
 }
 
+/// The user has gone idle or come back; Rust trims WebView2's memory while idle (memory.rs).
+#[tauri::command]
+fn set_idle(app: AppHandle, idle: bool) {
+    memory::set_idle(&app, idle);
+}
+
 /// Menu ticks for toggle settings; the frontend sends them whenever one changes.
 #[tauri::command]
 fn set_menu_checks(app: AppHandle, checks: HashMap<String, bool>) {
@@ -488,6 +494,7 @@ fn main() {
             snapshot_buffers,
             save_settings,
             set_menu_checks,
+            set_idle,
             set_dirty,
             ask_unsaved_changes,
             ask_choice,

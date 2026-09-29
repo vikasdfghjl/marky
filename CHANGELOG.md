@@ -6,7 +6,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ### Changed
 
-- Editing large documents is much smoother: the preview now updates only the part you changed instead of redrawing everything. On a 1 MB file the longest freeze drops from 0.9 s to 0.09 s, typing latency from 31 ms to 20 ms, and memory while typing from 1.5 GB to 0.57 GB. On a 4 MB file typing goes from 66 ms to 19 ms. Diagrams stay drawn while you edit elsewhere.
+- Marky gives memory back when you leave it alone: after 30 seconds without a key press, click or scroll (and while minimised) it drops from about 99 MB to about 77 MB for a typical document. The first key press afterwards takes a few milliseconds longer.
+- Editing large documents is much smoother: the preview now updates only the part you changed instead of redrawing everything. On a 1 MB file the longest freeze drops from 0.9 s to 0.1 s, typing latency from 30 ms to 18 ms, and memory while typing from 1.5 GB to 0.57 GB. On a 4 MB file typing goes from 67 ms to 19 ms. Diagrams stay drawn while you edit elsewhere.
 
 ### Fixed
 

@@ -141,10 +141,14 @@ async function measure(label) {
   await evaluate('window.__latency.length = 0; window.__stalls.length = 0');
   const previewMs = [];
   const parseMs = [];
+  const readStatus = () => evaluate(`document.getElementById('st-render').textContent`);
   for (let i = 0; i < 12; i++) {
+    const before = await readStatus();
     await send('Input.insertText', { text: 'b' });
-    await sleep(900);
-    const status = await evaluate(`document.getElementById('st-render').textContent`);
+    // Wait for this edit's render to report (parsing a large file can take over a second), not a fixed time.
+    for (let waited = 0; waited < 10_000 && (await readStatus()) === before; waited += 100) await sleep(100);
+    await sleep(300);
+    const status = await readStatus();
     const match = /preview (\d+) ms \(parse ([\d.]+)\)/.exec(status ?? '');
     if (match) {
       previewMs.push(Number(match[1]));

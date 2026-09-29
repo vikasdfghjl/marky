@@ -1,22 +1,43 @@
-//! A minimised window asks WebView2 to trim its memory, following Microsoft's guidance for
-//! inactive webviews (`MemoryUsageTargetLevel`). Only on minimise, not on focus loss: returning
-//! to normal may page memory back in, and Alt+Tab back into the editor should stay instant.
+//! Asks WebView2 to trim its memory (`MemoryUsageTargetLevel`, Microsoft's guidance for
+//! inactive webviews) while Marky is minimised or the user has been idle. A typical document
+//! idles at about 125 MB; trimmed it drops to 60–90 MB, and the price is one slower first
+//! keystroke (about 55 ms instead of 15 ms) when the user comes back.
+//!
+//! Two independent reasons, one level: it is Low while either holds. Minimise is detected here;
+//! idleness is judged by the frontend (`idle.ts`), which reports only its transitions, so typing
+//! still costs no IPC. Not on focus loss: Alt+Tab away and back must stay instant.
 //! Tauri does not expose the setting, so this goes through the WebView2 controller.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::{Manager, Window};
+use tauri::{AppHandle, Manager, Window};
 
 static MINIMIZED: AtomicBool = AtomicBool::new(false);
+static IDLE: AtomicBool = AtomicBool::new(false);
+static LOW: AtomicBool = AtomicBool::new(false);
 
 /// Called on every resize; acts only when the window enters or leaves the minimised state.
 pub fn follow_minimized(window: &Window) {
     let minimized = window.is_minimized().unwrap_or(false);
-    if MINIMIZED.swap(minimized, Ordering::Relaxed) == minimized {
-        return;
+    if MINIMIZED.swap(minimized, Ordering::Relaxed) != minimized {
+        apply(window.app_handle());
     }
-    let Some(webview) = window.app_handle().get_webview_window(window.label()) else { return };
-    let _ = webview.with_webview(move |platform| set_low_memory(&platform.controller(), minimized));
+}
+
+/// The frontend saw no input for a while (`true`), or input again (`false`).
+pub fn set_idle(app: &AppHandle, idle: bool) {
+    if IDLE.swap(idle, Ordering::Relaxed) != idle {
+        apply(app);
+    }
+}
+
+fn apply(app: &AppHandle) {
+    let low = MINIMIZED.load(Ordering::Relaxed) || IDLE.load(Ordering::Relaxed);
+    if LOW.swap(low, Ordering::Relaxed) == low {
+        return; // e.g. going idle while already minimised
+    }
+    let Some(webview) = app.get_webview_window("main") else { return };
+    let _ = webview.with_webview(move |platform| set_low_memory(&platform.controller(), low));
 }
 
 fn set_low_memory(controller: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller, low: bool) {

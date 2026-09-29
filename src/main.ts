@@ -1,5 +1,6 @@
 import type { EditorState } from '@codemirror/state';
 import type { ViewUpdate } from '@codemirror/view';
+import { trimMemoryWhenIdle } from './idle';
 import { measureColdStart } from './perf';
 import { createEditor } from './editor';
 import { createPreview } from './preview';
@@ -87,6 +88,8 @@ const settings = createSettingsStore((current) => {
 });
 settings.onChange(applySettings);
 const settingsPanel = createSettingsPanel($('settings-button') as HTMLButtonElement, settings);
+/** Input trims nothing; going quiet for a while does (idle.ts). Non-input use calls this directly. */
+const noteActivity = trimMemoryWhenIdle();
 $('new-tab-button').addEventListener('click', () => runCommand('new'));
 const editorToggle = $('editor-toggle');
 editorToggle.addEventListener('click', () => runCommand('toggle-editor'));
@@ -366,6 +369,7 @@ async function resolveUnsavedChanges(): Promise<boolean> {
 }
 
 function queueOpen(path: string) {
+  noteActivity();
   openQueue = openQueue.then(() => openPath(path));
 }
 
@@ -504,6 +508,7 @@ function watchPath(next: string | null, previous: string | null) {
 function onFileChangedOnDisk(path: string) {
   const tab = tabByPath(path);
   if (!tab) return;
+  noteActivity();
   clearTimeout(fileChangeTimers.get(tab.id));
   fileChangeTimers.set(tab.id, window.setTimeout(() => void reconcileWithDisk(tab), FILE_CHANGE_SETTLE_MS));
 }
@@ -618,6 +623,7 @@ type CommandId = keyof typeof commands;
 
 function runCommand(id: string) {
   if (!(id in commands)) return;
+  noteActivity(); // native menu clicks are not DOM input
   void commands[id as CommandId]();
 }
 
@@ -649,7 +655,10 @@ async function start() {
     api.onMenuCommand(runCommand),
     api.onCloseRequested(() => void closeWindow()),
     api.onFileChanged(onFileChangedOnDisk),
-    api.onDragHover((hovering) => document.body.classList.toggle('drag-over', hovering)),
+    api.onDragHover((hovering) => {
+      noteActivity();
+      document.body.classList.toggle('drag-over', hovering);
+    }),
     api.startupState(),
   ]);
   performance.mark('ipc-ready');

@@ -51,13 +51,31 @@ try {
 [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr hMenu);
 [DllImport("user32.dll")] public static extern IntPtr GetSubMenu(IntPtr hMenu, int pos);
 [DllImport("user32.dll")] public static extern uint GetMenuState(IntPtr hMenu, uint pos, uint flags);
+[DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc cb, IntPtr l);
+[DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, System.Text.StringBuilder name, int max);
+[DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+public delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
 public static bool IsChecked(IntPtr bar, int menu, uint item) {
   const uint MF_BYPOSITION = 0x400, MF_CHECKED = 0x8;
   return (GetMenuState(GetSubMenu(bar, menu), item, MF_BYPOSITION) & MF_CHECKED) != 0;
 }
+// Process.MainWindowHandle can return Marky's hidden single-instance window instead of the real one.
+public static IntPtr MainWindow(uint pid) {
+  IntPtr found = IntPtr.Zero;
+  EnumWindows((h, l) => {
+    uint p; GetWindowThreadProcessId(h, out p);
+    var name = new System.Text.StringBuilder(64); GetClassName(h, name, 64);
+    if (p == pid && name.ToString() == "Tauri Window") { found = h; return false; }
+    return true;
+  }, IntPtr.Zero);
+  return found;
+}
+public static void Close(IntPtr window) { PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero); } // WM_CLOSE
 '@
-  $app.Refresh()
-  $bar = [Win32.Menu]::GetMenu($app.MainWindowHandle)
+  $window = [Win32.Menu]::MainWindow([uint32]$app.Id)
+  Write-Check 'main window found' ($window -ne [IntPtr]::Zero)
+  $bar = [Win32.Menu]::GetMenu($window)
   $menuCount = [Win32.Menu]::GetMenuItemCount($bar)
   Write-Check 'native menu bar has File, Edit, View, Help' ($menuCount -eq 4) "$menuCount top-level menus"
   # e2e.mjs ends with editor and preview on, outline and auto-save off, and word wrap turned off by Alt+Z.
@@ -71,7 +89,7 @@ public static bool IsChecked(IntPtr bar, int menu, uint item) {
   $ticksMatch = $ticks.editor -and $ticks.preview -and -not ($ticks.outline -or $ticks.wordWrap -or $ticks.autoSave)
   Write-Check 'menu ticks follow the settings' $ticksMatch (($ticks.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
 
-  $app.CloseMainWindow() | Out-Null
+  [Win32.Menu]::Close($window)
   Start-Sleep -Seconds 2
   Write-Check 'close with unsaved changes is held for the prompt' (-not $app.HasExited)
   Stop-ProcessTree $app.Id
@@ -105,7 +123,7 @@ public static bool HasVisibleDialog(uint processId) {
   # Run C: a clean window closes immediately.
   $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
   Start-Sleep -Seconds 4
-  $app.CloseMainWindow() | Out-Null
+  [Win32.Menu]::Close([Win32.Menu]::MainWindow([uint32]$app.Id))
   Start-Sleep -Seconds 2
   Write-Check 'clean window closes without a prompt' $app.HasExited
   if (-not $app.HasExited) { Stop-ProcessTree $app.Id }
