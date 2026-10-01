@@ -163,14 +163,14 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--wait
 Versions are plain `X.Y.Z`, and `package.json` is the single source (`tauri.conf.json` points at it). User-visible changes go under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) as they land. To cut a release from a clean `main`:
 
 ```bash
-./scripts/release.ps1 -Version 0.3.0
+npm run release -- -Version 0.3.0
 ```
 
 ```bash
 git push origin HEAD --follow-tags
 ```
 
-The script refuses to run if the Unreleased section is empty. It bumps `package.json` and `Cargo.toml`, renames Unreleased to `[0.3.0] - <date>`, commits, and creates the annotated tag `v0.3.0`. Pushing the tag runs `.github/workflows/release.yml`, which checks that the tag matches the version, runs the checks, builds, enforces the size budgets and publishes a GitHub Release with the installer, the portable ZIP and `SHA256SUMS.txt`. The release notes are that version's CHANGELOG section plus install instructions.
+The script (`scripts/release.ps1`) refuses to run if the Unreleased section is empty. It bumps `package.json` and `Cargo.toml`, renames Unreleased to `[0.3.0] - <date>`, commits, and creates the annotated tag `v0.3.0`. Pushing the tag runs `.github/workflows/release.yml`, which checks that the tag matches the version, runs the checks, builds, enforces the size budgets and publishes a GitHub Release with the installer, the portable ZIP and `SHA256SUMS.txt`. The release notes are that version's CHANGELOG section plus install instructions.
 
 - **Signed build** (not used during the unsigned beta): set `MARKY_SIGN_COMMAND` to your signing command with `{file}` where the file path goes, then run `./scripts/build-signed.ps1`. Tauri calls the hook for the app, the installer, the uninstaller and the NSIS plugins, and the script verifies every Authenticode signature afterwards. In CI, set the same value as a repository secret. Plain `npx tauri build` stays unsigned.
 - **winget:** after uploading the installer to a release, run `./scripts/winget-manifest.ps1 -InstallerUrl <url>`. It writes validated 1.12.0 manifests to `dist-winget/` for a pull request to microsoft/winget-pkgs.
@@ -191,6 +191,8 @@ npm run tauri dev
 | `npm run tauri dev`                               | Full native app with hot reload                                                                                                                           |
 | `npm run tauri build`                             | Release build and NSIS installer in `src-tauri/target/release/bundle/`                                                                                    |
 | `npm run typecheck`                               | TypeScript type-check                                                                                                                                     |
+| `npm run check`                                   | Typecheck, clippy and Rust tests: the checks every change must pass                                                                                       |
+| `npm run release -- -Version X.Y.Z`               | Version bump, CHANGELOG stamp, commit and tag (does not push)                                                                                             |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Rust tests: encoding, atomic save, kill-mid-save, recent/recovery                                                                                         |
 | `./scripts/e2e.ps1`                               | End-to-end smoke test of the release build (needs `npx tauri build --no-bundle` first)                                                                    |
 | `./scripts/check-size.ps1`                        | Fail if the exe or installer exceeds the PRD hard limits (needs a full `npx tauri build`)                                                                 |
@@ -251,7 +253,7 @@ scripts/
   build-signed.ps1      Signed release build plus signature verification
   winget-manifest.ps1   winget manifests for a published release
   third-party-notices.mjs  THIRD_PARTY_NOTICES.txt from the npm and Cargo dependency graphs
-  release.ps1           Version bump + CHANGELOG stamp + commit + annotated tag (does not push)
+  release.ps1           (npm run release) Version bump + CHANGELOG stamp + commit + annotated tag (does not push)
   package-portable.ps1  Portable ZIP with LICENSE and notices
 .github/workflows/
   ci.yml                Windows CI: checks, tests, audits, build, budgets, e2e, installer + portable ZIP

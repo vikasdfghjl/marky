@@ -53,7 +53,7 @@ Tauri 2 and CodeMirror 6 move quickly, and memory of their APIs goes stale. Befo
 
 ## Verification
 
-A change is done when these pass:
+A change is done when these pass (`npm run check` runs all three):
 
 ```bash
 npm run typecheck
