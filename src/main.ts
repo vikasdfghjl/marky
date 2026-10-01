@@ -312,6 +312,8 @@ function inEditor(action: () => void) {
 /** Applies changed settings; at startup `changed` is every setting. */
 function applySettings(current: Settings, changed: Partial<Settings>) {
   if ('theme' in changed) applyTheme(current.theme);
+  // Before pane visibility, which can render: the first render then already has the right flag.
+  if ('typographer' in changed) preview.setTypographer(current.typographer);
   if ('fontSize' in changed) {
     document.documentElement.style.setProperty('--editor-font-size', `${current.fontSize}px`);
     editor.view.requestMeasure();

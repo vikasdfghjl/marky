@@ -1,4 +1,5 @@
 import MarkdownIt, { type Token } from 'markdown-it';
+import { full as emoji } from 'markdown-it-emoji';
 import taskLists from 'markdown-it-task-lists';
 import { highlightFence, prepareLanguages } from './code-highlight';
 import { dataLineAttr, fenceLanguage, frontmatter, githubAlerts, headingAnchors } from './markdown-plugins';
@@ -13,6 +14,8 @@ export interface RenderRequest {
   documentFolder: string | null;
   /** URL prefix of Tauri's asset protocol (`http://asset.localhost/` on Windows); empty outside Tauri. */
   assetBase: string;
+  /** Smart quotes, dashes, ellipses and (c)/(tm)/(r) symbols (the `typographer` setting). */
+  typographer: boolean;
 }
 
 export interface RenderResult {
@@ -30,6 +33,8 @@ type RenderEnv = {
 // html: false renders raw HTML as text, so untrusted files cannot inject markup.
 const md = new MarkdownIt({ html: false, linkify: true })
   .use(taskLists, { enabled: false })
+  // GitHub's :shortcode: names only; no text smileys, so ":)" or "8)" stay as typed, as on GitHub.
+  .use(emoji, { shortcuts: {} })
   .use(frontmatter)
   .use(githubAlerts)
   .use(headingAnchors)
@@ -145,8 +150,10 @@ function hash(text: string): number {
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
   const start = performance.now();
-  const { id, text, documentFolder, assetBase } = e.data;
+  const { id, text, documentFolder, assetBase, typographer } = e.data;
   const env: RenderEnv = { documentFolder, assetBase };
+  // Only parsing reads it (the replacements and smartquotes rules), and parsing is synchronous.
+  md.set({ typographer });
   // Parse once; load any fence languages (async, first use only), then render synchronously.
   const tokens = md.parse(text, env);
   await Promise.all([prepareLanguages(fenceLanguages(tokens)), prepareMath(tokens)]);

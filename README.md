@@ -79,6 +79,8 @@ Working now:
 - Live preview rendered in a Web Worker (tables, task lists, strikethrough, autolinks), scrolled in sync with the editor
 - Code blocks highlighted in the preview with the same parsers and colours as the editor (100+ languages, loaded on first use)
 - YAML frontmatter highlighted in both panes (SKILL.md, docs sites, AI config files)
+- Emoji shortcodes (`:rocket:`, `:+1:`, `:tada:`) rendered as emoji in the preview, with GitHub's names; text smileys like `:)` stay as typed
+- Smart typography in the preview (on by default, Settings to turn off): "quotes" become “curly”, `--` and `---` become – and —, `...` becomes …, and (c), (r), (tm), +- become ©, ®, ™, ±. Code, math and heading anchors are unaffected
 - GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) rendered as callouts
 - Mermaid diagrams (` ```mermaid ` fences), drawn with `securityLevel: 'strict'`, following the light/dark theme; loaded only when a document has one, and syntax errors show inline
 - Math with KaTeX, using GitHub's syntax: `$…$` inline, `$$…$$` blocks and ` ```math ` fences. Prices like $5 stay text, bad TeX shows inline, and MathML is included for screen readers; it loads only for documents with math
@@ -97,7 +99,7 @@ Working now:
 - Drag and drop files onto the window to open them, one tab each
 - Native menu bar (File, Edit, View, Help), with Alt and arrow-key navigation. Toggles (Editor, Preview, Outline, Word Wrap, Auto Save) show a tick when on
 - Reading view: hide the editor (the panel button beside the gear, or Ctrl+Shift+E) to read the preview full width
-- Settings (gear at the top right, or Ctrl+,): theme (System, Light or Dark, including the title bar and menu), editor font size, word wrap, auto-save, the line ending for new files, and editor, preview and outline visibility. Saved to `settings.json` in the app's config folder
+- Settings (gear at the top right, or Ctrl+,): theme (System, Light or Dark, including the title bar and menu), editor font size, word wrap, smart typography, auto-save, the line ending for new files, and editor, preview and outline visibility. Saved to `settings.json` in the app's config folder
 - Recent files (last 10), Ctrl+R
 - Crash recovery: unsaved changes are snapshotted every 30 s and offered back after a crash
 

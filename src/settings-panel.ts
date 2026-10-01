@@ -14,6 +14,7 @@ const TEMPLATE = `
     <select data-setting="fontSize">${FONT_SIZES.map((size) => `<option value="${size}">${size} px</option>`).join('')}</select>
   </label>
   <label><input type="checkbox" data-setting="wordWrap"> Word wrap</label>
+  <label><input type="checkbox" data-setting="typographer"> Smart quotes and dashes in the preview</label>
   <label><input type="checkbox" data-setting="autoSave"> Auto-save files after you stop typing</label>
   <fieldset>
     <legend>Line ending for new files</legend>

@@ -4,6 +4,11 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- Emoji shortcodes in the preview: `:rocket:`, `:+1:`, `:tada:` and the rest of GitHub's names show as emoji. Text smileys like `:)` stay as you typed them, and shortcodes inside code are left alone.
+- Smart typography in the preview: straight quotes become curly, `--` and `---` become en and em dashes, `...` becomes an ellipsis, and (c), (r), (tm) and +- become ©, ®, ™ and ±. Code and math are left alone. It is on by default; turn it off in Settings if you write things like `--force` without backticks.
+
 ## [0.2.6] - 2026-09-29
 
 ### Changed

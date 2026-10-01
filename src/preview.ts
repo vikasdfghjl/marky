@@ -8,6 +8,7 @@ export interface Preview {
   setVisible(visible: boolean): void;
   /** Folder that relative image paths resolve against; null for untitled documents. */
   setDocumentFolder(folder: string | null): void;
+  setTypographer(on: boolean): void;
   readonly visible: boolean;
 }
 
@@ -34,6 +35,7 @@ export function createPreview(
   let seq = 0;
   let visible = true;
   let documentFolder: string | null = null;
+  let typographer = false;
   let lastText = '';
   const blockDom = createBlockDom(el);
 
@@ -63,7 +65,7 @@ export function createPreview(
   function render(text: string) {
     lastText = text;
     if (!visible) return;
-    worker.postMessage({ id: ++seq, text, documentFolder, assetBase } satisfies RenderRequest);
+    worker.postMessage({ id: ++seq, text, documentFolder, assetBase, typographer } satisfies RenderRequest);
   }
 
   return {
@@ -74,6 +76,12 @@ export function createPreview(
     },
     setDocumentFolder(folder) {
       documentFolder = folder;
+    },
+    setTypographer(on) {
+      if (on === typographer) return;
+      typographer = on;
+      // Nothing to redo before the first document arrives (settings load at startup).
+      if (lastText) render(lastText);
     },
     get visible() {
       return visible;
