@@ -27,7 +27,11 @@ const AUTO_SAVE_DELAY_MS = 1000;
 /** PRD F14: up to 20 open files. */
 const MAX_TABS = 20;
 
-const $ = (id: string) => document.getElementById(id)!;
+function $(id: string): HTMLElement {
+  const element = document.getElementById(id);
+  if (!element) throw new Error(`index.html has no #${id}`);
+  return element;
+}
 
 /** What a tab shows: a file from disk, or a new untitled document (path null). */
 type EditorDocument = Pick<OpenedFile, 'text' | 'meta' | 'readOnly'> & {
@@ -115,7 +119,9 @@ function createTab(doc: EditorDocument, state?: EditorState): Tab {
 }
 
 function tabById(id: number): Tab {
-  return tabs.find((t) => t.id === id)!;
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab) throw new Error(`No tab with id ${id}`);
+  return tab;
 }
 
 function tabByPath(path: string): Tab | undefined {
@@ -132,7 +138,10 @@ function isPristine(tab: Tab): boolean {
 }
 
 function activate(tab: Tab) {
-  if (tab === active) return editor.view.focus();
+  if (tab === active) {
+    editor.view.focus();
+    return;
+  }
   active.state = editor.view.state;
   active.scrollTop = editor.view.scrollDOM.scrollTop;
   active = tab;
@@ -179,7 +188,7 @@ function loadIntoTab(tab: Tab, doc: EditorDocument) {
 
 function addTab(doc: EditorDocument): Tab | null {
   if (tabs.length >= MAX_TABS) {
-    void notifyError(`Marky keeps up to ${MAX_TABS} files open. Close a tab first.`);
+    void api.showError(`Marky keeps up to ${MAX_TABS} files open. Close a tab first.`);
     return null;
   }
   const tab = createTab(doc);
@@ -356,10 +365,6 @@ function newDocumentContent(): EditorDocument {
 
 // ---- documents ----
 
-async function notifyError(message: string) {
-  await api.showError(message);
-}
-
 /** Save / Don't save / Cancel for the active tab. True means its content may be discarded. */
 async function resolveUnsavedChanges(): Promise<boolean> {
   if (!active.dirty) return true;
@@ -384,7 +389,8 @@ async function openPath(path: string) {
   try {
     file = await api.openFile(path);
   } catch (err) {
-    return void (await notifyError(`Could not open ${path}\n\n${err}`));
+    await api.showError(`Could not open ${path}\n\n${err}`);
+    return;
   }
   if (isPristine(active)) return loadIntoTab(active, file);
   addTab(file);
@@ -399,7 +405,7 @@ function newDocument() {
 async function closeTab(tab: Tab = active) {
   activate(tab);
   if (!(await resolveUnsavedChanges())) return;
-  if (tabs.length === 1) return closeLastTab();
+  if (tabs.length === 1) return api.closeWindow();
 
   const index = tabs.indexOf(tab);
   tabs.splice(index, 1);
@@ -409,10 +415,6 @@ async function closeTab(tab: Tab = active) {
   showInEditor(active, active.scrollTop);
   syncWindowDirty();
   snapshotDirtyTabs();
-}
-
-async function closeLastTab() {
-  await api.closeWindow();
 }
 
 /** Asks about every unsaved tab in turn; Cancel on any of them keeps the window open. */
@@ -455,7 +457,7 @@ async function save(forceSaveAs = false): Promise<boolean> {
   try {
     mtimeMs = await api.saveFile(path, text, tab.meta);
   } catch (err) {
-    await notifyError(`Could not save ${path}\n\n${err}`);
+    await api.showError(`Could not save ${path}\n\n${err}`);
     return false;
   }
   const previousPath = tab.path;
@@ -477,16 +479,23 @@ async function save(forceSaveAs = false): Promise<boolean> {
 /** `#heading` scrolls, http(s)/mailto opens the browser, relative .md links open in a tab. Other schemes are ignored. */
 async function followLink(href: string) {
   if (href.startsWith('#')) return jumpToAnchor(decodeURIComponent(href.slice(1)));
-  if (/^(https?|mailto):/i.test(href)) return void api.openExternal(href).catch((err) => notifyError(String(err)));
+  if (/^(https?|mailto):/i.test(href)) {
+    await api.openExternal(href).catch((err) => api.showError(String(err)));
+    return;
+  }
   if (URL_SCHEME.test(href)) return;
-  if (!active.path) return void notifyError('Save this document first so its relative links have a folder to resolve from.');
+  if (!active.path) {
+    await api.showError('Save this document first so its relative links have a folder to resolve from.');
+    return;
+  }
 
   const [target, anchor] = href.split('#', 2);
   let path: string;
   try {
     path = await api.resolveLink(active.path, decodeURIComponent(target));
   } catch (err) {
-    return void notifyError(String(err));
+    await api.showError(String(err));
+    return;
   }
   pendingAnchor = anchor ? decodeURIComponent(anchor) : null;
   queueOpen(path);
@@ -652,7 +661,7 @@ listenForShortcuts(SHORTCUTS, runCommand);
 // ---- startup ----
 
 async function start() {
-  const [, , , , , startup] = await Promise.all([
+  const listening = Promise.all([
     api.onOpenRequest(queueOpen),
     api.onMenuCommand(runCommand),
     api.onCloseRequested(() => void closeWindow()),
@@ -661,8 +670,8 @@ async function start() {
       noteActivity();
       document.body.classList.toggle('drag-over', hovering);
     }),
-    api.startupState(),
   ]);
+  const [startup] = await Promise.all([api.startupState(), listening]);
   performance.mark('ipc-ready');
   settings.load(readSettings(startup.settings));
 
@@ -673,7 +682,7 @@ async function start() {
   measureColdStart((ms) => statusBar.startup(ms));
 
   window.setInterval(snapshotDirtyTabs, SNAPSHOT_INTERVAL_MS);
-  if (startup.fileError) await notifyError(startup.fileError);
+  if (startup.fileError) await api.showError(startup.fileError);
   if (startup.recovery.length) await offerRecovery(startup.recovery);
 }
 

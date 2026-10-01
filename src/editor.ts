@@ -64,8 +64,6 @@ export interface Editor {
   createState(text: string, opts?: { readOnly?: boolean }): EditorState;
   /** Shows a tab's state, keeping its undo history and selection, and restores its scroll position. */
   show(state: EditorState, scrollTop?: number): void;
-  /** Replace the document and reset undo history (used when opening a file). */
-  load(text: string, opts?: { readOnly?: boolean }): void;
   text(): string;
   undo(): void;
   redo(): void;
@@ -91,7 +89,7 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
   let wordWrap = true;
   const wrapExtension = () => (wordWrap ? EditorView.lineWrapping : []);
 
-  const extensions = (ro: boolean): Extension[] => [
+  const extensions = (readOnly: boolean): Extension[] => [
     highlightSpecialChars(),
     history(),
     drawSelection(),
@@ -109,7 +107,7 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     wrap.of(wrapExtension()),
     EditorView.contentAttributes.of({ spellcheck: 'false', 'aria-label': 'Markdown source' }),
     theme,
-    EditorState.readOnly.of(ro),
+    EditorState.readOnly.of(readOnly),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     EditorView.updateListener.of(onUpdate),
   ];
@@ -138,7 +136,6 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     view,
     createState,
     show,
-    load: (text, opts) => show(createState(text, opts)),
     text: () => view.state.doc.toString(),
     undo: () => runAndFocus(undo),
     redo: () => runAndFocus(redo),

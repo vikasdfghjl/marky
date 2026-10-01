@@ -96,6 +96,16 @@ function lineText(state: StateBlock, line: number): string {
   return state.src.slice(state.bMarks[line] + state.tShift[line], state.eMarks[line]);
 }
 
+/** Index of the next unescaped `$` that follows a non-space and precedes no digit, or -1. */
+function findClosingDollar(src: string, from: number): number {
+  for (let end = src.indexOf('$', from); end !== -1; end = src.indexOf('$', end + 1)) {
+    const escaped = src[end - 1] === '\\';
+    const closesCleanly = !/\s/.test(src[end - 1]) && !/\d/.test(src[end + 1] ?? '');
+    if (!escaped && closesCleanly) return end;
+  }
+  return -1;
+}
+
 /**
  * `$…$` that hugs its content, so prices stay text: the opening `$` is followed by a
  * non-space, the closing `$` follows a non-space and is not followed by a digit.
@@ -105,13 +115,7 @@ function mathInline(state: StateInline, silent: boolean): boolean {
   if (src[pos] !== '$' || src[pos + 1] === '$') return false;
   if (!src[pos + 1] || /\s/.test(src[pos + 1])) return false;
 
-  let end = pos + 1;
-  while ((end = src.indexOf('$', end)) !== -1) {
-    const escaped = src[end - 1] === '\\';
-    const closesCleanly = !/\s/.test(src[end - 1]) && !/\d/.test(src[end + 1] ?? '');
-    if (!escaped && closesCleanly) break;
-    end++;
-  }
+  const end = findClosingDollar(src, pos + 1);
   if (end === -1) return false;
   if (!silent) {
     const token = state.push('math_inline', 'math', 0);

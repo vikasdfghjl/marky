@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 const RECENT_FILE: &str = "recent.json";
 const RECENT_LIMIT: usize = 10;
 const SNAPSHOT_FILE: &str = "recovery.json";
+const SETTINGS_FILE: &str = "settings.json";
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -32,8 +33,6 @@ pub fn push_recent(config_dir: &Path, path: &Path) -> io::Result<()> {
     recent.truncate(RECENT_LIMIT);
     write_json(&config_dir.join(RECENT_FILE), &recent)
 }
-
-const SETTINGS_FILE: &str = "settings.json";
 
 /// The user's settings as the frontend wrote them (it owns the schema and fills defaults).
 /// Missing or corrupt reads as `Null`, which means "all defaults".

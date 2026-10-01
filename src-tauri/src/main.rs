@@ -27,6 +27,8 @@ const APP_NAME: &str = "Marky";
 const SAVE_LABEL: &str = "Save";
 const DONT_SAVE_LABEL: &str = "Don't save";
 const CANCEL_LABEL: &str = "Cancel";
+/// Settings are small; anything larger is not ours.
+const SETTINGS_MAX_BYTES: usize = 16 * 1024;
 
 /// Background read of the startup file: the path and its result.
 type StartupRead = std::thread::JoinHandle<(PathBuf, io::Result<OpenedFile>)>;
@@ -126,18 +128,15 @@ async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<Sta
         return Ok(StartupState { file: None, file_error: None, recovery, settings });
     };
     let (path, read) = pending_read.join().map_err(|_| "startup file reader panicked".to_string())?;
+    let mut startup = StartupState { file: None, file_error: None, recovery, settings };
     match read {
         Ok(file) => {
             record_file_access(&app, &path);
-            Ok(StartupState { file: Some(file), file_error: None, recovery, settings })
+            startup.file = Some(file);
         }
-        Err(e) => Ok(StartupState {
-            file: None,
-            file_error: Some(format!("Could not open {}\n\n{e}", display(&path))),
-            recovery,
-            settings,
-        }),
+        Err(e) => startup.file_error = Some(format!("Could not open {}\n\n{e}", display(&path))),
     }
+    Ok(startup)
 }
 
 /// Milliseconds since process start; the frontend calls this on its first editable frame.
@@ -301,11 +300,7 @@ async fn snapshot_buffers(app: AppHandle, snapshots: Vec<Snapshot>) -> Result<()
     result.map_err(|e| e.to_string())
 }
 
-
 // ---- settings ----
-
-/// Settings are small; anything larger is not ours.
-const SETTINGS_MAX_BYTES: usize = 16 * 1024;
 
 #[tauri::command]
 async fn save_settings(app: AppHandle, window: WebviewWindow, settings: serde_json::Value) -> Result<(), String> {
