@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-01
+
 ### Added
 
 - Subscript and superscript: `H~2~O` and `19^th^` show as H₂O and 19ᵗʰ in the preview, and small and shifted in the editor. `~~strikethrough~~`, code and math are unaffected.
