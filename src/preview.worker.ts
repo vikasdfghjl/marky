@@ -1,8 +1,13 @@
 import MarkdownIt, { type Token } from 'markdown-it';
-import { full as emoji } from 'markdown-it-emoji';
+import abbreviations from 'markdown-it-abbr';
+import definitionLists from 'markdown-it-deflist';
+import inserted from 'markdown-it-ins';
+import marked from 'markdown-it-mark';
+import subscript from 'markdown-it-sub';
+import superscript from 'markdown-it-sup';
 import taskLists from 'markdown-it-task-lists';
 import { highlightFence, prepareLanguages } from './code-highlight';
-import { dataLineAttr, fenceLanguage, frontmatter, githubAlerts, headingAnchors } from './markdown-plugins';
+import { dataLineAttr, fenceLanguage, footnotes, frontmatter } from './markdown-plugins';
 import { mathPlugin, prepareMath, renderMathFence } from './math';
 import { URL_SCHEME, joinWindowsPath } from './paths';
 import type { RenderedBlock } from './preview-blocks';
@@ -33,11 +38,20 @@ type RenderEnv = {
 // html: false renders raw HTML as text, so untrusted files cannot inject markup.
 const md = new MarkdownIt({ html: false, linkify: true })
   .use(taskLists, { enabled: false })
-  // GitHub's :shortcode: names only; no text smileys, so ":)" or "8)" stay as typed, as on GitHub.
-  .use(emoji, { shortcuts: {} })
+  // H~2~O and 19^th^. A single ~ never reaches strikethrough, which needs ~~, and math and
+  // code spans are tokenised before these.
+  .use(subscript)
+  .use(superscript)
+  // ++inserted++ and ==marked== (<ins>, <mark>). The editor's markdown-inline-syntax.ts
+  // highlights all four with the same rules.
+  .use(inserted)
+  .use(marked)
+  .use(footnotes)
+  // Term, then `: definition` lines. dl, dt and dd keep their source maps.
+  .use(definitionLists)
+  // `*[HTML]: Hyper Text Markup Language` turns every HTML in the document into <abbr title>.
+  .use(abbreviations)
   .use(frontmatter)
-  .use(githubAlerts)
-  .use(headingAnchors)
   .use(mathPlugin);
 md.set({ highlight: (code, language) => (language ? highlightFence(code, language, md.utils.escapeHtml) : '') });
 
@@ -105,7 +119,8 @@ function fenceLanguages(tokens: Token[]): Set<string> {
 /**
  * Renders each top-level block on its own, so the page can replace only the blocks an edit
  * changed (preview-blocks.ts). A block is a level-0 token, or a level-0 open token through
- * its matching close.
+ * its matching close, found by nesting depth: the footnote plugin's trailing section leaves
+ * every token at level 0, so a level check would split it after its first footnote.
  */
 function renderBlocks(tokens: Token[], env: RenderEnv): RenderedBlock[] {
   const blocks: RenderedBlock[] = [];
@@ -122,8 +137,10 @@ function renderBlocks(tokens: Token[], env: RenderEnv): RenderedBlock[] {
 
 function blockEnd(tokens: Token[], start: number): number {
   if (tokens[start].nesting !== 1) return start;
+  let depth = 1;
   for (let i = start + 1; i < tokens.length; i++) {
-    if (tokens[i].level === 0 && tokens[i].nesting === -1) return i;
+    depth += tokens[i].nesting;
+    if (depth === 0) return i;
   }
   return tokens.length - 1;
 }

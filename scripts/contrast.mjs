@@ -27,9 +27,11 @@ const pairs = [
   ['fg', 'bg'], ['fg', 'active-line'], ['fg', 'selection'], ['fg', 'panel'], ['fg', 'code-bg'],
   ['muted', 'bg'], ['muted', 'panel'], ['link', 'bg'],
   ...syntax.flatMap((t) => [[t, 'bg'], [t, 'active-line']]),
-  // Preview code blocks sit on --code-bg; alert titles on --bg.
+  // Preview code blocks sit on --code-bg; math errors are drawn in --error on --bg.
   ...syntax.map((t) => [t, 'code-bg']),
-  ...['alert-note', 'alert-tip', 'alert-important', 'alert-warning', 'alert-caution'].map((t) => [t, 'bg']),
+  ['error', 'bg'],
+  // ==marked== text keeps its colour: body text, a blockquote, a link or a heading.
+  ['fg', 'mark'], ['muted', 'mark'], ['link', 'mark'], ['hl-heading', 'mark'], ['hl-link', 'mark'],
 ];
 
 let failures = 0;

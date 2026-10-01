@@ -492,7 +492,7 @@ async function followLink(href: string) {
   queueOpen(path);
 }
 
-/** Moves the editor to the heading's source line; synced scroll then brings the preview along. */
+/** Moves the editor to the anchor target's source line (a footnote); synced scroll then brings the preview along. */
 function jumpToAnchor(id: string) {
   const target = $('preview').querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`);
   const line = target?.closest<HTMLElement>('[data-line]')?.dataset.line;

@@ -16,6 +16,7 @@ import { languages } from '@codemirror/language-data';
 import { yamlFrontmatter } from '@codemirror/lang-yaml';
 import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tags as t } from '@lezer/highlight';
+import { markdownInlineSyntax, markdownTags } from './markdown-inline-syntax';
 
 // Colours come from CSS variables so the OS light/dark switch needs no JS.
 const highlight = HighlightStyle.define([
@@ -23,6 +24,12 @@ const highlight = HighlightStyle.define([
   { tag: t.strong, fontWeight: '700' },
   { tag: t.emphasis, fontStyle: 'italic' },
   { tag: t.strikethrough, textDecoration: 'line-through' },
+  // Shifted with relative positioning, not vertical-align, which would grow the line box and
+  // make line heights jump as you type.
+  { tag: markdownTags.subscript, fontSize: '80%', position: 'relative', top: '0.25em' },
+  { tag: markdownTags.superscript, fontSize: '80%', position: 'relative', top: '-0.4em' },
+  { tag: markdownTags.inserted, textDecoration: 'underline' },
+  { tag: markdownTags.marked, backgroundColor: 'var(--mark)' },
   { tag: [t.link, t.url], color: 'var(--hl-link)' },
   { tag: t.monospace, color: 'var(--hl-code)' },
   { tag: t.quote, color: 'var(--hl-quote)' },
@@ -98,7 +105,7 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     search({ top: true }),
     // YAML frontmatter (SKILL.md, docs sites, AI config files) is highlighted as YAML.
     // No tag completion: the editor has no autocompletion UI, and markdown-html.ts stubs it out.
-    yamlFrontmatter({ content: markdown({ base: markdownLanguage, codeLanguages: languages, completeHTMLTags: false }) }),
+    yamlFrontmatter({ content: markdown({ base: markdownLanguage, codeLanguages: languages, completeHTMLTags: false, extensions: markdownInlineSyntax }) }),
     syntaxHighlighting(highlight),
     wrap.of(wrapExtension()),
     EditorView.contentAttributes.of({ spellcheck: 'false', 'aria-label': 'Markdown source' }),

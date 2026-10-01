@@ -4,11 +4,44 @@ declare module 'markdown-it-task-lists' {
   export default taskLists;
 }
 
-// @types/markdown-it-emoji depends on @types/markdown-it, which conflicts with markdown-it 15's own types.
-declare module 'markdown-it-emoji' {
+declare module 'markdown-it-sub' {
   import type { MarkdownIt } from 'markdown-it';
-  type EmojiPlugin = (md: MarkdownIt, options?: { defs?: Record<string, string>; enabled?: string[]; shortcuts?: Record<string, string | string[]> }) => void;
-  export const full: EmojiPlugin;
-  export const light: EmojiPlugin;
-  export const bare: EmojiPlugin;
+  const subscript: (md: MarkdownIt) => void;
+  export default subscript;
+}
+
+declare module 'markdown-it-sup' {
+  import type { MarkdownIt } from 'markdown-it';
+  const superscript: (md: MarkdownIt) => void;
+  export default superscript;
+}
+
+declare module 'markdown-it-ins' {
+  import type { MarkdownIt } from 'markdown-it';
+  const inserted: (md: MarkdownIt) => void;
+  export default inserted;
+}
+
+declare module 'markdown-it-mark' {
+  import type { MarkdownIt } from 'markdown-it';
+  const marked: (md: MarkdownIt) => void;
+  export default marked;
+}
+
+declare module 'markdown-it-deflist' {
+  import type { MarkdownIt } from 'markdown-it';
+  const definitionLists: (md: MarkdownIt) => void;
+  export default definitionLists;
+}
+
+declare module 'markdown-it-abbr' {
+  import type { MarkdownIt } from 'markdown-it';
+  const abbreviations: (md: MarkdownIt) => void;
+  export default abbreviations;
+}
+
+declare module 'markdown-it-footnote' {
+  import type { MarkdownIt } from 'markdown-it';
+  const footnote: (md: MarkdownIt) => void;
+  export default footnote;
 }

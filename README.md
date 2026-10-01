@@ -79,13 +79,16 @@ Working now:
 - Live preview rendered in a Web Worker (tables, task lists, strikethrough, autolinks), scrolled in sync with the editor
 - Code blocks highlighted in the preview with the same parsers and colours as the editor (100+ languages, loaded on first use)
 - YAML frontmatter highlighted in both panes (SKILL.md, docs sites, AI config files)
-- Emoji shortcodes (`:rocket:`, `:+1:`, `:tada:`) rendered as emoji in the preview, with GitHub's names; text smileys like `:)` stay as typed
-- Smart typography in the preview (on by default, Settings to turn off): "quotes" become “curly”, `--` and `---` become – and —, `...` becomes …, and (c), (r), (tm), +- become ©, ®, ™, ±. Code, math and heading anchors are unaffected
-- GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) rendered as callouts
+- Subscript and superscript: `H~2~O` and `19^th^`. No spaces inside (escape them as `\ `); `~~strikethrough~~` is unaffected. The editor draws them small, below or above the line
+- Inserted and marked text: `++inserted++` is underlined and `==marked==` highlighted, in both panes. `C++` and `a == b` stay plain text
+- Footnotes: `[^1]` with a `[^1]: …` definition (several paragraphs allowed), or inline `^[…]`, listed at the end of the preview. Click a number to jump to its definition, and ↩ to jump back
+- Definition lists: a term line, then `: definition` (or `~ definition`) lines; indent following paragraphs by four spaces to keep them in the definition
+- Abbreviations: `*[HTML]: Hyper Text Markup Language` anywhere in the file turns every whole-word HTML outside code into an `<abbr>` with that title on hover
+- Smart typography in the preview (on by default, Settings to turn off): "quotes" become “curly”, `--` and `---` become – and —, `...` becomes …, and (c), (r), (tm), +- become ©, ®, ™, ±. Code and math are unaffected
 - Mermaid diagrams (` ```mermaid ` fences), drawn with `securityLevel: 'strict'`, following the light/dark theme; loaded only when a document has one, and syntax errors show inline
-- Math with KaTeX, using GitHub's syntax: `$…$` inline, `$$…$$` blocks and ` ```math ` fences. Prices like $5 stay text, bad TeX shows inline, and MathML is included for screen readers; it loads only for documents with math
+- Math with KaTeX: `$…$` inline, `$$…$$` blocks and ` ```math ` fences. Prices like $5 stay text, bad TeX shows inline, and MathML is included for screen readers; it loads only for documents with math
 - Outline sidebar (Ctrl+Shift+O): headings from the Markdown syntax tree, highlighting the section under the cursor; click to jump
-- Links: `#heading` links jump within the document (GitHub-style heading ids), relative `.md` links open in a new tab, and web links open in your browser
+- Links: footnote numbers and ↩ jump within the document, relative `.md` links open in a new tab, and web links open in your browser
 - Local images in the preview: relative paths resolve against the file's folder; remote images are blocked
 - Raw HTML in Markdown is shown as text, never executed
 - Light/dark theme that follows the Windows setting
@@ -202,10 +205,11 @@ src/
   main.ts               App wiring: documents, save/open, external changes, recovery, shortcuts
   editor.ts             CodeMirror 6 setup and highlight theme
   markdown-html.ts      Slim HTML language for inline tags in Markdown (keeps JS/CSS parsers out of startup)
+  markdown-inline-syntax.ts  Editor highlighting for ~sub~, ^sup^, ++ins++ and ==mark==, matching the preview
   preview.ts            Preview pane; sends text to the worker, swaps in HTML
   preview.worker.ts     markdown-it rendering and local-image resolution off the main thread
   preview-blocks.ts     Block-level DOM diff: replaces only the preview blocks an edit changed
-  markdown-plugins.ts   Frontmatter, GitHub alerts, heading anchors
+  markdown-plugins.ts   Frontmatter, footnotes
   code-highlight.ts     Lezer-based code highlighting for preview fences
   mermaid-blocks.ts     Lazy Mermaid rendering with an SVG cache
   math.ts               `$` / `$$` / `math` parsing and lazy KaTeX rendering (in the worker)

@@ -2,7 +2,7 @@ import type { MarkdownIt, StateBlock, StateInline, Token } from 'markdown-it';
 import type katexModule from 'katex';
 import { dataLineAttr, fenceLanguage } from './markdown-plugins';
 
-// Math in the preview (PRD F16), with GitHub's syntax: `$…$` inline, `$$…$$` blocks
+// Math in the preview (PRD F16): `$…$` inline, `$$…$$` blocks
 // and ```math fences. KaTeX renders to a string, so it runs here in the worker and
 // loads only for documents that contain math; the main thread lazily adds its CSS.
 
@@ -37,7 +37,7 @@ function renderTex(tex: string, displayMode: boolean, escapeHtml: (s: string) =>
     displayMode,
     output: 'htmlAndMathml', // MathML for screen readers
     throwOnError: false, // bad TeX shows inline instead of breaking the preview
-    errorColor: 'var(--alert-caution)', // a theme token, so errors meet contrast in both themes
+    errorColor: 'var(--error)', // a theme token, so errors meet contrast in both themes
     trust: false, // no \href, \url, \includegraphics or \html* from untrusted files
     strict: 'ignore',
     maxSize: 50, // em; stops files from requesting enormous boxes
@@ -97,7 +97,7 @@ function lineText(state: StateBlock, line: number): string {
 }
 
 /**
- * `$…$` with pandoc/GitHub rules, so prices stay text: the opening `$` is followed by a
+ * `$…$` that hugs its content, so prices stay text: the opening `$` is followed by a
  * non-space, the closing `$` follows a non-space and is not followed by a digit.
  */
 function mathInline(state: StateInline, silent: boolean): boolean {

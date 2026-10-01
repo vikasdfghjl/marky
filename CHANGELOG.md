@@ -4,6 +4,22 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- Subscript and superscript: `H~2~O` and `19^th^` show as H₂O and 19ᵗʰ in the preview, and small and shifted in the editor. `~~strikethrough~~`, code and math are unaffected.
+- Inserted and marked text: `++inserted++` is underlined and `==marked==` highlighted, in the editor and the preview.
+- Footnotes: `[^1]` references with `[^1]: …` definitions, and inline `^[…]` footnotes, listed at the end of the preview. Clicking a footnote number jumps to its definition.
+- Definition lists in the preview: a term on one line, then its definition on a line starting with `: `.
+- Abbreviations in the preview: define one with `*[HTML]: Hyper Text Markup Language` and every HTML in the document shows the full form on hover.
+
+### Removed
+
+Marky targets Markdown documents, not one platform's flavour of them, so syntax that only one site understands is gone from the preview:
+
+- GitHub alerts: `> [!NOTE]`, `[!TIP]` and the rest now show as ordinary blockquotes.
+- Emoji shortcodes: `:rocket:` stays as typed.
+- GitHub-style heading ids: headings no longer get ids, so `#heading` links no longer jump. Footnote links still do.
+
 ## [0.2.7] - 2026-10-01
 
 ### Added

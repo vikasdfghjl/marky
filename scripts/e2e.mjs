@@ -169,16 +169,15 @@ await invoke('plugin:event|emit', { event: 'drag-hover', payload: false });
 await sleep(100);
 check('drag over the window shows the drop overlay', overlayShown && !(await evaluate(`document.body.classList.contains('drag-over')`)));
 
-// ---- Markdown for docs and code: highlighting, frontmatter, alerts, anchors, links ----
+// ---- Markdown for docs and code: highlighting, frontmatter, footnotes, links ----
 await evaluate(`document.querySelector('.cm-content').focus()`);
 await pressKey('End', 'End', 35, 2); // Ctrl+End
 await send('Input.insertText', {
-  text: '\n\n## Docs Section\n\n> [!TIP]\n> Use tabs.\n\n```rust\nfn main() { let x = 1; }\n```\n\n[jump](#docs-section) [other](second.md) [web](https://example.com)\n',
+  text: '\n\n## Docs Section\n\nSee the note.[^e2e]\n\n[^e2e]: A footnote.\n\n```rust\nfn main() { let x = 1; }\n```\n\n[other](second.md) [web](https://example.com)\n',
 });
 await sleep(800);
 check('code blocks highlighted in preview', await evaluate(`!!document.querySelector('#preview pre code .tok-keyword')`));
-check('GitHub alert rendered as callout', await evaluate(`document.querySelector('#preview .markdown-alert-tip .markdown-alert-title')?.textContent === 'Tip'`));
-check('heading gets a GitHub-style anchor id', await evaluate(`!!document.querySelector('#preview h2#docs-section')`));
+check('footnote listed with its source line', await evaluate(`!!document.querySelector('#preview .footnotes .footnote-item[data-line]')`));
 await evaluate(`document.querySelector('#preview a[href=\"second.md\"]').click()`);
 await sleep(1500);
 check('relative .md link opens in a new tab', (await activeTab()) === 'second.md', JSON.stringify(await tabTitles()));
