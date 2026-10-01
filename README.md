@@ -80,7 +80,7 @@ Working now:
 - Code blocks highlighted in the preview with the same parsers and colours as the editor (100+ languages, loaded on first use)
 - YAML frontmatter highlighted in both panes (SKILL.md, docs sites, AI config files)
 - Subscript and superscript: `H~2~O` and `19^th^`. No spaces inside (escape them as `\ `); `~~strikethrough~~` is unaffected. The editor draws them small, below or above the line
-- Inserted and marked text: `++inserted++` is underlined and `==marked==` highlighted, in both panes. `C++` and `a == b` stay plain text
+- Marked text: `==marked==` is highlighted in both panes; `a == b` stays plain text
 - Footnotes: `[^1]` with a `[^1]: …` definition (several paragraphs allowed), or inline `^[…]`, listed at the end of the preview. Click a number to jump to its definition, and ↩ to jump back
 - Definition lists: a term line, then `: definition` (or `~ definition`) lines; indent following paragraphs by four spaces to keep them in the definition
 - Abbreviations: `*[HTML]: Hyper Text Markup Language` anywhere in the file turns every whole-word HTML outside code into an `<abbr>` with that title on hover
@@ -205,7 +205,7 @@ src/
   main.ts               App wiring: documents, save/open, external changes, recovery, shortcuts
   editor.ts             CodeMirror 6 setup and highlight theme
   markdown-html.ts      Slim HTML language for inline tags in Markdown (keeps JS/CSS parsers out of startup)
-  markdown-inline-syntax.ts  Editor highlighting for ~sub~, ^sup^, ++ins++ and ==mark==, matching the preview
+  markdown-inline-syntax.ts  Editor highlighting for ~sub~, ^sup^ and ==mark==, matching the preview
   preview.ts            Preview pane; sends text to the worker, swaps in HTML
   preview.worker.ts     markdown-it rendering and local-image resolution off the main thread
   preview-blocks.ts     Block-level DOM diff: replaces only the preview blocks an edit changed

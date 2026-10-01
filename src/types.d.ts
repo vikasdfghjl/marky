@@ -16,12 +16,6 @@ declare module 'markdown-it-sup' {
   export default superscript;
 }
 
-declare module 'markdown-it-ins' {
-  import type { MarkdownIt } from 'markdown-it';
-  const inserted: (md: MarkdownIt) => void;
-  export default inserted;
-}
-
 declare module 'markdown-it-mark' {
   import type { MarkdownIt } from 'markdown-it';
   const marked: (md: MarkdownIt) => void;

@@ -9,7 +9,7 @@ tags: [markdown, docs, ai]
 
 Fast Markdown for docs, READMEs and AI context files.[^small]
 
-H~2~O, 19^th^, ++inserted++ and ==marked== text, and HTML as an abbreviation.
+H~2~O, 19^th^, ==marked== text, and HTML as an abbreviation.
 
 Preview
 :   Rendered in a worker, scrolled in sync with the editor.

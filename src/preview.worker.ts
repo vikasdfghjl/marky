@@ -1,7 +1,6 @@
 import MarkdownIt, { type Token } from 'markdown-it';
 import abbreviations from 'markdown-it-abbr';
 import definitionLists from 'markdown-it-deflist';
-import inserted from 'markdown-it-ins';
 import marked from 'markdown-it-mark';
 import subscript from 'markdown-it-sub';
 import superscript from 'markdown-it-sup';
@@ -42,9 +41,8 @@ const md = new MarkdownIt({ html: false, linkify: true })
   // code spans are tokenised before these.
   .use(subscript)
   .use(superscript)
-  // ++inserted++ and ==marked== (<ins>, <mark>). The editor's markdown-inline-syntax.ts
-  // highlights all four with the same rules.
-  .use(inserted)
+  // ==marked== (<mark>). The editor's markdown-inline-syntax.ts highlights these three with
+  // the same rules.
   .use(marked)
   .use(footnotes)
   // Term, then `: definition` lines. dl, dt and dd keep their source maps.

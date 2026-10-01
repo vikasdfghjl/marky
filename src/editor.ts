@@ -28,7 +28,6 @@ const highlight = HighlightStyle.define([
   // make line heights jump as you type.
   { tag: markdownTags.subscript, fontSize: '80%', position: 'relative', top: '0.25em' },
   { tag: markdownTags.superscript, fontSize: '80%', position: 'relative', top: '-0.4em' },
-  { tag: markdownTags.inserted, textDecoration: 'underline' },
   { tag: markdownTags.marked, backgroundColor: 'var(--mark)' },
   { tag: [t.link, t.url], color: 'var(--hl-link)' },
   { tag: t.monospace, color: 'var(--hl-code)' },
