@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-10-01
+
 ### Added
 
 - Emoji shortcodes in the preview: `:rocket:`, `:+1:`, `:tada:` and the rest of GitHub's names show as emoji. Text smileys like `:)` stay as you typed them, and shortcodes inside code are left alone.
