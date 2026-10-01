@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-10-01
+
 ### Removed
 
 - Inserted text: `++inserted++` now stays as typed. Only one Markdown library understood it, and everywhere else the plus signs show literally. `==marked==` stays.
