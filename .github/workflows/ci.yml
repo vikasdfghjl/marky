@@ -2,8 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
+  # release.yml runs this whole workflow first and publishes the installer it built and tested.
+  workflow_call:
 
 permissions:
   contents: read

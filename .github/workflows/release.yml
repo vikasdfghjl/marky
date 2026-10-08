@@ -1,83 +1,70 @@
 name: Release
 
-# Pushing a tag vX.Y.Z (see scripts/release.ps1) builds the Windows installer and
-# portable ZIP and publishes a GitHub Release. 0.x versions are marked pre-release (beta).
+# Pushing a tag vX.Y.Z (see scripts/release.ps1) publishes a GitHub Release, but only after the
+# full CI workflow (audits, tests, size budgets, end-to-end) passes on that tag. The release
+# assets are the ones CI built and tested, not a second build. 0.x versions are marked pre-release (beta).
 on:
   push:
     tags: ['v*.*.*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  # Cheap checks first, so a mistagged release fails in seconds instead of after the build.
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
       - name: Tag matches package.json version
+        id: version
         shell: pwsh
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           if ("v$version" -ne '${{ github.ref_name }}') { throw "Tag ${{ github.ref_name }} does not match package.json version $version" }
-          "VERSION=$version" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Release notes from CHANGELOG.md
+      - name: CHANGELOG.md has a section for this version
         shell: pwsh
-        run: |
-          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), "(?ms)^## \[$([regex]::Escape($env:VERSION))\][^\n]*\n(.*?)(?=^## \[|\z)").Groups[1].Value.Trim()
-          if (-not $section) { throw "CHANGELOG.md has no section for $env:VERSION" }
-          Set-Content release-notes.md $section
+        run: ./scripts/release-notes.ps1 '${{ steps.version.outputs.version }}' | Out-Null
 
-      - uses: actions/setup-node@v7
+  ci:
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+    # The build step signs when the MARKY_SIGN_COMMAND secret is set.
+    secrets: inherit
+
+  publish:
+    needs: [verify, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
         with:
-          node-version: 24
-          cache: npm
+          name: marky-windows-x64
+          path: artifact
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Checks
-        run: |
-          npm run typecheck
-          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-          cargo test --manifest-path src-tauri/Cargo.toml
-          node scripts/third-party-notices.mjs
-          git diff --exit-code THIRD_PARTY_NOTICES.txt
-
-      - name: Build installer (signed when the MARKY_SIGN_COMMAND secret is set)
-        shell: pwsh
-        env:
-          MARKY_SIGN_COMMAND: ${{ secrets.MARKY_SIGN_COMMAND }}
-        run: if ($env:MARKY_SIGN_COMMAND) { ./scripts/build-signed.ps1 } else { npx tauri build }
-
-      - name: Enforce size budgets
-        shell: pwsh
-        run: ./scripts/check-size.ps1
-
-      - name: Package release assets
+      - name: Release notes and checksums
         shell: pwsh
         run: |
-          $installer = (Get-ChildItem "src-tauri/target/release/bundle/nsis/Marky_${env:VERSION}_x64-setup.exe").FullName
-          $zip = ./scripts/package-portable.ps1
-          $assets = @($installer, $zip)
-          $assets | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), (Split-Path $_ -Leaf) } | Set-Content SHA256SUMS.txt
-          "ASSETS=$($assets -join ';');$((Resolve-Path SHA256SUMS.txt).Path)" >> $env:GITHUB_ENV
+          $installer = Get-ChildItem artifact -Recurse -Filter "Marky_${env:VERSION}_x64-setup.exe" | Select-Object -First 1
+          $zip = Get-ChildItem artifact -Recurse -Filter "marky-${env:VERSION}-portable-x64.zip" | Select-Object -First 1
+          if (-not $installer -or -not $zip) { throw "CI artifact is missing the $env:VERSION installer or portable ZIP" }
+          New-Item -ItemType Directory assets | Out-Null
+          Copy-Item $installer.FullName, $zip.FullName assets
+          Push-Location assets
+          Get-ChildItem | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content SHA256SUMS.txt
+          Pop-Location
 
-      - name: Publish GitHub Release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $prerelease = if ($env:VERSION.StartsWith('0.')) { '--prerelease' } else { $null }
+          $notes = ./scripts/release-notes.ps1 $env:VERSION
           $install = @"
           ## Install
 
@@ -85,5 +72,12 @@ jobs:
 
           Beta builds are unsigned: if SmartScreen says *Windows protected your PC*, choose **More info**, then **Run anyway**. Verify downloads against ``SHA256SUMS.txt``.
           "@
-          "`n`n$install" | Add-Content release-notes.md
-          gh release create '${{ github.ref_name }}' $env:ASSETS.Split(';') --title "Marky $env:VERSION" --notes-file release-notes.md $prerelease
+          "$notes`n`n$install" | Set-Content release-notes.md
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $prerelease = if ($env:VERSION.StartsWith('0.')) { '--prerelease' } else { $null }
+          gh release create '${{ github.ref_name }}' (Get-ChildItem assets).FullName --title "Marky $env:VERSION" --notes-file release-notes.md $prerelease

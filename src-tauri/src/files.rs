@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+const MB: u64 = 1024 * 1024;
+/// Larger files are refused before reading. Opening one costs about 13 times its size in RAM at
+/// peak (copies in Rust, over IPC and in the editor: a 100 MB file peaked near 1.3 GB), so this
+/// keeps the worst case under about 2 GB on the 8 GB laptop the PRD targets.
+pub const MAX_OPEN_BYTES: u64 = 128 * MB;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -36,6 +41,11 @@ pub struct OpenedFile {
 }
 
 pub fn read(path: &Path) -> io::Result<OpenedFile> {
+    let size = fs::metadata(path)?.len();
+    if size > MAX_OPEN_BYTES {
+        let message = format!("The file is {} MB. Marky opens files up to {} MB.", size.div_ceil(MB), MAX_OPEN_BYTES / MB);
+        return Err(io::Error::other(message));
+    }
     let bytes = fs::read(path)?;
     let (bom, body) = match bytes.strip_prefix(BOM) {
         Some(rest) => (true, rest),
@@ -164,6 +174,16 @@ mod tests {
         assert_eq!(opened.meta, FileMeta { bom: false, line_ending: LineEnding::Lf });
         write(&path, "a\nb\nc\n", opened.meta).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"a\nb\nc\n");
+    }
+
+    #[test]
+    fn refuses_files_over_the_size_limit() {
+        let path = temp_path("huge.md");
+        // set_len extends without writing the bytes, so the test stays fast.
+        fs::File::create(&path).unwrap().set_len(MAX_OPEN_BYTES + 1).unwrap();
+        let err = read(&path).unwrap_err();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(err.to_string(), "The file is 129 MB. Marky opens files up to 128 MB.");
     }
 
     #[test]

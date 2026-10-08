@@ -28,6 +28,14 @@ export interface RenderResult {
   ms: number;
 }
 
+/** A render that threw: the page logs it and keeps showing the last good preview. */
+export interface RenderFailure {
+  id: number;
+  error: string;
+}
+
+export type RenderReply = RenderResult | RenderFailure;
+
 // A type alias (not an interface) so it satisfies markdown-it's index-signature Env.
 type RenderEnv = {
   documentFolder: string | null;
@@ -163,15 +171,24 @@ function hash(text: string): number {
   return 4294967296 * (2097151 & h2) + (h1 >>> 0);
 }
 
-self.onmessage = async (e: MessageEvent<RenderRequest>) => {
+async function render({ id, text, documentFolder, assetBase, typographer }: RenderRequest): Promise<RenderResult> {
   const start = performance.now();
-  const { id, text, documentFolder, assetBase, typographer } = e.data;
   const env: RenderEnv = { documentFolder, assetBase };
   // Only parsing reads it (the replacements and smartquotes rules), and parsing is synchronous.
   md.set({ typographer });
   // Parse once; load any fence languages (async, first use only), then render synchronously.
   const tokens = md.parse(text, env);
   await Promise.all([prepareLanguages(fenceLanguages(tokens)), prepareMath(tokens)]);
-  const result: RenderResult = { id, blocks: renderBlocks(tokens, env), ms: performance.now() - start };
-  self.postMessage(result);
+  return { id, blocks: renderBlocks(tokens, env), ms: performance.now() - start };
+}
+
+// An async handler turns any exception into a rejection nobody sees, so failures are replied, not thrown.
+self.onmessage = async (e: MessageEvent<RenderRequest>) => {
+  let reply: RenderReply;
+  try {
+    reply = await render(e.data);
+  } catch (err) {
+    reply = { id: e.data.id, error: err instanceof Error ? (err.stack ?? err.message) : String(err) };
+  }
+  self.postMessage(reply);
 };

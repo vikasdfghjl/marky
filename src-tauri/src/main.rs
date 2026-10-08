@@ -1,6 +1,7 @@
 // Release builds use the GUI subsystem so no console window opens.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod diagnostics;
 mod files;
 mod memory;
 mod menu;
@@ -110,7 +111,9 @@ fn record_file_access(app: &AppHandle, path: &Path) {
     if let Ok(dir) = config_dir(app) {
         let state = app.state::<AppState>();
         let _one_writer = state.recent_list_writes.lock().unwrap();
-        let _ = store::push_recent(&dir, path);
+        if let Err(e) = store::push_recent(&dir, path) {
+            diagnostics::write(&format!("could not update the recent files list: {e}"));
+        }
     }
     if let Some(folder) = path.parent() {
         let _ = app.asset_protocol_scope().allow_directory(folder, true);
@@ -325,6 +328,12 @@ fn apply_window_theme(window: &WebviewWindow, settings: &serde_json::Value) {
     let _ = window.set_theme(window::saved_theme(settings));
 }
 
+/// An uncaught error or a failed background write in the webview, for marky.log.
+#[tauri::command]
+fn log_error(message: String) {
+    diagnostics::write(&format!("frontend: {message}"));
+}
+
 /// The user has gone idle or come back; Rust trims WebView2's memory while idle (memory.rs).
 #[tauri::command]
 fn set_idle(app: AppHandle, idle: bool) {
@@ -390,8 +399,9 @@ async fn show_error(window: WebviewWindow, message: String) {
 /// unsaved changes, so any recovery snapshot is obsolete.
 #[tauri::command]
 fn close_window(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
-    if let Ok(dir) = local_data_dir(&app) {
-        let _ = store::clear_snapshots(&dir);
+    let cleared = local_data_dir(&app).and_then(|dir| store::clear_snapshots(&dir).map_err(|e| e.to_string()));
+    if let Err(e) = cleared {
+        diagnostics::write(&format!("could not clear the recovery file on close: {e}"));
     }
     window.destroy().map_err(|e| e.to_string())
 }
@@ -466,6 +476,9 @@ fn main() {
         .on_menu_event(menu::on_event)
         .manage(state)
         .setup(move |app| {
+            if let Ok(dir) = local_data_dir(app.handle()) {
+                diagnostics::init(&dir, &app.package_info().version.to_string());
+            }
             // The window is created here, not from config, so its title bar and background
             // already match the saved theme when it first appears (no white flash).
             let settings = config_dir(app.handle()).map(|dir| store::load_settings(&dir)).unwrap_or_default();
@@ -495,6 +508,7 @@ fn main() {
             save_settings,
             set_menu_checks,
             set_idle,
+            log_error,
             set_dirty,
             ask_unsaved_changes,
             ask_choice,

@@ -1,7 +1,8 @@
 // Drives the running app over the WebView2 DevTools protocol (Node 24 has a global WebSocket).
 // Usage: node e2e.mjs <fixture.md>. Prints one PASS/FAIL line per check.
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const [fixture, exe, secondFixture] = process.argv.slice(2);
 const port = 9222;
@@ -68,7 +69,7 @@ const check = (name, ok, detail = '') => {
 };
 
 // ---- open, format detection, preview ----
-check('startup file opened', await isClean(), await title());
+check('startup file opened', await waitFor(isClean, 30_000), await title());
 check(
   'BOM + CRLF detected',
   (await evaluate(`document.getElementById('st-enc').textContent + ' ' + document.getElementById('st-eol').textContent`)) ===
@@ -303,6 +304,29 @@ check('links to non-Markdown files are refused', !!outside.err, outside.err ?? '
 const script = await invoke('open_external', { url: 'javascript:alert(1)' });
 const fileUrl = await invoke('open_external', { url: 'file:///C:/Windows/win.ini' });
 check('only http(s)/mailto links open externally', !!script.err && !!fileUrl.err);
+
+// Files over the size limit are refused with a message instead of exhausting memory. truncateSync
+// extends the file without writing its bytes, so this costs no time or real disk.
+const hugeFile = join(dirname(fixture), 'huge.md');
+writeFileSync(hugeFile, '');
+truncateSync(hugeFile, 129 * 1024 * 1024);
+const hugePath = await invoke('resolve_link', { from: fixture, target: 'huge.md' });
+const huge = await invoke('open_file', { path: hugePath.ok });
+unlinkSync(hugeFile);
+check('files over the size limit are refused', /Marky opens files up to 128 MB/.test(huge.err ?? ''), huge.err ?? 'OPENED');
+
+// Diagnostics: errors reported by the frontend land in marky.log in the app's data folder.
+const logFile = `${process.env.LOCALAPPDATA}\\dev.marky.editor\\marky.log`;
+const probe = `e2e probe ${Date.now()}`;
+await invoke('log_error', { message: probe });
+const logged = () => {
+  try {
+    return readFileSync(logFile, 'utf8').includes(probe);
+  } catch {
+    return false;
+  }
+};
+check('frontend errors reach marky.log', await waitFor(logged));
 
 // Idle memory trimming: the frontend reports going idle and coming back (waiting 30 s here would
 // only prove the timer; the RAM effect is measured by bench.ps1).

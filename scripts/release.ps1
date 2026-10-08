@@ -4,8 +4,9 @@
 .DESCRIPTION
   package.json is the version source (tauri.conf.json points at it); Cargo.toml is kept
   in sync. CHANGELOG.md's Unreleased section is stamped with the version and date and
-  must not be empty. Pushing the tag triggers .github/workflows/release.yml, which builds and
-  publishes the GitHub Release. 0.x versions are published as pre-releases (beta).
+  must not be empty. Pushing the tag triggers .github/workflows/release.yml, which runs the full
+  CI workflow on the tag and publishes the installer it tested as a GitHub Release. 0.x versions
+  are published as pre-releases (beta).
 .EXAMPLE
   ./scripts/release.ps1 -Version 0.2.0
   git push origin HEAD --follow-tags
@@ -24,9 +25,8 @@ try {
   if ([version]$Version -le [version]$current) { throw "Version $Version must be greater than the current $current." }
 
   # The Unreleased section becomes this release's notes (release.yml reads it back by version).
+  & (Join-Path $PSScriptRoot 'release-notes.ps1') Unreleased | Out-Null
   $changelog = Get-Content CHANGELOG.md -Raw
-  $unreleased = [regex]::Match($changelog, '(?ms)^## \[Unreleased\][^\n]*\n(.*?)(?=^## \[|\z)')
-  if (-not $unreleased.Groups[1].Value.Trim()) { throw 'CHANGELOG.md has nothing under ## [Unreleased]; describe the release there first.' }
   $stamped = "## [Unreleased]`n`n## [$Version] - $(Get-Date -Format 'yyyy-MM-dd')"
   $changelog = ([regex]'(?m)^## \[Unreleased\][^\n]*').Replace($changelog, $stamped, 1)
   Set-Content CHANGELOG.md $changelog -NoNewline

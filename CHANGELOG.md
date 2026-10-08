@@ -4,6 +4,18 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- A local log at `%LOCALAPPDATA%\dev.marky.editor\marky.log` records crashes and internal errors, so a bug report can include what went wrong. It stays on your machine.
+
+### Changed
+
+- Files larger than 128 MB are refused with a message instead of risking running out of memory. Files up to that size open as before.
+
+### Security
+
+- Mermaid diagrams now use the same up-to-date KaTeX as the rest of the preview for math in labels, replacing an older copy with a known advisory.
+
 ### Fixed
 
 - The untitled document Marky opens with now uses the line ending chosen under "Line ending for new files". It was always CRLF.

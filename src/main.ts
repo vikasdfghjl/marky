@@ -1,4 +1,4 @@
-import type { EditorState } from '@codemirror/state';
+import type { EditorState, Text } from '@codemirror/state';
 import type { ViewUpdate } from '@codemirror/view';
 import { trimMemoryWhenIdle } from './idle';
 import { measureColdStart } from './perf';
@@ -17,6 +17,9 @@ import { URL_SCHEME, UNTITLED, fileName, folderOf } from './paths';
 import { api, type FileMeta, type OpenedFile, type Snapshot } from './ipc';
 import { byId } from './dom';
 import { createSerialQueue } from './serial-queue';
+import { logUncaughtErrors } from './error-log';
+
+logUncaughtErrors();
 
 const TYPING_PAUSE_MS = 150;
 /** Bursts of watcher events (a save is several events) collapse into one check. */
@@ -62,16 +65,20 @@ let lastEditAt = 0;
 let nextTabId = 1;
 /** Mirrors Rust's close guard: true while any tab has unsaved changes. */
 let windowDirty = false;
-/** The recovery file's current content, to skip rewriting it unchanged; null when unknown (a write failed). */
-let lastSnapshotJson: string | null = '[]';
+/**
+ * What the recovery file holds: each dirty tab's id, document, path and format. Compared by
+ * identity (CodeMirror documents are immutable), so the 30 s timer never re-serialises a large
+ * unchanged document just to find nothing changed. Null when unknown (a write failed).
+ */
+let snapshotKey: unknown[] | null = [];
 /** `#anchor` of a cross-file link, applied once the linked file's preview has rendered. */
 let pendingAnchor: string | null = null;
 /** One at a time, so a multi-file drop creates tabs in order. */
-const opens = createSerialQueue();
+const opens = createSerialQueue('open');
 /** One at a time, so an older snapshot never lands after a newer one (or after the clear on save). */
-const snapshotWrites = createSerialQueue();
+const snapshotWrites = createSerialQueue('recovery snapshot');
 /** One at a time: saves share settings.json.tmp on the Rust side. */
-const settingsWrites = createSerialQueue();
+const settingsWrites = createSerialQueue('settings save');
 const fileChangeTimers = new Map<number, number>();
 
 performance.mark('js-start');
@@ -124,8 +131,12 @@ function tabByPath(path: string): Tab | undefined {
   return tabs.find((t) => t.path?.toLowerCase() === path.toLowerCase());
 }
 
+function tabDoc(tab: Tab): Text {
+  return tab === active ? editor.view.state.doc : tab.state.doc;
+}
+
 function tabText(tab: Tab): string {
-  return tab === active ? editor.text() : tab.state.doc.toString();
+  return tabDoc(tab).toString();
 }
 
 /** An untouched untitled tab, which opening a file reuses instead of adding a tab. */
@@ -571,22 +582,28 @@ function onDeletedOnDisk(tab: Tab) {
 
 /** Writes every unsaved tab to the recovery file, or clears it when none are left. */
 function snapshotDirtyTabs() {
-  const snapshots: Snapshot[] = tabs
-    .filter((t) => t.dirty)
-    .map((t) => ({ path: t.path, text: tabText(t), meta: t.meta }));
-  const json = JSON.stringify(snapshots);
-  if (json === lastSnapshotJson) return;
-  writeSnapshots(snapshots, json);
+  const dirty = tabs.filter((t) => t.dirty);
+  const key = dirty.flatMap((t) => [t.id, tabDoc(t), t.path, t.meta]);
+  if (snapshotKey && sameItems(key, snapshotKey)) return;
+  writeSnapshots(
+    dirty.map((t) => ({ path: t.path, text: tabText(t), meta: t.meta })),
+    key,
+  );
 }
 
 /** Queues a recovery-file write. A failed write forgets the file's content, so the next snapshot retries. */
-function writeSnapshots(snapshots: Snapshot[], json = JSON.stringify(snapshots)) {
-  lastSnapshotJson = json;
+function writeSnapshots(snapshots: Snapshot[], key: unknown[]) {
+  snapshotKey = key;
   snapshotWrites.push(() =>
-    api.snapshotBuffers(snapshots).catch(() => {
-      if (lastSnapshotJson === json) lastSnapshotJson = null;
+    api.snapshotBuffers(snapshots).catch((err) => {
+      if (snapshotKey === key) snapshotKey = null;
+      throw err; // the queue logs it
     }),
   );
+}
+
+function sameItems(a: unknown[], b: unknown[]): boolean {
+  return a.length === b.length && a.every((item, i) => item === b[i]);
 }
 
 /** Offers back the unsaved tabs of a session that did not end cleanly. */
@@ -597,7 +614,7 @@ async function offerRecovery(snapshots: Snapshot[]) {
     'Restore',
     'Discard',
   );
-  if (!restore) return writeSnapshots([]);
+  if (!restore) return writeSnapshots([], []);
   for (const snapshot of snapshots) await restoreSnapshot(snapshot);
   snapshotDirtyTabs();
 }

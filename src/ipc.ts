@@ -71,6 +71,8 @@ const tauriApi = {
   setMenuChecks: (checks: Record<string, boolean>) => invoke<void>('set_menu_checks', { checks }),
   /** Reports the user going idle or active again, so Rust can trim WebView2's memory while idle. */
   setIdle: (idle: boolean) => invoke<void>('set_idle', { idle }),
+  /** Appends a line to marky.log in the app's data folder; it never leaves the machine. */
+  logError: (message: string) => invoke<void>('log_error', { message }),
   /** URL prefix of the asset protocol that serves preview images from opened folders. */
   assetBase: () => convertFileSrc(''),
 };

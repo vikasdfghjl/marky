@@ -42,7 +42,9 @@ function Write-Check($name, [bool]$ok, $detail = '') {
 try {
   # Run A: everything scriptable, ending with unsaved changes for the close guard.
   $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
-  Start-Sleep -Seconds 4
+  # Parenthesised: Invoke-RestMethod emits a JSON array as one object, and the filter needs its items.
+  $devTools = Wait-Until { try { (Invoke-RestMethod 'http://127.0.0.1:9222/json' -TimeoutSec 2) | Where-Object type -eq 'page' } catch { $null } }
+  if (-not $devTools) { throw 'Marky did not open its DevTools endpoint on port 9222 within 60 s.' }
   node (Join-Path $PSScriptRoot 'e2e.mjs') $fixture $exe (Join-Path $dir 'second.md')
   if ($LASTEXITCODE -ne 0) { $script:failures++ }
 
@@ -55,7 +57,9 @@ try {
 [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
 [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, System.Text.StringBuilder name, int max);
 [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, System.Text.StringBuilder text, int max);
 public delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+public static string Title(IntPtr window) { var text = new System.Text.StringBuilder(256); GetWindowText(window, text, 256); return text.ToString(); }
 public static bool IsChecked(IntPtr bar, int menu, uint item) {
   const uint MF_BYPOSITION = 0x400, MF_CHECKED = 0x8;
   return (GetMenuState(GetSubMenu(bar, menu), item, MF_BYPOSITION) & MF_CHECKED) != 0;
@@ -90,10 +94,9 @@ public static void Close(IntPtr window) { PostMessage(window, 0x0010, IntPtr.Zer
   Write-Check 'menu ticks follow the settings' $ticksMatch (($ticks.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
 
   [Win32.Menu]::Close($window)
-  Start-Sleep -Seconds 2
-  Write-Check 'close with unsaved changes is held for the prompt' (-not $app.HasExited)
+  # A negative check, so a fixed wait: the window must still be open 2 s after the close request.
+  Write-Check 'close with unsaved changes is held for the prompt' (-not $app.WaitForExit(2000))
   Stop-ProcessTree $app.Id
-  Start-Sleep -Seconds 1
 
   # Run B: run A was killed with unsaved changes, so the relaunch must offer recovery (a native dialog).
   Add-Type -Namespace Win32 -Name Dialogs -MemberDefinition @'
@@ -114,18 +117,19 @@ public static bool HasVisibleDialog(uint processId) {
 }
 '@
   $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
-  Start-Sleep -Seconds 4
-  Write-Check 'relaunch after a crash offers recovery' ([Win32.Dialogs]::HasVisibleDialog([uint32]$app.Id))
+  Write-Check 'relaunch after a crash offers recovery' (Wait-Until { [Win32.Dialogs]::HasVisibleDialog([uint32]$app.Id) })
   Stop-ProcessTree $app.Id
-  Start-Sleep -Seconds 1
   Remove-Item (Join-Path $env:LOCALAPPDATA 'dev.marky.editor\recovery.json') -ErrorAction SilentlyContinue
 
   # Run C: a clean window closes immediately.
   $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
-  Start-Sleep -Seconds 4
-  [Win32.Menu]::Close([Win32.Menu]::MainWindow([uint32]$app.Id))
-  Start-Sleep -Seconds 2
-  Write-Check 'clean window closes without a prompt' $app.HasExited
+  # Wait until the file is showing, so this closes a fully loaded window.
+  $window = Wait-Until {
+    $handle = [Win32.Menu]::MainWindow([uint32]$app.Id)
+    if ($handle -ne [IntPtr]::Zero -and [Win32.Menu]::Title($handle) -eq "fixture.md $([char]0x2014) Marky") { $handle }
+  }
+  if ($window) { [Win32.Menu]::Close($window) }
+  Write-Check 'clean window closes without a prompt' ($window -and $app.WaitForExit(10000))
   if (-not $app.HasExited) { Stop-ProcessTree $app.Id }
 }
 finally {

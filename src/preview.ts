@@ -1,7 +1,8 @@
 import { api } from './ipc';
 import { drawMermaidBlocks, onMermaidThemeChange } from './mermaid-blocks';
 import { createBlockDom } from './preview-blocks';
-import type { RenderRequest, RenderResult } from './preview.worker';
+import { logError } from './error-log';
+import type { RenderReply, RenderRequest } from './preview.worker';
 
 export interface Preview {
   render(text: string): void;
@@ -39,15 +40,19 @@ export function createPreview(
   let lastText = '';
   const blockDom = createBlockDom(el);
 
-  worker.onmessage = async (e: MessageEvent<RenderResult>) => {
-    const { id } = e.data;
+  worker.onmessage = async (e: MessageEvent<RenderReply>) => {
+    const reply = e.data;
+    const { id } = reply;
     if (id !== seq) return; // stale result, a newer render is in flight
-    blockDom.apply(e.data.blocks);
+    if ('error' in reply) return logError('preview render', reply.error);
+    blockDom.apply(reply.blocks);
     loadMathStylesIfNeeded(el);
     await drawMermaidBlocks(el, () => id === seq);
     if (id !== seq) return;
-    requestAnimationFrame(() => onRendered(e.data.ms));
+    requestAnimationFrame(() => onRendered(reply.ms));
   };
+  // The worker failed to load or threw outside a render (render failures arrive as replies).
+  worker.onerror = (e) => logError('preview worker', e.message);
 
   onMermaidThemeChange(() => {
     blockDom.replaceEverythingNextTime(); // drawn diagrams are theme-specific
