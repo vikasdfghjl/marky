@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
 ### Added
 
 - A local log at `%LOCALAPPDATA%\dev.marky.editor\marky.log` records crashes and internal errors, so a bug report can include what went wrong. It stays on your machine.
