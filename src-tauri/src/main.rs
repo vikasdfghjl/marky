@@ -69,6 +69,14 @@ enum UnsavedChoice {
     Cancel,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Choice {
+    Confirm,
+    Deny,
+    Dismiss,
+}
+
 /// The first non-flag argument, resolved against the launching process's cwd.
 fn first_file_arg(args: impl IntoIterator<Item = String>, cwd: &Path) -> Option<PathBuf> {
     args.into_iter().find(|a| !a.starts_with('-')).map(|a| cwd.join(a))
@@ -339,7 +347,8 @@ async fn ask_unsaved_changes(window: WebviewWindow, file_name: String) -> Unsave
             CANCEL_LABEL.into(),
         ))
         .blocking_show_with_result();
-    // rfd may report a button by its role instead of its label.
+    // The plugin reports every button, Esc and the X by label (Esc and the X as Cancel). The role
+    // arms only guard against a plugin update that stops doing so.
     match result {
         MessageDialogResult::Custom(label) if label == SAVE_LABEL => UnsavedChoice::Save,
         MessageDialogResult::Custom(label) if label == DONT_SAVE_LABEL => UnsavedChoice::Discard,
@@ -350,16 +359,22 @@ async fn ask_unsaved_changes(window: WebviewWindow, file_name: String) -> Unsave
     }
 }
 
-/// Two-button question; true only when the user picks `confirm`.
+/// Esc and the title-bar X are reported as the last button: `dismiss` when given, otherwise
+/// `deny`. A question whose `deny` destroys something must offer a harmless `dismiss`.
 #[tauri::command]
-async fn ask_choice(window: WebviewWindow, message: String, confirm: String, cancel: String) -> bool {
-    let result = message_dialog(&window, message, MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(confirm.clone(), cancel))
-        .blocking_show_with_result();
+async fn ask_choice(window: WebviewWindow, message: String, confirm: String, deny: String, dismiss: Option<String>) -> Choice {
+    let buttons = match dismiss {
+        Some(dismiss) => MessageDialogButtons::YesNoCancelCustom(confirm.clone(), deny.clone(), dismiss),
+        None => MessageDialogButtons::OkCancelCustom(confirm.clone(), deny.clone()),
+    };
+    let result = message_dialog(&window, message, MessageDialogKind::Warning).buttons(buttons).blocking_show_with_result();
+    // The role arm guards against a plugin update that stops reporting buttons by label;
+    // anything unrecognised is the harmless Dismiss.
     match result {
-        MessageDialogResult::Custom(label) => label == confirm,
-        MessageDialogResult::Ok => true,
-        _ => false,
+        MessageDialogResult::Custom(label) if label == confirm => Choice::Confirm,
+        MessageDialogResult::Custom(label) if label == deny => Choice::Deny,
+        MessageDialogResult::Ok | MessageDialogResult::Yes => Choice::Confirm,
+        _ => Choice::Dismiss,
     }
 }
 
@@ -368,14 +383,10 @@ async fn show_error(window: WebviewWindow, message: String) {
     message_dialog(&window, message, MessageDialogKind::Error).blocking_show();
 }
 
-/// Closes without raising CloseRequested again; the frontend has already resolved
-/// unsaved changes, so any recovery snapshot is obsolete.
+/// Closes without raising CloseRequested again. The frontend has already resolved unsaved changes
+/// and written the recovery file's final content, which keeps any recovery the user postponed.
 #[tauri::command]
-fn close_window(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
-    let cleared = local_data_dir(&app).and_then(|dir| store::clear_snapshots(&dir).map_err(|e| e.to_string()));
-    if let Err(e) = cleared {
-        diagnostics::write(&format!("could not clear the recovery file on close: {e}"));
-    }
+fn close_window(window: WebviewWindow) -> Result<(), String> {
     window.destroy().map_err(|e| e.to_string())
 }
 

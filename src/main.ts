@@ -66,10 +66,16 @@ let nextTabId = 1;
 /** Mirrors Rust's close guard: true while any tab has unsaved changes. */
 let windowDirty = false;
 /**
- * What the recovery file holds: each dirty tab's id, document, path and format. Documents are
- * immutable, so comparing by identity spots a change without serialising them. Null after a failed write.
+ * What the recovery file holds: the held recovery, then each dirty tab's id, document, path and format.
+ * Documents are immutable, so comparing by identity spots a change without serialising them.
+ * Null after a failed write.
  */
 let snapshotKey: unknown[] | null = [];
+/**
+ * Recovery from a session that did not end cleanly, held until the user restores or discards it.
+ * Every recovery write keeps it, so "Not now" leaves it on disk for the next launch.
+ */
+let heldRecovery: Snapshot[] = [];
 /** `#anchor` of a cross-file link, applied once the linked file's preview has rendered. */
 let pendingAnchor: string | null = null;
 /** In order, so a multi-file drop creates its tabs in order. */
@@ -438,8 +444,9 @@ async function confirmAndCloseWindow() {
   await closeWindowNow();
 }
 
-/** Rust clears the recovery file as it closes the window, so a snapshot still in flight must land first. */
+/** Every unsaved tab is resolved by now, so the recovery file keeps only the held recovery. */
 async function closeWindowNow() {
+  writeSnapshots(heldRecovery, [heldRecovery]);
   await snapshotWrites.drained();
   await api.closeWindow();
 }
@@ -553,12 +560,12 @@ async function reconcileWithDisk(tab: Tab) {
 
   // Ask once per disk version, even if the user keeps their changes.
   tab.mtimeMs = diskMtime;
-  const reload = await api.askChoice(
+  const choice = await api.askChoice(
     `${fileName(path)} was changed by another program. Reload it and lose your unsaved changes?`,
     'Reload',
     'Keep mine',
   );
-  if (reload) await reloadKeepingPosition(tab);
+  if (choice === 'confirm') await reloadKeepingPosition(tab);
 }
 
 async function reloadKeepingPosition(tab: Tab) {
@@ -585,15 +592,12 @@ function onDeletedOnDisk(tab: Tab) {
 
 // ---- crash recovery (F13) ----
 
-/** Writes every unsaved tab to the recovery file, or clears it when none are left. */
+/** Writes the held recovery and every unsaved tab to the recovery file; with neither, clears it. */
 function snapshotDirtyTabs() {
   const dirty = tabs.filter((t) => t.dirty);
-  const key = dirty.flatMap((t) => [t.id, tabDoc(t), t.path, t.meta]);
+  const key = [heldRecovery, ...dirty.flatMap((t) => [t.id, tabDoc(t), t.path, t.meta])];
   if (snapshotKey && sameItems(key, snapshotKey)) return;
-  writeSnapshots(
-    dirty.map((t) => ({ path: t.path, text: tabText(t), meta: t.meta })),
-    key,
-  );
+  writeSnapshots([...heldRecovery, ...dirty.map((t) => ({ path: t.path, text: tabText(t), meta: t.meta }))], key);
 }
 
 /** Queues a recovery-file write. A failed write forgets the file's content, so the next snapshot retries. */
@@ -611,15 +615,21 @@ function sameItems(a: unknown[], b: unknown[]): boolean {
   return a.length === b.length && a.every((item, i) => item === b[i]);
 }
 
-async function offerRecovery(snapshots: Snapshot[]) {
-  const names = snapshots.map((s) => fileName(s.path)).join(', ');
-  const restore = await api.askChoice(
+async function offerRecovery() {
+  const names = heldRecovery.map((s) => fileName(s.path)).join(', ');
+  const choice = await api.askChoice(
     `Marky did not close cleanly. Restore your unsaved changes to ${names}?`,
     'Restore',
     'Discard',
+    'Not now',
   );
-  if (!restore) return writeSnapshots([], []);
-  for (const snapshot of snapshots) await restoreSnapshot(snapshot);
+  // Esc and the title-bar X mean "Not now": the recovery stays held and is offered at the next launch.
+  if (choice === 'dismiss') return;
+  if (choice === 'confirm') {
+    for (const snapshot of heldRecovery) await restoreSnapshot(snapshot);
+  }
+  // Released only now, so a crash while restoring still leaves every snapshot on disk.
+  heldRecovery = [];
   snapshotDirtyTabs();
 }
 
@@ -700,6 +710,7 @@ async function start() {
   const [startup] = await Promise.all([api.startupState(), listening]);
   performance.mark('ipc-ready');
   settings.load(readSettings(startup.settings));
+  heldRecovery = startup.recovery;
 
   // Paint first: the file was pre-read in Rust while WebView2 started.
   if (startup.file) {
@@ -714,7 +725,7 @@ async function start() {
 
   window.setInterval(snapshotDirtyTabs, SNAPSHOT_INTERVAL_MS);
   if (startup.fileError) await api.showError(startup.fileError);
-  if (startup.recovery.length) await offerRecovery(startup.recovery);
+  if (heldRecovery.length) await offerRecovery();
 }
 
 void start();

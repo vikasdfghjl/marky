@@ -46,9 +46,9 @@ const tauriApi = {
   snapshotBuffers: (snapshots: Snapshot[]) => invoke<void>('snapshot_buffers', { snapshots }),
   setDirty: (dirty: boolean) => invoke<void>('set_dirty', { dirty }),
   askUnsavedChanges: (fileName: string) => invoke<UnsavedChoice>('ask_unsaved_changes', { fileName }),
-  /** True only when the user picks `confirm`. */
-  askChoice: (message: string, confirm: string, cancel: string) =>
-    invoke<boolean>('ask_choice', { message, confirm, cancel }),
+  /** Esc and the title-bar X answer `dismiss` when it is given, otherwise `deny`. */
+  askChoice: (message: string, confirm: string, deny: string, dismiss?: string) =>
+    invoke<Choice>('ask_choice', { message, confirm, deny, dismiss }),
   showError: (message: string) => invoke<void>('show_error', { message }),
   closeWindow: () => invoke<void>('close_window'),
   onOpenRequest: (cb: (path: string) => void): Promise<UnlistenFn> =>
@@ -80,12 +80,14 @@ const tauriApi = {
 export type MarkyApi = typeof tauriApi;
 
 /**
- * The Rust core, or an in-memory stand-in when the frontend runs in a plain browser
- * (`npm run dev`). Callers never branch on which one they got.
+ * The Rust core, or an in-memory stand-in when `npm run dev` runs in a plain browser. Callers
+ * never branch on which one they got. Production builds always use the core, so the stand-in
+ * (and its sample document) is left out of them.
  */
-export const api: MarkyApi = '__TAURI_INTERNALS__' in window ? tauriApi : browserApi;
+export const api: MarkyApi = import.meta.env.DEV && !('__TAURI_INTERNALS__' in window) ? browserApi : tauriApi;
 
 export type UnsavedChoice = 'save' | 'discard' | 'cancel';
+export type Choice = 'confirm' | 'deny' | 'dismiss';
 
 export interface StartupState {
   file: OpenedFile | null;

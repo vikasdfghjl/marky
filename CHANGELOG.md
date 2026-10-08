@@ -18,6 +18,7 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ### Fixed
 
+- Pressing Esc or closing the "Restore your unsaved changes?" prompt no longer deletes your unsaved work. The prompt now offers Restore, Discard and Not now; Esc and the close button mean Not now, and the work is offered again at the next launch.
 - The untitled document Marky opens with now uses the line ending chosen under "Line ending for new files". It was always CRLF.
 - Crash-recovery copies, settings and the recent-files list are now flushed to disk before they replace the old file, as documents already were, so a power cut can no longer leave them empty.
 - Open Recent no longer lists one file twice when the two spellings differ only in the case of a non-English letter (for example `Ä.md` and `ä.md`).
@@ -37,7 +38,7 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 - Subscript and superscript: `H~2~O` and `19^th^` show as H₂O and 19ᵗʰ in the preview, and small and shifted in the editor. `~~strikethrough~~`, code and math are unaffected.
 - Inserted and marked text: `++inserted++` is underlined and `==marked==` highlighted, in the editor and the preview.
 - Footnotes: `[^1]` references with `[^1]: …` definitions, and inline `^[…]` footnotes, listed at the end of the preview. Clicking a footnote number jumps to its definition.
-- Definition lists in the preview: a term on one line, then its definition on a line starting with `: `.
+- Definition lists in the preview: a term on one line, then its definition on a line starting with `:`.
 - Abbreviations in the preview: define one with `*[HTML]: Hyper Text Markup Language` and every HTML in the document shows the full form on hover.
 
 ### Removed

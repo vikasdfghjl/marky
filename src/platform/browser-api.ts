@@ -1,4 +1,4 @@
-import type { FileMeta, MarkyApi, OpenedFile, UnsavedChoice } from './ipc';
+import type { Choice, FileMeta, MarkyApi, OpenedFile, UnsavedChoice } from './ipc';
 import { folderOf, joinWindowsPath } from '../core/paths';
 import { SAMPLE } from './sample';
 
@@ -81,7 +81,11 @@ export const browserApi: MarkyApi = {
   setDirty: async () => {},
   askUnsavedChanges: async (name): Promise<UnsavedChoice> =>
     window.confirm(`Discard unsaved changes to ${name}?`) ? 'discard' : 'cancel',
-  askChoice: async (message, confirm, cancel) => window.confirm(`${message}\n\nOK: ${confirm}\nCancel: ${cancel}`),
+  // confirm() has two buttons, so Cancel stands for `dismiss` when there is one, as Esc does natively.
+  askChoice: async (message, confirm, deny, dismiss): Promise<Choice> => {
+    if (window.confirm(`${message}\n\nOK: ${confirm}\nCancel: ${dismiss ?? deny}`)) return 'confirm';
+    return dismiss ? 'dismiss' : 'deny';
+  },
   showError: async (message) => window.alert(message),
   closeWindow: async () => window.location.reload(),
   onOpenRequest: noListener,

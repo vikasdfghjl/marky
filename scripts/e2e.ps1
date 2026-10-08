@@ -104,21 +104,36 @@ public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
 [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder name, int max);
 [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-public static bool HasVisibleDialog(uint processId) {
-  bool found = false;
+public static IntPtr VisibleDialog(uint processId) {
+  IntPtr found = IntPtr.Zero;
   EnumWindows((h, _) => {
     uint pid; GetWindowThreadProcessId(h, out pid);
     var name = new System.Text.StringBuilder(64); GetClassName(h, name, 64);
-    if (pid == processId && IsWindowVisible(h) && name.ToString() == "#32770") found = true;
+    if (pid == processId && IsWindowVisible(h) && name.ToString() == "#32770") { found = h; return false; }
     return true;
   }, IntPtr.Zero);
   return found;
 }
 '@
+  $recoveryFile = Join-Path $env:LOCALAPPDATA 'dev.marky.editor\recovery.json'
+  $recoveryDialog = { $dialog = [Win32.Dialogs]::VisibleDialog([uint32]$app.Id); if ($dialog -ne [IntPtr]::Zero) { $dialog } }
   $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
-  Write-Check 'relaunch after a crash offers recovery' (Wait-Until { [Win32.Dialogs]::HasVisibleDialog([uint32]$app.Id) })
+  $dialog = Wait-Until $recoveryDialog
+  Write-Check 'relaunch after a crash offers recovery' ([bool]$dialog)
+
+  # The title-bar X (WM_CLOSE, like Esc) answers "Not now": nothing is restored or deleted, and the
+  # recovery survives closing the app (a clean window, so it closes natively).
+  if ($dialog) { [Win32.Menu]::Close($dialog) }
+  $dismissed = Wait-Until { -not (& $recoveryDialog) } 10
+  [Win32.Menu]::Close([Win32.Menu]::MainWindow([uint32]$app.Id))
+  $kept = $dismissed -and $app.WaitForExit(10000) -and "$(Get-Content $recoveryFile -Raw -ErrorAction SilentlyContinue)".Contains('unsaved ')
+  Write-Check 'closing the recovery prompt keeps the unsaved work' $kept
+  if (-not $app.HasExited) { Stop-ProcessTree $app.Id }
+
+  $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
+  Write-Check 'postponed recovery is offered again at the next launch' ([bool](Wait-Until $recoveryDialog))
   Stop-ProcessTree $app.Id
-  Remove-Item (Join-Path $env:LOCALAPPDATA 'dev.marky.editor\recovery.json') -ErrorAction SilentlyContinue
+  Remove-Item $recoveryFile -ErrorAction SilentlyContinue
 
   # Run C: a clean window closes immediately.
   $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
