@@ -1,8 +1,6 @@
 //! `marky.log` in the app's local data folder: panics, uncaught frontend errors and failed
-//! background writes, so a report of "it just closed" has something to look at. The file
-//! never leaves the machine (no telemetry); users attach it to a bug report themselves.
-//!
-//! Release builds abort on panic and have no console, so without this a crash leaves no trace.
+//! background writes. Release builds abort on panic and have no console, so this is the only
+//! trace a crash leaves. The file never leaves the machine; users attach it to bug reports.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -13,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const LOG_FILE: &str = "marky.log";
 const PREVIOUS_LOG_FILE: &str = "marky.previous.log";
-/// Rotated at startup past this size; the previous file is kept once.
+/// Checked at startup; one previous file is kept.
 const ROTATE_AT_BYTES: u64 = 512 * 1024;
 /// A runaway error loop in the webview must not fill the disk.
 const MAX_LINES_PER_SESSION: usize = 200;

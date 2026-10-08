@@ -10,7 +10,7 @@ const CHECK_EVERY_MS = 5_000;
 // (Chromium sends synthetic ones after layout changes), which kept waking a trimmed window.
 const ACTIVITY_EVENTS = ['keydown', 'pointerdown', 'wheel'] as const;
 
-/** Returns `noteActivity` for things that are not input but are use (a file changing on disk, a file opened). */
+/** Returns `noteActivity`, for use that is not DOM input (menu commands, opened files, disk changes). */
 export function trimMemoryWhenIdle(): () => void {
   let lastActivityAt = performance.now();
   let idle = false;

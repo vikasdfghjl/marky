@@ -25,17 +25,17 @@ const TYPING_PAUSE_MS = 150;
 /** Bursts of watcher events (a save is several events) collapse into one check. */
 const FILE_CHANGE_SETTLE_MS = 100;
 const SNAPSHOT_INTERVAL_MS = 30_000;
-/** Above this size the preview starts hidden (PRD: files > 5 MB open with preview off). */
+/** PRD: files over 5 MB open with the preview off. */
 const PREVIEW_AUTO_OFF_BYTES = 5 * 1024 * 1024;
-/** Auto-save waits for a real pause, not every typing pause, to keep disk writes and watcher events rare. */
+/** Longer than the typing pause, so disk writes and watcher events stay rare. */
 const AUTO_SAVE_DELAY_MS = 1000;
-/** PRD F14: up to 20 open files. */
+/** PRD F14. */
 const MAX_TABS = 20;
 
 /** What a tab shows: a file from disk, or a new untitled document (path null). */
 type EditorDocument = Pick<OpenedFile, 'text' | 'meta' | 'readOnly'> & {
   path: string | null;
-  /** Disk mtime this buffer corresponds to; null for untitled or unknown. */
+  /** Disk mtime of the version loaded or saved; null for untitled or unknown. */
   mtimeMs: number | null;
 };
 
@@ -46,7 +46,7 @@ interface Tab {
   readOnly: boolean;
   mtimeMs: number | null;
   dirty: boolean;
-  /** The tab's CodeMirror state (document, undo history, selection). Stale while the tab is active: the view owns it. */
+  /** Document, undo history and selection. Stale while the tab is active: the view owns it then. */
   state: EditorState;
   scrollTop: number;
 }
@@ -66,18 +66,17 @@ let nextTabId = 1;
 /** Mirrors Rust's close guard: true while any tab has unsaved changes. */
 let windowDirty = false;
 /**
- * What the recovery file holds: each dirty tab's id, document, path and format. Compared by
- * identity (CodeMirror documents are immutable), so the 30 s timer never re-serialises a large
- * unchanged document just to find nothing changed. Null when unknown (a write failed).
+ * What the recovery file holds: each dirty tab's id, document, path and format. Documents are
+ * immutable, so comparing by identity spots a change without serialising them. Null after a failed write.
  */
 let snapshotKey: unknown[] | null = [];
 /** `#anchor` of a cross-file link, applied once the linked file's preview has rendered. */
 let pendingAnchor: string | null = null;
-/** One at a time, so a multi-file drop creates tabs in order. */
+/** In order, so a multi-file drop creates its tabs in order. */
 const opens = createSerialQueue('open');
-/** One at a time, so an older snapshot never lands after a newer one (or after the clear on save). */
+/** In order, so an older snapshot never lands after a newer one or after the clear on save. */
 const snapshotWrites = createSerialQueue('recovery snapshot');
-/** One at a time: saves share settings.json.tmp on the Rust side. */
+/** In order: saves share settings.json.tmp on the Rust side. */
 const settingsWrites = createSerialQueue('settings save');
 const fileChangeTimers = new Map<number, number>();
 
@@ -95,7 +94,6 @@ const tabStrip = createTabStrip(byId('tabs'), {
 const settings = createSettingsStore((current) => settingsWrites.push(() => api.saveSettings(current)));
 settings.onChange(applySettings);
 const settingsPanel = createSettingsPanel(byId('settings-button') as HTMLButtonElement, settings);
-/** Input trims nothing; going quiet for a while does (idle.ts). Non-input use calls this directly. */
 const noteActivity = trimMemoryWhenIdle();
 byId('new-tab-button').addEventListener('click', () => runCommand('new'));
 const editorToggle = byId('editor-toggle');
@@ -127,6 +125,7 @@ function tabById(id: number): Tab {
   return tab;
 }
 
+/** Windows paths are case-insensitive. */
 function tabByPath(path: string): Tab | undefined {
   return tabs.find((t) => t.path?.toLowerCase() === path.toLowerCase());
 }
@@ -227,7 +226,7 @@ function onEditorUpdate(update: ViewUpdate) {
   scheduleAutoSave();
 }
 
-/** Saves the active tab once typing has paused, if auto-save is on. Untitled and read-only tabs are never auto-saved. */
+/** Untitled and read-only tabs are never auto-saved. */
 function scheduleAutoSave() {
   clearTimeout(autoSaveTimer);
   const tab = active;
@@ -365,7 +364,7 @@ function toggleSetting(setting: (typeof MENU_TOGGLES)[keyof typeof MENU_TOGGLES]
   settings.update(changes);
 }
 
-/** An empty untitled document with the configured line ending. */
+/** Uses the configured line ending, which NEW_DOCUMENT cannot know before settings load. */
 function untitledDocument(): EditorDocument {
   return { ...NEW_DOCUMENT, meta: { bom: false, lineEnding: settings.get().newFileLineEnding } };
 }
@@ -410,7 +409,7 @@ function newDocument() {
 
 /** Closing the last tab closes the window, as in Windows Notepad. */
 async function closeTab(tab: Tab = active) {
-  activate(tab);
+  activate(tab); // the unsaved-changes prompt is about the tab on screen
   if (!(await resolveUnsavedChanges())) return;
   if (tabs.length === 1) return closeWindowNow();
 
@@ -606,7 +605,6 @@ function sameItems(a: unknown[], b: unknown[]): boolean {
   return a.length === b.length && a.every((item, i) => item === b[i]);
 }
 
-/** Offers back the unsaved tabs of a session that did not end cleanly. */
 async function offerRecovery(snapshots: Snapshot[]) {
   const names = snapshots.map((s) => fileName(s.path)).join(', ');
   const restore = await api.askChoice(

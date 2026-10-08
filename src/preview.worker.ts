@@ -18,7 +18,6 @@ export interface RenderRequest {
   documentFolder: string | null;
   /** URL prefix of Tauri's asset protocol (`http://asset.localhost/` on Windows); empty outside Tauri. */
   assetBase: string;
-  /** Smart quotes, dashes, ellipses and (c)/(tm)/(r) symbols (the `typographer` setting). */
   typographer: boolean;
 }
 

@@ -1,9 +1,8 @@
 <#
 .SYNOPSIS
-  End-to-end smoke test of the release app, driven over the WebView2 DevTools protocol.
-  Covers: open from CLI arg, BOM/CRLF round trip, dirty marker, Ctrl+S, path allowlist,
-  local images, recent files, external-change reload, recovery snapshot, close guard.
-  Native dialogs block automation, so dialog-driven flows are not covered.
+  End-to-end smoke test of the release app. e2e.mjs drives the page over the WebView2 DevTools
+  protocol; this script adds what only Windows can see: the native menu, the close guard and
+  crash recovery across relaunches. Native dialogs block automation, so their flows are not covered.
 .EXAMPLE
   npx tauri build --no-bundle; ./scripts/e2e.ps1
 #>

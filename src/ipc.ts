@@ -24,7 +24,7 @@ export interface OpenedFile {
 // Paths are only ever produced by the Rust side (dialog, drag-drop, CLI arg),
 // which records them in an allowlist; open/save refuse anything else.
 const tauriApi = {
-  /** One-shot at startup: the pre-read CLI/Explorer file and any crash-recovery snapshot. */
+  /** Called once: everything the first paint needs, in one round trip. */
   startupState: () => invoke<StartupState>('startup_state'),
   /** `jsMs` is time since navigation start, so Rust can split webview vs. frontend cost. */
   startupMs: (jsMs: number, marks: string) => invoke<number>('startup_ms', { jsMs, marks }),

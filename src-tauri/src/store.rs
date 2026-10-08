@@ -1,5 +1,5 @@
-//! Small JSON files in the app's own folders: the recent-files list (F9) and the
-//! crash-recovery snapshot of an unsaved buffer (F13).
+//! Small JSON files in the app's own folders: recent files (F9), settings, and the
+//! crash-recovery snapshots of unsaved tabs (F13).
 
 use crate::files::FileMeta;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -28,7 +28,7 @@ pub fn load_recent(config_dir: &Path) -> Vec<PathBuf> {
 
 pub fn push_recent(config_dir: &Path, path: &Path) -> io::Result<()> {
     let mut recent = load_recent(config_dir);
-    recent.retain(|p| !p.as_os_str().eq_ignore_ascii_case(path.as_os_str()));
+    recent.retain(|p| !p.as_os_str().eq_ignore_ascii_case(path.as_os_str())); // Windows paths ignore case
     recent.insert(0, path.to_path_buf());
     recent.truncate(RECENT_LIMIT);
     write_json(&config_dir.join(RECENT_FILE), &recent)
@@ -44,7 +44,6 @@ pub fn save_settings(config_dir: &Path, settings: &serde_json::Value) -> io::Res
     write_json(&config_dir.join(SETTINGS_FILE), settings)
 }
 
-/// One entry per unsaved tab.
 pub fn save_snapshots(data_dir: &Path, snapshots: &[Snapshot]) -> io::Result<()> {
     write_json(&data_dir.join(SNAPSHOT_FILE), snapshots)
 }

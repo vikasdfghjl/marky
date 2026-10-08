@@ -1,12 +1,10 @@
-//! Asks WebView2 to trim its memory (`MemoryUsageTargetLevel`, Microsoft's guidance for
-//! inactive webviews) while Marky is minimised or the user has been idle. A typical document
-//! idles at about 125 MB; trimmed it drops to 60–90 MB, and the price is one slower first
-//! keystroke (about 55 ms instead of 15 ms) when the user comes back.
+//! Asks WebView2 to trim its memory (`MemoryUsageTargetLevel`, Microsoft's guidance for inactive
+//! webviews) while the window is minimised or the user is idle, at the cost of a slower first
+//! keystroke afterwards (measured in the README's Benchmarks).
 //!
-//! Two independent reasons, one level: it is Low while either holds. Minimise is detected here;
-//! idleness is judged by the frontend (`idle.ts`), which reports only its transitions, so typing
-//! still costs no IPC. Not on focus loss: Alt+Tab away and back must stay instant.
-//! Tauri does not expose the setting, so this goes through the WebView2 controller.
+//! Two reasons, one level: Low while either holds. Minimising is detected here; idleness is judged
+//! by `idle.ts`, which reports only its transitions, so typing costs no IPC. Not on focus loss:
+//! Alt+Tab back must stay instant. Tauri does not expose the setting, hence the WebView2 controller.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

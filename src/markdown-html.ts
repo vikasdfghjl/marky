@@ -3,7 +3,7 @@ import { LanguageSupport, LRLanguage } from '@codemirror/language';
 
 // Stands in for @codemirror/lang-html inside @codemirror/lang-markdown only (see vite.config.ts).
 // Markdown uses it to highlight inline HTML tags; the real package also parses <script> and
-// <style> contents, which pulls the JavaScript and CSS parsers (~130 KB) into the startup bundle.
+// <style> contents, which pulls the JavaScript and CSS parsers (~45 KB gzipped) into the startup bundle.
 // ```html fences still load the full package lazily through language-data.
 
 const htmlTagLanguage = LRLanguage.define({

@@ -1,11 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 
-/**
- * @codemirror/lang-markdown imports @codemirror/lang-html just to highlight inline HTML tags,
- * and that package drags the JavaScript and CSS parsers into the startup bundle. Give Markdown
- * a slim HTML language instead; every other importer still gets the real package.
- */
+/** Only @codemirror/lang-markdown gets the slim HTML language; src/markdown-html.ts says why. */
 const slimHtmlForMarkdown: Plugin = {
   name: 'marky:slim-html-for-markdown',
   enforce: 'pre',

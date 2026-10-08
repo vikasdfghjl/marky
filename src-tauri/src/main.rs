@@ -31,7 +31,6 @@ const CANCEL_LABEL: &str = "Cancel";
 /// Settings are small; anything larger is not ours.
 const SETTINGS_MAX_BYTES: usize = 16 * 1024;
 
-/// Background read of the startup file: the path and its result.
 type StartupRead = std::thread::JoinHandle<(PathBuf, io::Result<OpenedFile>)>;
 
 struct AppState {
@@ -116,13 +115,14 @@ fn record_file_access(app: &AppHandle, path: &Path) {
         }
     }
     if let Some(folder) = path.parent() {
+        // Recursive: images usually sit in a subfolder such as img/.
         let _ = app.asset_protocol_scope().allow_directory(folder, true);
     }
 }
 
 // ---- startup & diagnostics ----
 
-/// One-shot: the pre-read startup file and any crash-recovery snapshot (whose path is re-authorised).
+/// Called once. Recovered paths are re-authorised so the restored tabs can be saved back.
 #[tauri::command]
 async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<StartupState, String> {
     let recovery = store::read_snapshots(&local_data_dir(&app)?);
@@ -278,6 +278,7 @@ async fn watch_file(app: AppHandle, state: State<'_, AppState>, path: String) ->
     Ok(())
 }
 
+/// No allowlist check: dropping a watch exposes nothing.
 #[tauri::command]
 fn unwatch_file(state: State<'_, AppState>, path: String) {
     let Ok(path) = std::path::absolute(&path) else { return };
@@ -367,6 +368,7 @@ async fn ask_unsaved_changes(window: WebviewWindow, file_name: String) -> Unsave
             CANCEL_LABEL.into(),
         ))
         .blocking_show_with_result();
+    // rfd may report a button by its role instead of its label.
     match result {
         MessageDialogResult::Custom(label) if label == SAVE_LABEL => UnsavedChoice::Save,
         MessageDialogResult::Custom(label) if label == DONT_SAVE_LABEL => UnsavedChoice::Discard,

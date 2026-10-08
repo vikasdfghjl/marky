@@ -5,7 +5,7 @@
 use tauri::window::Color;
 use tauri::{AppHandle, Theme, WebviewWindow, WebviewWindowBuilder};
 
-// --bg in styles.css: the colour the page paints first.
+// Must match --bg in styles.css, the colour the page paints first.
 const DARK_BACKGROUND: Color = Color(0x1e, 0x1f, 0x22, 0xff);
 const LIGHT_BACKGROUND: Color = Color(0xff, 0xff, 0xff, 0xff);
 

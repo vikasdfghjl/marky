@@ -1,5 +1,5 @@
 // Drives the running app over the WebView2 DevTools protocol (Node 24 has a global WebSocket).
-// Usage: node e2e.mjs <fixture.md>. Prints one PASS/FAIL line per check.
+// Run by e2e.ps1: node e2e.mjs <fixture.md> <marky.exe> <second.md>. Prints one PASS/FAIL line per check.
 import { spawn } from 'node:child_process';
 import { readFileSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

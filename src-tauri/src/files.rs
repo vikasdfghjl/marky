@@ -71,9 +71,8 @@ pub fn read(path: &Path) -> io::Result<OpenedFile> {
     })
 }
 
-/// Encode `text` (LF) with the file's BOM and line ending, write it to a temp
-/// file beside the target, flush it to disk, then atomically swap it in.
-/// Returns the new mtime so the watcher can ignore our own write.
+/// Writes `text` (LF) back with the file's BOM and line ending. Returns the new mtime, so the
+/// frontend can tell its own save from another program's change.
 pub fn write(path: &Path, text: &str, meta: FileMeta) -> io::Result<u64> {
     let target = resolve_symlink(path)?;
     let bytes = encode(text, meta);
@@ -92,7 +91,7 @@ pub fn write(path: &Path, text: &str, meta: FileMeta) -> io::Result<u64> {
     mtime_ms(&target)
 }
 
-/// Writes `bytes` to `tmp`, flushes them to disk, then swaps `tmp` in for `target`.
+/// Flushes before the swap, so a crash or power loss leaves the old file or the new one, never a torn one.
 fn write_temp_then_swap(tmp: &Path, target: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = fs::File::create(tmp)?;
     file.write_all(bytes)?;

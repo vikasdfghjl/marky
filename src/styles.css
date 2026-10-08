@@ -219,12 +219,11 @@ body {
   color: var(--fg);
 }
 
-/* + follows the last tab, as in browsers; the gear stays at the right edge. */
 #new-tab-button {
   font-size: 20px;
 }
 
-/* The pane toggle and the gear sit together at the right edge. */
+/* Pushes the pane toggle and the gear to the right edge; + stays after the last tab, as in browsers. */
 #editor-toggle {
   display: grid;
   place-items: center;
