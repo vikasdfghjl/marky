@@ -1,8 +1,8 @@
-import { api } from './ipc';
+import { api } from '../platform/ipc';
 import { drawMermaidBlocks, onMermaidThemeChange } from './mermaid-blocks';
 import { createBlockDom } from './preview-blocks';
-import { logError } from './error-log';
-import type { RenderReply, RenderRequest } from './preview.worker';
+import { logError } from '../core/error-log';
+import type { RenderReply, RenderRequest } from './worker/preview.worker';
 
 export interface Preview {
   render(text: string): void;
@@ -31,7 +31,7 @@ export function createPreview(
   onRendered: (parseMs: number) => void,
   onLinkClick: (href: string) => void,
 ): Preview {
-  const worker = new Worker(new URL('./preview.worker.ts', import.meta.url), { type: 'module' });
+  const worker = new Worker(new URL('./worker/preview.worker.ts', import.meta.url), { type: 'module' });
   const assetBase = api.assetBase();
   let seq = 0;
   let visible = true;

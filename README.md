@@ -206,32 +206,42 @@ The status bar shows two development metrics: `start` (process start to first ed
 ```
 index.html              App shell: editor pane, preview pane, status bar
 src/
-  main.ts               App wiring: documents, save/open, external changes, recovery, shortcuts
-  editor.ts             CodeMirror 6 setup and highlight theme
-  markdown-html.ts      Slim HTML language for inline tags in Markdown (keeps JS/CSS parsers out of startup)
-  markdown-inline-syntax.ts  Editor highlighting for ~sub~, ^sup^ and ==mark==, matching the preview
-  preview.ts            Preview pane; sends text to the worker, swaps in HTML
-  preview.worker.ts     markdown-it rendering and local-image resolution off the main thread
-  preview-blocks.ts     Block-level DOM diff: replaces only the preview blocks an edit changed
-  markdown-plugins.ts   Frontmatter, footnotes
-  code-highlight.ts     Lezer-based code highlighting for preview fences
-  mermaid-blocks.ts     Lazy Mermaid rendering with an SVG cache
-  math.ts               `$` / `$$` / `math` parsing and lazy KaTeX rendering (in the worker)
-  outline.ts            Outline sidebar from the syntax tree
-  scroll-sync.ts        Editor-to-preview synced scroll via source-line markers
-  recent-picker.ts      Ctrl+R recent-files list
-  tab-strip.ts          Tab strip rendering (tablist semantics)
-  status-bar.ts         Footer: cursor, counts, file format, timings
-  settings.ts           Settings model, defaults, defensive reading, store
-  settings-panel.ts     The gear's settings panel
-  theme.ts              Effective light/dark theme (System, Light or Dark)
-  shortcuts.ts          Keyboard dispatch into the command table (blocks reload keys)
-  paths.ts              File-name, folder and path helpers shared by page and worker
-  perf.ts               Cold-start instrumentation
-  idle.ts               Reports going idle / active to Rust after 30 s without input (memory trimming)
-  ipc.ts                Typed wrappers around Tauri commands and events; picks the real core or the stand-in
-  browser-api.ts        In-memory stand-in for the Rust core, used by `npm run dev`
-  styles.css            Theme variables (light/dark), picker and preview typography
+  main.ts               App wiring: tabs, save/open, external changes, recovery, the command table
+  styles.css            Theme variables (light/dark), layout, picker and preview typography
+  platform/             The bridge to the Rust core
+    ipc.ts              Typed wrappers around Tauri commands and events; picks the real core or the stand-in
+    browser-api.ts      In-memory stand-in for the Rust core, used by `npm run dev`
+    sample.ts           The document the stand-in opens
+  editor/               CodeMirror
+    editor.ts           CodeMirror 6 setup and highlight theme
+    markdown-inline-syntax.ts  Editor highlighting for ~sub~, ^sup^ and ==mark==, matching the preview
+    markdown-html.ts    Slim HTML language for inline tags in Markdown (keeps JS/CSS parsers out of startup)
+  preview/              The preview pane (main thread)
+    preview.ts          Sends text to the worker, applies the blocks it returns
+    preview-blocks.ts   Block-level DOM diff: replaces only the preview blocks an edit changed
+    mermaid-blocks.ts   Lazy Mermaid rendering with an SVG cache
+    scroll-sync.ts      Editor-to-preview synced scroll via source-line markers
+    worker/             Runs in the preview worker: no DOM, no IPC
+      preview.worker.ts markdown-it rendering per block, local-image resolution
+      markdown-plugins.ts  Frontmatter, footnotes, shared fence and source-line helpers
+      math.ts           `$` / `$$` / `math` parsing and lazy KaTeX rendering
+      code-highlight.ts Lezer-based highlighting for code fences
+  ui/                   Panels and window chrome
+    tab-strip.ts        Tab strip (tablist semantics)
+    status-bar.ts       Footer: cursor, counts, file format, timings
+    outline.ts          Outline sidebar from the syntax tree
+    settings-panel.ts   The gear's settings panel
+    recent-picker.ts    Ctrl+R recent-files list
+    shortcuts.ts        Keyboard dispatch into the command table (blocks reload keys)
+    dom.ts              Element lookup that fails fast
+  core/                 Services with no UI of their own
+    settings.ts         Settings model, defaults, defensive reading, store
+    theme.ts            Effective light/dark theme (System, Light or Dark)
+    paths.ts            File-name, folder and path helpers shared by page and worker
+    serial-queue.ts     Runs async writes one at a time, in order
+    error-log.ts        Sends uncaught errors to marky.log
+    idle.ts             Reports going idle / active to Rust after 30 s without input (memory trimming)
+    perf.ts             Cold-start instrumentation
 src-tauri/
   src/main.rs           Commands, path allowlist, dialogs, window lifecycle, single instance
   src/files.rs          Read/write with BOM and line-ending handling, atomic save
@@ -240,6 +250,7 @@ src-tauri/
   src/menu.rs           Native menu bar
   src/window.rs         Creates the main window with the theme's background colour (no launch flash)
   src/memory.rs         Asks WebView2 to trim memory while the window is minimised or the user is idle
+  src/diagnostics.rs    marky.log: panics and reported errors, kept on the machine
   tauri.conf.json       Window, CSP, asset protocol, bundle and file-association config
   capabilities/         Webview permissions (least privilege)
 scripts/

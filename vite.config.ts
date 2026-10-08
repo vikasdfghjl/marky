@@ -1,13 +1,13 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 
-/** Only @codemirror/lang-markdown gets the slim HTML language; src/markdown-html.ts says why. */
+/** Only @codemirror/lang-markdown gets the slim HTML language; src/editor/markdown-html.ts says why. */
 const slimHtmlForMarkdown: Plugin = {
   name: 'marky:slim-html-for-markdown',
   enforce: 'pre',
   resolveId(source, importer) {
     if (source !== '@codemirror/lang-html' || !importer?.includes('@codemirror/lang-markdown')) return null;
-    return fileURLToPath(new URL('./src/markdown-html.ts', import.meta.url));
+    return fileURLToPath(new URL('./src/editor/markdown-html.ts', import.meta.url));
   },
 };
 

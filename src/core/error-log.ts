@@ -1,4 +1,4 @@
-import { api } from './ipc';
+import { api } from '../platform/ipc';
 
 /** Rust caps marky.log too; this keeps an error loop from flooding IPC. */
 const MAX_REPORTS_PER_SESSION = 20;

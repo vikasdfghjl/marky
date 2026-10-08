@@ -8,8 +8,8 @@ import taskLists from 'markdown-it-task-lists';
 import { highlightFence, prepareLanguages } from './code-highlight';
 import { dataLineAttr, fenceLanguage, footnotes, frontmatter } from './markdown-plugins';
 import { mathPlugin, prepareMath, renderMathFence } from './math';
-import { URL_SCHEME, joinWindowsPath } from './paths';
-import type { RenderedBlock } from './preview-blocks';
+import { URL_SCHEME, joinWindowsPath } from '../../core/paths';
+import type { RenderedBlock } from '../preview-blocks';
 
 export interface RenderRequest {
   id: number;

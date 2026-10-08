@@ -1,4 +1,4 @@
-import { LINE_ENDINGS, type LineEnding } from './ipc';
+import { LINE_ENDINGS, type LineEnding } from '../platform/ipc';
 import { THEME_SETTINGS, type ThemeSetting } from './theme';
 
 export interface Settings {

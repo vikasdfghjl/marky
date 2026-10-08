@@ -1,6 +1,6 @@
 import type { EditorState } from '@codemirror/state';
 import { byId } from './dom';
-import type { FileMeta } from './ipc';
+import type { FileMeta } from '../platform/ipc';
 
 function encodingLabel(meta: FileMeta, readOnly: boolean): string {
   if (readOnly) return 'Not UTF-8 (read-only)';

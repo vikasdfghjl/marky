@@ -1,5 +1,5 @@
 import type { FileMeta, MarkyApi, OpenedFile, UnsavedChoice } from './ipc';
-import { folderOf, joinWindowsPath } from './paths';
+import { folderOf, joinWindowsPath } from '../core/paths';
 import { SAMPLE } from './sample';
 
 // Stand-in for the Rust core when the frontend runs in a plain browser (`npm run dev`).

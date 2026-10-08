@@ -1,4 +1,4 @@
-import { FONT_SIZES, readSettings, type Settings, type SettingsStore } from './settings';
+import { FONT_SIZES, readSettings, type Settings, type SettingsStore } from '../core/settings';
 
 // Static markup (no user data). Every control names its setting in data-setting,
 // so one pair of handlers reads and writes all of them.

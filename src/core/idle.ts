@@ -1,4 +1,4 @@
-import { api } from './ipc';
+import { api } from '../platform/ipc';
 
 // After IDLE_AFTER_MS without input Rust trims WebView2's memory (memory.rs); the next input
 // restores it. Only the two transitions cross IPC, never the input itself.
