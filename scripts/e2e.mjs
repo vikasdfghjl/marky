@@ -1,35 +1,14 @@
-// Drives the running app over the WebView2 DevTools protocol (Node 24 has a global WebSocket).
+// Drives the running app over the WebView2 DevTools protocol (see cdp.mjs).
 // Run by e2e.ps1: node e2e.mjs <fixture.md> <marky.exe> <second.md>. Prints one PASS/FAIL line per check.
 import { spawn } from 'node:child_process';
 import { readFileSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { connectToPage, sleep } from './cdp.mjs';
 
 const [fixture, exe, secondFixture] = process.argv.slice(2);
-const port = 9222;
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-const page = targets.find((t) => t.type === 'page');
-const ws = new WebSocket(page.webSocketDebuggerUrl);
-let nextId = 0;
-const pending = new Map();
-ws.onmessage = (e) => {
-  const msg = JSON.parse(e.data);
-  if (!msg.id || !pending.has(msg.id)) return;
-  pending.get(msg.id)(msg);
-  pending.delete(msg.id);
-};
-await new Promise((r) => (ws.onopen = r));
-
-const send = (method, params = {}) =>
-  new Promise((r) => {
-    const id = ++nextId;
-    pending.set(id, r);
-    ws.send(JSON.stringify({ id, method, params }));
-  });
-const evaluate = async (expression) =>
-  (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })).result.result.value;
+const { send, evaluate, close } = await connectToPage();
 const invoke = (command, args) =>
   evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(args ?? {})})
     .then((v) => ({ ok: v }), (e) => ({ err: String(e) }))`);
@@ -350,5 +329,5 @@ const recoveryHoldsEdit = () => {
 };
 check('unsaved edits are snapshotted for crash recovery', await waitFor(recoveryHoldsEdit, 35_000));
 
-ws.close();
+close();
 process.exit(failures ? 1 : 0);

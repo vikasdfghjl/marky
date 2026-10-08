@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
+/// The extensions Marky opens, offers in dialogs and follows links to.
+pub const MARKDOWN_EXTS: &[&str] = &["md", "markdown", "txt"];
 const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 const MB: u64 = 1024 * 1024;
 /// Larger files are refused before reading. Opening one costs about 13 times its size in RAM at
@@ -75,20 +78,27 @@ pub fn read(path: &Path) -> io::Result<OpenedFile> {
 /// frontend can tell its own save from another program's change.
 pub fn write(path: &Path, text: &str, meta: FileMeta) -> io::Result<u64> {
     let target = resolve_symlink(path)?;
-    let bytes = encode(text, meta);
+    write_atomically(&target, &encode(text, meta))?;
+    mtime_ms(&target)
+}
 
+/// Replaces `target` with `bytes` through a temp file beside it. Documents and the app's own
+/// JSON files (settings, recent files, crash recovery) all go through here.
+pub fn write_atomically(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    static WRITES: AtomicU64 = AtomicU64::new(0);
     let dir = target
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent folder"))?;
     let name = target.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = dir.join(format!(".{name}.marky-{}.tmp", std::process::id()));
+    // Unique per write, so two writes of one file in flight never share a temp file.
+    let write_id = WRITES.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.marky-{}-{write_id}.tmp", std::process::id()));
 
-    let result = write_temp_then_swap(&tmp, &target, &bytes);
+    let result = write_temp_then_swap(&tmp, target, bytes);
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
-    result?;
-    mtime_ms(&target)
+    result
 }
 
 /// Flushes before the swap, so a crash or power loss leaves the old file or the new one, never a torn one.
@@ -139,6 +149,11 @@ pub fn mtime_ms(path: &Path) -> io::Result<u64> {
     Ok(modified.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0))
 }
 
+/// Whether two paths name the same file. Windows ignores case for every letter, not only ASCII.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    a == b || a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +188,12 @@ mod tests {
         assert_eq!(opened.meta, FileMeta { bom: false, line_ending: LineEnding::Lf });
         write(&path, "a\nb\nc\n", opened.meta).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"a\nb\nc\n");
+    }
+
+    #[test]
+    fn compares_paths_without_case_for_every_letter() {
+        assert!(same_path(Path::new(r"C:\Docs\Ä.md"), Path::new(r"c:\docs\ä.MD")));
+        assert!(!same_path(Path::new(r"C:\docs\a.md"), Path::new(r"C:\docs\b.md")));
     }
 
     #[test]

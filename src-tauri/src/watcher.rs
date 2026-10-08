@@ -3,6 +3,8 @@
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
 
+use crate::files::same_path;
+
 /// Calls `on_change` for every create/modify/remove event touching `path`.
 /// Events arrive in bursts; the frontend debounces and compares mtimes.
 ///
@@ -20,15 +22,10 @@ pub fn watch(path: &Path, on_change: impl Fn() + Send + 'static) -> notify::Resu
         if matches!(event.kind, EventKind::Access(_)) {
             return;
         }
-        if event.paths.iter().any(|p| is_same_path(p, &target)) {
+        if event.paths.iter().any(|p| same_path(p, &target)) {
             on_change();
         }
     })?;
     watcher.watch(&folder, RecursiveMode::NonRecursive)?;
     Ok(watcher)
-}
-
-/// Windows paths are case-insensitive.
-fn is_same_path(a: &Path, b: &Path) -> bool {
-    a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
 }

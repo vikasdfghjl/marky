@@ -35,7 +35,7 @@ function controlValue(control: Control): unknown {
   return control.value;
 }
 
-/** The gear's panel: opens under the gear, closes on Esc, outside click or a second press. */
+/** The gear's panel: opens under the gear, closes on Esc, an outside click or a second toggle. */
 export function createSettingsPanel(gear: HTMLButtonElement, store: SettingsStore) {
   const panel = document.createElement('div');
   panel.id = 'settings-panel';
@@ -91,7 +91,7 @@ export function createSettingsPanel(gear: HTMLButtonElement, store: SettingsStor
     else close();
   }
 
-  gear.addEventListener('click', toggle);
+  // The gear's click runs the `settings` command (data-command in index.html), which calls toggle.
   panel.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     e.stopPropagation();

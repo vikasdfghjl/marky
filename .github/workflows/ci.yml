@@ -35,6 +35,9 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      - name: Shortcuts agree across code, menu, tooltips and README
+        run: node scripts/check-shortcuts.mjs
+
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 

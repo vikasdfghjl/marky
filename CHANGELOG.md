@@ -19,6 +19,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 ### Fixed
 
 - The untitled document Marky opens with now uses the line ending chosen under "Line ending for new files". It was always CRLF.
+- Crash-recovery copies, settings and the recent-files list are now flushed to disk before they replace the old file, as documents already were, so a power cut can no longer leave them empty.
+- Open Recent no longer lists one file twice when the two spellings differ only in the case of a non-English letter (for example `Ä.md` and `ä.md`).
 - Marky no longer offers to restore a file you had already saved. An older crash-recovery copy could land after the newer one.
 - Opening and saving at the same moment (for example, an auto-save while a file opens) no longer drops a file from Open Recent.
 

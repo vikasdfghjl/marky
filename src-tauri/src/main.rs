@@ -1,6 +1,7 @@
 // Release builds use the GUI subsystem so no console window opens.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod allowlist;
 mod diagnostics;
 mod files;
 mod memory;
@@ -9,21 +10,21 @@ mod store;
 mod watcher;
 mod window;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use files::{FileMeta, OpenedFile};
+use allowlist::UserChosenPaths;
+use files::{FileMeta, OpenedFile, MARKDOWN_EXTS};
 use notify::RecommendedWatcher;
 use serde::Serialize;
 use store::Snapshot;
 use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, WebviewWindow, Window, WindowEvent, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
-const MARKDOWN_EXTS: &[&str] = &["md", "markdown", "txt"];
 const APP_NAME: &str = "Marky";
 const SAVE_LABEL: &str = "Save";
 const DONT_SAVE_LABEL: &str = "Don't save";
@@ -35,10 +36,7 @@ type StartupRead = std::thread::JoinHandle<(PathBuf, io::Result<OpenedFile>)>;
 
 struct AppState {
     started: Instant,
-    /// Paths the user chose via dialog, drag-drop, CLI arg, Explorer, recent files or
-    /// crash recovery. The webview can only touch these, so a compromised preview
-    /// cannot reach other files.
-    user_chosen: Mutex<HashSet<PathBuf>>,
+    user_chosen: UserChosenPaths,
     /// The CLI/Explorer file, read on a background thread while WebView2 starts (~600 ms).
     startup_read: Mutex<Option<StartupRead>>,
     /// Mirrors the editor's unsaved state so a clean window closes without a JS round trip.
@@ -46,24 +44,8 @@ struct AppState {
     /// One watcher per open tab's file; dropping an entry stops that watch.
     watchers: Mutex<HashMap<PathBuf, RecommendedWatcher>>,
     /// Held while updating recent.json. Opens and saves run concurrently (an auto-save during an
-    /// open), and its read-modify-write through one temp file would otherwise lose an entry.
+    /// open), and its read-modify-write would otherwise lose an entry.
     recent_list_writes: Mutex<()>,
-}
-
-impl AppState {
-    fn remember_user_choice(&self, path: PathBuf) -> PathBuf {
-        let path = std::path::absolute(&path).unwrap_or(path);
-        self.user_chosen.lock().unwrap().insert(path.clone());
-        path
-    }
-
-    fn require_user_choice(&self, path: &str) -> Result<PathBuf, String> {
-        let path = std::path::absolute(path).map_err(|e| e.to_string())?;
-        if !self.user_chosen.lock().unwrap().contains(&path) {
-            return Err("path was not selected by the user".into());
-        }
-        Ok(path)
-    }
 }
 
 /// Everything the frontend needs for its first paint, in one IPC round trip.
@@ -127,7 +109,7 @@ fn record_file_access(app: &AppHandle, path: &Path) {
 async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<StartupState, String> {
     let recovery = store::read_snapshots(&local_data_dir(&app)?);
     for path in recovery.iter().filter_map(|s| s.path.as_ref()) {
-        state.remember_user_choice(PathBuf::from(path));
+        state.user_chosen.remember(PathBuf::from(path));
     }
 
     let settings = store::load_settings(&config_dir(&app)?);
@@ -175,7 +157,7 @@ async fn pick_open(window: WebviewWindow, state: State<'_, AppState>) -> Result<
         .blocking_pick_file();
     let Some(picked) = picked else { return Ok(None) };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    Ok(Some(path_string(&state.remember_user_choice(path))))
+    Ok(Some(path_string(&state.user_chosen.remember(path))))
 }
 
 #[tauri::command]
@@ -195,12 +177,12 @@ async fn pick_save(
     }
     let Some(picked) = dialog.blocking_save_file() else { return Ok(None) };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    Ok(Some(path_string(&state.remember_user_choice(path))))
+    Ok(Some(path_string(&state.user_chosen.remember(path))))
 }
 
 #[tauri::command]
 async fn open_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<OpenedFile, String> {
-    let path = state.require_user_choice(&path)?;
+    let path = state.user_chosen.require(&path)?;
     let opened = files::read(&path).map_err(|e| e.to_string())?;
     record_file_access(&app, &path);
     Ok(opened)
@@ -215,7 +197,7 @@ async fn save_file(
     text: String,
     meta: FileMeta,
 ) -> Result<u64, String> {
-    let path = state.require_user_choice(&path)?;
+    let path = state.user_chosen.require(&path)?;
     let mtime = files::write(&path, &text, meta).map_err(|e| e.to_string())?;
     record_file_access(&app, &path);
     Ok(mtime)
@@ -224,29 +206,18 @@ async fn save_file(
 /// None when the file no longer exists.
 #[tauri::command]
 async fn file_mtime(state: State<'_, AppState>, path: String) -> Result<Option<u64>, String> {
-    let path = state.require_user_choice(&path)?;
+    let path = state.user_chosen.require(&path)?;
     Ok(files::mtime_ms(&path).ok())
 }
 
 // ---- links in the preview ----
 
-/// Resolves a relative link clicked in `from`'s preview. Only links from a user-chosen
-/// file to an existing .md/.markdown/.txt file are followed; clicking one is the user's
-/// choice, so the target joins the allowlist.
+/// Resolves a relative link clicked in a user-chosen file's preview (rules in `allowlist::link_target`).
 #[tauri::command]
 async fn resolve_link(state: State<'_, AppState>, from: String, target: String) -> Result<String, String> {
-    let from = state.require_user_choice(&from)?;
-    let folder = from.parent().ok_or("the document has no folder")?;
-    // absolute() normalises `.` and `..` on Windows.
-    let path = std::path::absolute(folder.join(&target)).map_err(|e| e.to_string())?;
-    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if !MARKDOWN_EXTS.contains(&extension.as_str()) {
-        return Err(format!("Marky follows links to .md, .markdown and .txt files only: {target}"));
-    }
-    if !path.is_file() {
-        return Err(format!("Linked file not found: {}", path_string(&path)));
-    }
-    Ok(path_string(&state.remember_user_choice(path)))
+    let from = state.user_chosen.require(&from)?;
+    let path = allowlist::link_target(&from, &target)?;
+    Ok(path_string(&state.user_chosen.remember(path)))
 }
 
 /// Opens a web or mail link in the default app. Anything else (file:, javascript:, …) is refused.
@@ -264,7 +235,7 @@ fn open_external(url: String) -> Result<(), String> {
 /// Emits `file-changed` (payload: the path) whenever another program touches `path`.
 #[tauri::command]
 async fn watch_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
-    let path = state.require_user_choice(&path)?;
+    let path = state.user_chosen.require(&path)?;
     if state.watchers.lock().unwrap().contains_key(&path) {
         return Ok(());
     }
@@ -294,7 +265,7 @@ async fn recent_files(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<
     Ok(recent
         .into_iter()
         .filter(|p| p.is_file())
-        .map(|p| path_string(&state.remember_user_choice(p)))
+        .map(|p| path_string(&state.user_chosen.remember(p)))
         .collect())
 }
 
@@ -409,7 +380,7 @@ fn close_window(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
 }
 
 fn request_open(app: &AppHandle, path: PathBuf) {
-    let path = app.state::<AppState>().remember_user_choice(path);
+    let path = app.state::<AppState>().user_chosen.remember(path);
     let _ = app.emit_to("main", "open-request", path_string(&path));
 }
 
@@ -447,14 +418,14 @@ fn main() {
 
     let state = AppState {
         started,
-        user_chosen: Mutex::default(),
+        user_chosen: UserChosenPaths::default(),
         startup_read: Mutex::new(None),
         dirty: AtomicBool::new(false),
         watchers: Mutex::default(),
         recent_list_writes: Mutex::default(),
     };
     if let Some(path) = startup {
-        let path = state.remember_user_choice(path);
+        let path = state.user_chosen.remember(path);
         let reader = std::thread::spawn(move || {
             let read = files::read(&path);
             (path, read)

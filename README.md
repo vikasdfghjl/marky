@@ -243,7 +243,8 @@ src/
     idle.ts             Reports going idle / active to Rust after 30 s without input (memory trimming)
     perf.ts             Cold-start instrumentation
 src-tauri/
-  src/main.rs           Commands, path allowlist, dialogs, window lifecycle, single instance
+  src/main.rs           Commands, dialogs, window lifecycle, single instance
+  src/allowlist.rs      Which files the webview may touch, and which links it may follow
   src/files.rs          Read/write with BOM and line-ending handling, atomic save
   src/watcher.rs        External change detection (watches the file's folder)
   src/store.rs          Recent-files list and crash-recovery snapshots (JSON in app folders)
@@ -258,10 +259,12 @@ scripts/
   bench.ps1             Release-build benchmark on scripts/fixtures/typical.md: cold start, WebView2 ready, idle RAM in use and after the idle trim, sizes
   bench-large.ps1, .mjs Large-document benchmark: cold start, RAM, typing latency, preview update, stalls
   bench-flash.ps1       Times the white flash at launch (pixel probe; needs a desktop)
-  lib.ps1               Shared script helpers (process-tree walk and stop)
+  lib.ps1               Shared script helpers (process-tree walk and stop, Wait-Until)
+  cdp.mjs               Minimal DevTools-protocol client shared by e2e.mjs and bench-large.mjs
   e2e.ps1, e2e.mjs      Release-build smoke test driven over the WebView2 DevTools protocol
   check-size.ps1        Size budgets (release-blocking)
   contrast.mjs          WCAG AA contrast audit of the theme tokens
+  check-shortcuts.mjs   Fails when menu hints, tooltips or this README disagree with the app's shortcuts
   sign.ps1              Signing hook (route-agnostic, driven by MARKY_SIGN_COMMAND)
   build-signed.ps1      Signed release build plus signature verification
   winget-manifest.ps1   winget manifests for a published release

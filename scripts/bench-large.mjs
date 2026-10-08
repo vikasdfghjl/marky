@@ -1,9 +1,10 @@
-// Large-document benchmark, driven over the WebView2 DevTools protocol (Node 24 has a global WebSocket).
+// Large-document benchmark, driven over the WebView2 DevTools protocol (see cdp.mjs).
 //   node bench-large.mjs gen <kb> <out.md>      writes a docs-like Markdown file of about <kb> KB
 //   node bench-large.mjs measure <label>        measures the running app (start it with --remote-debugging-port=9222)
 // Measures typing latency (input event to the next painted frame), the preview update after typing
 // stops, and main-thread stalls. See scripts/bench-large.ps1, which launches the app per file size.
 import { writeFileSync } from 'node:fs';
+import { connectToPage, sleep } from './cdp.mjs';
 
 const [mode, arg1, arg2] = process.argv.slice(2);
 
@@ -22,13 +23,9 @@ if (mode === 'gen') {
  * Windows, and any use pages it back in, so RAM is reported both before and after this.
  */
 async function wake() {
-  const page = (await (await fetch('http://127.0.0.1:9222/json')).json()).find((t) => t.type === 'page');
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
-  await new Promise((r) => (ws.onopen = r));
-  const done = new Promise((r) => (ws.onmessage = () => r()));
-  ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: 'document.body.offsetHeight' } }));
-  await done;
-  ws.close();
+  const { evaluate, close } = await connectToPage();
+  await evaluate('document.body.offsetHeight');
+  close();
 }
 
 /** API-reference style content: headings, prose, lists, tables, and fenced code in four languages. */
@@ -72,28 +69,7 @@ ${code[lang]}
 }
 
 async function measure(label) {
-  const port = 9222;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const page = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page');
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
-  let nextId = 0;
-  const pending = new Map();
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.id && pending.has(msg.id)) {
-      pending.get(msg.id)(msg);
-      pending.delete(msg.id);
-    }
-  };
-  await new Promise((r) => (ws.onopen = r));
-  const send = (method, params = {}) =>
-    new Promise((r) => {
-      const id = ++nextId;
-      pending.set(id, r);
-      ws.send(JSON.stringify({ id, method, params }));
-    });
-  const evaluate = async (expression) =>
-    (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })).result.result?.value;
+  const { send, evaluate, close } = await connectToPage();
 
   // MARKY_BENCH_CSS="#preview{...}" tries a style change on the running app without a rebuild.
   if (process.env.MARKY_BENCH_CSS) {
@@ -170,5 +146,5 @@ async function measure(label) {
       renderedKbInEditorDom: docKb,
     }),
   );
-  ws.close();
+  close();
 }

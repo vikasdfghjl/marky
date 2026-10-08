@@ -1,7 +1,7 @@
 //! Small JSON files in the app's own folders: recent files (F9), settings, and the
 //! crash-recovery snapshots of unsaved tabs (F13).
 
-use crate::files::FileMeta;
+use crate::files::{self, FileMeta};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -28,7 +28,7 @@ pub fn load_recent(config_dir: &Path) -> Vec<PathBuf> {
 
 pub fn push_recent(config_dir: &Path, path: &Path) -> io::Result<()> {
     let mut recent = load_recent(config_dir);
-    recent.retain(|p| !p.as_os_str().eq_ignore_ascii_case(path.as_os_str())); // Windows paths ignore case
+    recent.retain(|p| !files::same_path(p, path));
     recent.insert(0, path.to_path_buf());
     recent.truncate(RECENT_LIMIT);
     write_json(&config_dir.join(RECENT_FILE), &recent)
@@ -69,15 +69,11 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Temp file + rename so a crash never leaves half-written JSON.
 fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> io::Result<()> {
-    let folder = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent folder"))?;
-    fs::create_dir_all(folder)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec(value).map_err(io::Error::other)?)?;
-    fs::rename(&tmp, path)
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder)?;
+    }
+    files::write_atomically(path, &serde_json::to_vec(value).map_err(io::Error::other)?)
 }
 
 #[cfg(test)]

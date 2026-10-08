@@ -17,7 +17,7 @@ import { URL_SCHEME, UNTITLED, fileName, folderOf } from './core/paths';
 import { api, type FileMeta, type OpenedFile, type Snapshot } from './platform/ipc';
 import { byId } from './ui/dom';
 import { createSerialQueue } from './core/serial-queue';
-import { logUncaughtErrors } from './core/error-log';
+import { logError, logUncaughtErrors } from './core/error-log';
 
 logUncaughtErrors();
 
@@ -73,11 +73,11 @@ let snapshotKey: unknown[] | null = [];
 /** `#anchor` of a cross-file link, applied once the linked file's preview has rendered. */
 let pendingAnchor: string | null = null;
 /** In order, so a multi-file drop creates its tabs in order. */
-const opens = createSerialQueue('open');
+const opens = createSerialQueue((err) => logError('open', err));
 /** In order, so an older snapshot never lands after a newer one or after the clear on save. */
-const snapshotWrites = createSerialQueue('recovery snapshot');
-/** In order: saves share settings.json.tmp on the Rust side. */
-const settingsWrites = createSerialQueue('settings save');
+const snapshotWrites = createSerialQueue((err) => logError('recovery snapshot', err));
+/** In order, so an older settings save never overwrites a newer one. */
+const settingsWrites = createSerialQueue((err) => logError('settings save', err));
 const fileChangeTimers = new Map<number, number>();
 
 performance.mark('js-start');
@@ -95,9 +95,10 @@ const settings = createSettingsStore((current) => settingsWrites.push(() => api.
 settings.onChange(applySettings);
 const settingsPanel = createSettingsPanel(byId('settings-button') as HTMLButtonElement, settings);
 const noteActivity = trimMemoryWhenIdle();
-byId('new-tab-button').addEventListener('click', () => runCommand('new'));
+for (const button of document.querySelectorAll<HTMLElement>('[data-command]')) {
+  button.addEventListener('click', () => runCommand(button.dataset.command ?? ''));
+}
 const editorToggle = byId('editor-toggle');
-editorToggle.addEventListener('click', () => runCommand('toggle-editor'));
 
 const tabs: Tab[] = [];
 let active: Tab = createTab({ ...NEW_DOCUMENT }, editor.view.state);
@@ -149,7 +150,7 @@ function activate(tab: Tab) {
     return;
   }
   active.state = editor.view.state;
-  active.scrollTop = editor.view.scrollDOM.scrollTop;
+  active.scrollTop = editor.viewPosition().scrollTop;
   active = tab;
   showInEditor(tab, tab.scrollTop);
 }
@@ -222,7 +223,7 @@ function onEditorUpdate(update: ViewUpdate) {
   lastEditAt = performance.now();
   setDirty(true);
   clearTimeout(typingPauseTimer);
-  typingPauseTimer = window.setTimeout(renderAfterTypingPause, TYPING_PAUSE_MS);
+  typingPauseTimer = window.setTimeout(refreshTextViews, TYPING_PAUSE_MS);
   scheduleAutoSave();
 }
 
@@ -255,7 +256,8 @@ function syncWindowDirty() {
   void api.setDirty(anyDirty);
 }
 
-function renderAfterTypingPause() {
+/** The views that follow the document's text; deferred while typing, as they cost more than a keystroke. */
+function refreshTextViews() {
   const text = editor.text();
   preview.render(text);
   statusBar.counts(text);
@@ -280,12 +282,9 @@ function updateTitle() {
 }
 
 function refreshAllViews() {
-  const text = editor.text();
-  preview.render(text);
-  statusBar.counts(text);
+  refreshTextViews();
   statusBar.cursor(editor.view.state);
   statusBar.format(active.meta, active.readOnly);
-  outline.refresh();
   updateTitle();
 }
 
@@ -355,7 +354,14 @@ function syncMenuChecks(current: Settings, changed: Partial<Settings>) {
   void api.setMenuChecks(Object.fromEntries(checks.map(([id, setting]) => [id, current[setting]])));
 }
 
-function toggleSetting(setting: (typeof MENU_TOGGLES)[keyof typeof MENU_TOGGLES]) {
+type ToggleId = keyof typeof MENU_TOGGLES;
+
+/** One command per toggle, so adding a toggle to MENU_TOGGLES is all it takes. */
+const toggleCommands = Object.fromEntries(
+  Object.entries(MENU_TOGGLES).map(([id, setting]) => [id, () => toggleSetting(setting)]),
+) as Record<ToggleId, () => void>;
+
+function toggleSetting(setting: (typeof MENU_TOGGLES)[ToggleId]) {
   const on = !settings.get()[setting];
   const changes: Partial<Settings> = { [setting]: on };
   // Hiding one pane turns the other on, so the window never goes empty and the ticks stay true.
@@ -644,11 +650,7 @@ const commands = {
   redo: editor.redo,
   find: showingEditor(editor.openFind),
   replace: showingEditor(editor.openReplace),
-  'toggle-editor': () => toggleSetting('showEditor'),
-  'toggle-preview': () => toggleSetting('showPreview'),
-  'toggle-outline': () => toggleSetting('showOutline'),
-  'toggle-word-wrap': () => toggleSetting('wordWrap'),
-  'toggle-auto-save': () => toggleSetting('autoSave'),
+  ...toggleCommands,
   settings: () => settingsPanel.toggle(),
   'next-tab': () => activateNeighbour(1),
   'previous-tab': () => activateNeighbour(-1),
