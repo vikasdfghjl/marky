@@ -34,16 +34,32 @@ const invoke = (command, args) =>
     .then((v) => ({ ok: v }), (e) => ({ err: String(e) }))`);
 const title = () => evaluate('document.title');
 const editorText = () => evaluate(`document.querySelector('.cm-content').innerText`);
+// CDP modifier bits.
+const ALT = 1;
+const CTRL = 2;
 const pressKey = (key, code, vk, modifiers) =>
   Promise.all(
     ['keyDown', 'keyUp'].map((type) => send('Input.dispatchKeyEvent', { type, modifiers, key, code, windowsVirtualKeyCode: vk })),
   );
-const pressCtrl = (key, code, vk) =>
-  Promise.all(
-    ['keyDown', 'keyUp'].map((type) =>
-      send('Input.dispatchKeyEvent', { type, modifiers: 2, key, code, windowsVirtualKeyCode: vk }),
-    ),
-  );
+const pressCtrl = (key, code, vk) => pressKey(key, code, vk, CTRL);
+
+/**
+ * Polls `condition` until it returns something truthy or `timeoutMs` passes, and returns its
+ * last result. Waiting for the state a check needs, not a fixed time, keeps the run fast on a
+ * quiet machine and stable on a busy one.
+ */
+const waitFor = async (condition, timeoutMs = 5000) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const result = await condition();
+    if (result || Date.now() >= deadline) return result;
+    await sleep(50);
+  }
+};
+const isClean = async () => (await title()) === 'fixture.md — Marky';
+const isDirty = async () => (await title()).startsWith('● ');
+const exists = (selector) => evaluate(`!!document.querySelector(${JSON.stringify(selector)})`);
+const isHidden = (id) => evaluate(`document.getElementById(${JSON.stringify(id)}).hidden`);
 
 let failures = 0;
 const check = (name, ok, detail = '') => {
@@ -52,29 +68,26 @@ const check = (name, ok, detail = '') => {
 };
 
 // ---- open, format detection, preview ----
-check('startup file opened', (await title()) === 'fixture.md — Marky', await title());
+check('startup file opened', await isClean(), await title());
 check(
   'BOM + CRLF detected',
   (await evaluate(`document.getElementById('st-enc').textContent + ' ' + document.getElementById('st-eol').textContent`)) ===
     'UTF-8 BOM CRLF',
 );
-check('preview rendered', await evaluate(`!!document.querySelector('#preview h1')`));
-await sleep(500);
+check('preview rendered', await waitFor(() => exists('#preview h1')));
 check(
   'relative image loads from the file folder (F12)',
-  await evaluate(`(() => { const img = document.querySelector('#preview img'); return !!img && img.complete && img.naturalWidth > 0; })()`),
+  await waitFor(() => evaluate(`(() => { const img = document.querySelector('#preview img'); return !!img && img.complete && img.naturalWidth > 0; })()`)),
   await evaluate(`document.querySelector('#preview img')?.src ?? 'no img'`),
 );
 
 // ---- edit and save ----
 await evaluate(`document.querySelector('.cm-content').focus()`);
 await send('Input.insertText', { text: 'Added line\n' });
-await sleep(300);
-check('dirty marker after typing', (await title()).startsWith('● '));
+check('dirty marker after typing', await waitFor(isDirty));
 
 await pressCtrl('s', 'KeyS', 83);
-await sleep(800);
-check('clean after Ctrl+S', (await title()) === 'fixture.md — Marky', await title());
+check('clean after Ctrl+S', await waitFor(isClean), await title());
 const expected = Buffer.concat([BOM, Buffer.from('Added line\r\n# Fixture\r\n\r\n![dot](img/dot.png)\r\n\r\nBody text\r\n')]);
 check('saved bytes keep BOM and CRLF', readFileSync(fixture).equals(expected));
 
@@ -88,30 +101,31 @@ check('opened file is in recent files', recent.ok?.[0]?.toLowerCase() === fixtur
 
 // ---- external change while clean reloads silently (F8) ----
 writeFileSync(fixture, Buffer.concat([BOM, Buffer.from('# Changed on disk\r\n')]));
-await sleep(1000);
-check('clean buffer reloads external change', (await editorText()).includes('Changed on disk'), await editorText());
-check('still clean after reload', (await title()) === 'fixture.md — Marky', await title());
+check('clean buffer reloads external change', await waitFor(async () => (await editorText()).includes('Changed on disk')), await editorText());
+check('still clean after reload', await isClean(), await title());
 
 // ---- our own save does not trigger a reload prompt ----
 await send('Input.insertText', { text: 'x' });
+await waitFor(isDirty);
 await pressCtrl('s', 'KeyS', 83);
-await sleep(1000);
-check('own save is not treated as external', (await title()) === 'fixture.md — Marky', await title());
+await waitFor(isClean);
+// A negative check, so a fixed wait: give the watcher's events for our own write time to arrive and be judged.
+await sleep(500);
+check('own save is not treated as external', await isClean(), await title());
 
 // ---- IME composition (PRD input requirement) ----
 await evaluate(`document.querySelector('.cm-content').focus()`);
 await send('Input.imeSetComposition', { text: 'にほんご', selectionStart: 4, selectionEnd: 4 });
-await sleep(150);
+await waitFor(async () => (await editorText()).includes('にほんご'), 1000);
 await send('Input.insertText', { text: '日本語' }); // commits, replacing the composition
-await sleep(300);
-const composed = await editorText();
-check(
-  'IME composition commits without leftovers',
-  composed.includes('日本語') && !composed.includes('にほんご'),
-  JSON.stringify(composed),
-);
+const composed = await waitFor(async () => {
+  const text = await editorText();
+  return text.includes('日本語') && !text.includes('にほんご') && text;
+});
+check('IME composition commits without leftovers', !!composed, JSON.stringify(await editorText()));
+await waitFor(isDirty);
 await pressCtrl('s', 'KeyS', 83);
-await sleep(800);
+await waitFor(isClean);
 const savedText = readFileSync(fixture, 'utf8');
 check('IME text saved as UTF-8', savedText.includes('日本語'), JSON.stringify(savedText));
 
@@ -126,77 +140,77 @@ check('recovery snapshot clears', (await invoke('startup_state')).ok?.recovery?.
 // ---- native menu commands reach the frontend (clicks arrive as 'menu' events) ----
 const emitMenu = (id) => invoke('plugin:event|emit', { event: 'menu', payload: id });
 await emitMenu('toggle-preview');
-await sleep(200);
-const hiddenAfterToggle = await evaluate(`document.getElementById('preview').hidden`);
+const hiddenAfterToggle = await waitFor(() => isHidden('preview'));
 await emitMenu('toggle-preview');
-await sleep(200);
-check('menu command toggles preview', hiddenAfterToggle && !(await evaluate(`document.getElementById('preview').hidden`)));
+check('menu command toggles preview', hiddenAfterToggle && (await waitFor(async () => !(await isHidden('preview')))));
 // Hiding the editor leaves a preview-only reading view; Replace then brings the editor back.
-await emitMenu('toggle-editor');
-await sleep(200);
-const readingView = await evaluate(`[document.getElementById('editor').hidden, document.getElementById('preview').hidden,
+const paneState = () => evaluate(`[document.getElementById('editor').hidden, document.getElementById('preview').hidden,
   document.getElementById('editor-toggle').getAttribute('aria-pressed')].join()`);
+await emitMenu('toggle-editor');
+await waitFor(async () => (await paneState()) === 'true,false,false');
+const readingView = await paneState();
 check('hiding the editor leaves the preview', readingView === 'true,false,false', readingView);
 await emitMenu('replace');
-await sleep(200);
 check('menu Replace shows the editor and focuses the replace field',
-  !(await evaluate(`document.getElementById('editor').hidden`)) &&
-  (await evaluate(`document.activeElement?.getAttribute('name') === 'replace'`)));
+  await waitFor(async () => !(await isHidden('editor')) &&
+    (await evaluate(`document.activeElement?.getAttribute('name') === 'replace'`))));
 await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
 
 // ---- tabs (F14) and single instance: a second launch opens its file in a new tab ----
 const tabTitles = () => evaluate(`[...document.querySelectorAll('[role=tab]')].map((t) => t.querySelector('.tab-title').textContent)`);
+const tabTitlesAre = async (...expected) => JSON.stringify(await tabTitles()) === JSON.stringify(expected);
 const activeTab = () => evaluate(`document.querySelector('[role=tab][aria-selected=true] .tab-title').textContent`);
+const activeTabIs = async (name) => (await activeTab()) === name;
+// A second launch starts a whole process before it forwards its file, so it gets longer.
+const LAUNCH_TIMEOUT_MS = 15_000;
 spawn(exe, [secondFixture], { detached: true, stdio: 'ignore' }).unref();
-await sleep(2500);
-check('second launch opens a new tab', JSON.stringify(await tabTitles()) === JSON.stringify(['fixture.md', 'second.md']), JSON.stringify(await tabTitles()));
-check('new tab is active and shows its file', (await activeTab()) === 'second.md' && (await editorText()).includes('Second file'));
-await pressKey('Tab', 'Tab', 9, 2);
-await sleep(200);
-check('Ctrl+Tab switches back with the text intact', (await activeTab()) === 'fixture.md' && (await editorText()).includes('日本語'));
+check('second launch opens a new tab', await waitFor(() => tabTitlesAre('fixture.md', 'second.md'), LAUNCH_TIMEOUT_MS), JSON.stringify(await tabTitles()));
+check('new tab is active and shows its file',
+  await waitFor(async () => (await activeTabIs('second.md')) && (await editorText()).includes('Second file')));
+await pressCtrl('Tab', 'Tab', 9);
+check('Ctrl+Tab switches back with the text intact',
+  await waitFor(async () => (await activeTabIs('fixture.md')) && (await editorText()).includes('日本語')));
 spawn(exe, [secondFixture], { detached: true, stdio: 'ignore' }).unref();
-await sleep(2500);
-check('reopening an open file focuses its tab', (await tabTitles()).length === 2 && (await activeTab()) === 'second.md');
+check('reopening an open file focuses its tab',
+  await waitFor(async () => (await activeTabIs('second.md')) && (await tabTitles()).length === 2, LAUNCH_TIMEOUT_MS));
 await pressCtrl('w', 'KeyW', 87);
-await sleep(300);
-check('Ctrl+W closes a clean tab', JSON.stringify(await tabTitles()) === JSON.stringify(['fixture.md']), JSON.stringify(await tabTitles()));
+check('Ctrl+W closes a clean tab', await waitFor(() => tabTitlesAre('fixture.md')), JSON.stringify(await tabTitles()));
 
 // ---- drag and drop overlay (the native drop itself is not scriptable) ----
+const dragOverlayShown = () => evaluate(`document.body.classList.contains('drag-over')`);
 await invoke('plugin:event|emit', { event: 'drag-hover', payload: true });
-await sleep(100);
-const overlayShown = await evaluate(`document.body.classList.contains('drag-over')`);
+const overlayShown = await waitFor(dragOverlayShown);
 await invoke('plugin:event|emit', { event: 'drag-hover', payload: false });
-await sleep(100);
-check('drag over the window shows the drop overlay', overlayShown && !(await evaluate(`document.body.classList.contains('drag-over')`)));
+check('drag over the window shows the drop overlay', overlayShown && (await waitFor(async () => !(await dragOverlayShown()))));
 
 // ---- Markdown for docs and code: highlighting, frontmatter, footnotes, links ----
 await evaluate(`document.querySelector('.cm-content').focus()`);
-await pressKey('End', 'End', 35, 2); // Ctrl+End
+await pressCtrl('End', 'End', 35);
 await send('Input.insertText', {
   text: '\n\n## Docs Section\n\nSee the note.[^e2e]\n\n[^e2e]: A footnote.\n\n```rust\nfn main() { let x = 1; }\n```\n\n[other](second.md) [web](https://example.com)\n',
 });
-await sleep(800);
-check('code blocks highlighted in preview', await evaluate(`!!document.querySelector('#preview pre code .tok-keyword')`));
-check('footnote listed with its source line', await evaluate(`!!document.querySelector('#preview .footnotes .footnote-item[data-line]')`));
+check('code blocks highlighted in preview', await waitFor(() => exists('#preview pre code .tok-keyword')));
+check('footnote listed with its source line', await waitFor(() => exists('#preview .footnotes .footnote-item[data-line]')));
+await waitFor(() => exists('#preview a[href="second.md"]'));
 await evaluate(`document.querySelector('#preview a[href=\"second.md\"]').click()`);
-await sleep(1500);
-check('relative .md link opens in a new tab', (await activeTab()) === 'second.md', JSON.stringify(await tabTitles()));
+check('relative .md link opens in a new tab', await waitFor(() => activeTabIs('second.md')), JSON.stringify(await tabTitles()));
 await pressCtrl('w', 'KeyW', 87);
-await sleep(300);
+await waitFor(() => tabTitlesAre('fixture.md'));
 // Mermaid loads lazily, draws under the app's CSP, and reports bad syntax inline.
 await evaluate(`document.querySelector('.cm-content').focus()`);
-await pressKey('End', 'End', 35, 2); // Ctrl+End
+await pressCtrl('End', 'End', 35);
 await send('Input.insertText', {
   text: '\n\n```mermaid\nflowchart LR\n  A[Editor] --> B[Preview]\n```\n\n```mermaid\nflowchart LR\n  A[ --> \n```\n',
 });
-await sleep(4000);
-check('mermaid diagram drawn as SVG', await evaluate(`!!document.querySelector('#preview .mermaid[data-drawn="svg"] svg')`));
-check('mermaid syntax error shown inline', await evaluate(`!!document.querySelector('#preview .mermaid-error')`));
+// Mermaid is about 1 MB to load and parse.
+const MERMAID_TIMEOUT_MS = 15_000;
+check('mermaid diagram drawn as SVG', await waitFor(() => exists('#preview .mermaid[data-drawn="svg"] svg'), MERMAID_TIMEOUT_MS));
+check('mermaid syntax error shown inline', await waitFor(() => exists('#preview .mermaid-error'), MERMAID_TIMEOUT_MS));
 
 // KaTeX math renders in the worker; its CSS and fonts load lazily under the app's CSP.
 await send('Input.insertText', { text: '\nInline $a^2 + b^2 = c^2$ costs $5 and $10.\n\n$$\n\\int_0^1 x\\,dx\n$$\n' });
-await sleep(3000);
-check('inline and display math rendered', await evaluate(`!!document.querySelector('#preview p .katex') && !!document.querySelector('#preview .katex-display')`));
+check('inline and display math rendered',
+  await waitFor(async () => (await exists('#preview p .katex')) && (await exists('#preview .katex-display')), 10_000));
 check('prices with $ stay plain text', await evaluate(`document.getElementById('preview').textContent.includes('costs $5 and $10')`));
 check('KaTeX fonts load under the CSP', await evaluate(`document.fonts.ready.then(() => document.fonts.check('16px KaTeX_Main'))`));
 
@@ -204,9 +218,9 @@ check('KaTeX fonts load under the CSP', await evaluate(`document.fonts.ready.the
 // nodes (a drawn Mermaid diagram included), and lines added above only renumber data-line.
 await evaluate(`document.querySelectorAll('#preview > *').forEach((node) => (node.__kept = true))`);
 await evaluate(`document.querySelector('.cm-content').focus()`);
-await pressKey('End', 'End', 35, 2); // Ctrl+End
+await pressCtrl('End', 'End', 35);
 await send('Input.insertText', { text: '\nOne more paragraph.\n' });
-await sleep(1500);
+await waitFor(() => evaluate(`[...document.querySelectorAll('#preview > *')].some((n) => !n.__kept && n.textContent.includes('One more paragraph.'))`));
 const afterTyping = await evaluate(`(() => {
   const blocks = [...document.querySelectorAll('#preview > *')];
   return { total: blocks.length, rebuilt: blocks.filter((n) => !n.__kept).length,
@@ -219,31 +233,31 @@ const linesBefore = await evaluate(`(() => {
   nodes.forEach((node) => (node.__line = Number(node.dataset.line)));
   return nodes.length;
 })()`);
-await pressKey('Home', 'Home', 36, 2); // Ctrl+Home
-await send('Input.insertText', { text: '\n' });
-await sleep(1500);
-const afterInsert = await evaluate(`(() => {
+const lineShift = () => evaluate(`(() => {
   const nodes = [...document.querySelectorAll('#preview [data-line]')].filter((n) => n.__line !== undefined);
   return { kept: nodes.length, shiftedByOne: nodes.every((n) => Number(n.dataset.line) === n.__line + 1) };
 })()`);
+await pressCtrl('Home', 'Home', 36);
+await send('Input.insertText', { text: '\n' });
+await waitFor(async () => (await lineShift()).shiftedByOne);
+const afterInsert = await lineShift();
 check('a line added above renumbers the preview instead of rebuilding it',
   afterInsert.kept === linesBefore && linesBefore > 5 && afterInsert.shiftedByOne, `${linesBefore} before, ${JSON.stringify(afterInsert)}`);
 
 // Outline sidebar (F17): headings from the syntax tree, click to jump.
+const outlineItems = () => evaluate(`[...document.querySelectorAll('#outline button')].map((b) => b.textContent)`);
 await emitMenu('toggle-outline');
-await sleep(300);
-const outlineItems = await evaluate(`[...document.querySelectorAll('#outline button')].map((b) => b.textContent)`);
-check('outline lists the document headings', outlineItems.includes('Docs Section'), JSON.stringify(outlineItems));
+await waitFor(async () => (await outlineItems()).includes('Docs Section'));
+check('outline lists the document headings', (await outlineItems()).includes('Docs Section'), JSON.stringify(await outlineItems()));
 await evaluate(`[...document.querySelectorAll('#outline button')].find((b) => b.textContent === 'Docs Section').click()`);
-await sleep(300);
-check('outline click moves the editor to the heading', (await evaluate(`document.getElementById('st-pos').textContent`)).startsWith('Ln ') &&
-  (await evaluate(`document.querySelector('#outline [aria-current]')?.textContent`)) === 'Docs Section');
+check('outline click moves the editor to the heading',
+  await waitFor(async () => (await evaluate(`document.getElementById('st-pos').textContent`)).startsWith('Ln ') &&
+    (await evaluate(`document.querySelector('#outline [aria-current]')?.textContent`)) === 'Docs Section'));
 await emitMenu('toggle-outline'); // leave it hidden: visibility persists across launches
 
 // Settings: the gear panel (opened here through its menu command) changes the app live.
 await emitMenu('settings');
-await sleep(300);
-check('Settings opens the settings panel', await evaluate(`!document.getElementById('settings-panel').hidden`));
+check('Settings opens the settings panel', await waitFor(async () => !(await isHidden('settings-panel'))));
 const setSetting = (selector, value) =>
   evaluate(`(() => {
     const control = document.querySelector('#settings-panel ${selector}');
@@ -253,19 +267,27 @@ const setSetting = (selector, value) =>
   })()`);
 await setSetting('[value=dark]', true);
 await setSetting('select', '18');
-await sleep(300);
-check('theme and font size apply live', (await evaluate(`document.documentElement.dataset.theme`)) === 'dark' &&
-  (await evaluate(`getComputedStyle(document.querySelector('.cm-scroller')).fontSize`)) === '18px');
+check('theme and font size apply live', await waitFor(async () => (await evaluate(`document.documentElement.dataset.theme`)) === 'dark' &&
+  (await evaluate(`getComputedStyle(document.querySelector('.cm-scroller')).fontSize`)) === '18px'));
 await setSetting('[data-setting=autoSave]', true);
 await evaluate(`document.querySelector('.cm-content').focus()`);
-await pressKey('End', 'End', 35, 2); // Ctrl+End
+await pressCtrl('End', 'End', 35);
 await send('Input.insertText', { text: '\nauto-saved line\n' });
-await sleep(2000);
-check('auto-save writes the file after typing stops', readFileSync(fixture, 'utf8').includes('auto-saved line') &&
-  !(await title()).startsWith('● '), await title());
+check('auto-save writes the file after typing stops',
+  await waitFor(async () => readFileSync(fixture, 'utf8').includes('auto-saved line') && !(await isDirty())), await title());
 const settingsFile = `${process.env.APPDATA}\\dev.marky.editor\\settings.json`;
-const savedSettings = JSON.parse(readFileSync(settingsFile, 'utf8'));
-check('settings persist to settings.json', savedSettings.theme === 'dark' && savedSettings.autoSave === true, JSON.stringify(savedSettings));
+const readSavedSettings = () => {
+  try {
+    return JSON.parse(readFileSync(settingsFile, 'utf8'));
+  } catch {
+    return null; // not written yet, or mid-rename
+  }
+};
+const savedSettings = await waitFor(() => {
+  const saved = readSavedSettings();
+  return saved?.theme === 'dark' && saved?.autoSave === true && saved;
+});
+check('settings persist to settings.json', !!savedSettings, JSON.stringify(readSavedSettings()));
 // Back to defaults, so later checks and the next run start clean.
 await setSetting('[value=system]', true);
 await setSetting('select', '14');
@@ -273,9 +295,8 @@ await setSetting('[data-setting=autoSave]', false);
 await evaluate(`document.getElementById('settings-button').click()`);
 // Left off on purpose: e2e.ps1 checks that the native menu's Word Wrap tick followed the key.
 await evaluate(`document.querySelector('.cm-content').focus()`);
-await pressKey('z', 'KeyZ', 90, 1); // Alt+Z
-await sleep(300);
-check('Alt+Z turns word wrap off', !(await evaluate(`document.querySelector('.cm-content').classList.contains('cm-lineWrapping')`)));
+await pressKey('z', 'KeyZ', 90, ALT);
+check('Alt+Z turns word wrap off', await waitFor(async () => !(await exists('.cm-content.cm-lineWrapping'))));
 
 const outside = await invoke('resolve_link', { from: fixture, target: '../../../Windows/win.ini' });
 check('links to non-Markdown files are refused', !!outside.err, outside.err ?? 'FOLLOWED');
@@ -291,22 +312,19 @@ check('idle and active reports reach Rust', !wentIdle.err && !cameBack.err, JSON
 
 // ---- leave the buffer dirty for the close-guard check in e2e.ps1 ----
 await send('Input.insertText', { text: 'unsaved ' });
-await sleep(300);
-check('dirty again before close test', (await title()).startsWith('● '));
+check('dirty again before close test', await waitFor(isDirty));
 
 // Recovery snapshots are written on a 30 s timer, and a tick that lands while the buffer is clean
 // clears the file. Wait for one that holds this edit so the relaunch check in e2e.ps1 is deterministic.
 const recoveryFile = `${process.env.LOCALAPPDATA}\\dev.marky.editor\\recovery.json`;
-let snapshotted = false;
-for (let waited = 0; waited < 35_000 && !snapshotted; waited += 1000) {
-  await sleep(1000);
+const recoveryHoldsEdit = () => {
   try {
-    snapshotted = readFileSync(recoveryFile, 'utf8').includes('unsaved ');
+    return readFileSync(recoveryFile, 'utf8').includes('unsaved ');
   } catch {
-    // not written yet
+    return false; // not written yet
   }
-}
-check('unsaved edits are snapshotted for crash recovery', snapshotted);
+};
+check('unsaved edits are snapshotted for crash recovery', await waitFor(recoveryHoldsEdit, 35_000));
 
 ws.close();
 process.exit(failures ? 1 : 0);

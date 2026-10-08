@@ -17,7 +17,8 @@ interface LiveBlock {
 }
 
 /** Never appears in rendered output: markdown-it escapes all text and `html: false` drops raw HTML. */
-const BLOCK_END = '<!--|-->';
+const BLOCK_END_MARK = '|';
+const BLOCK_END = `<!--${BLOCK_END_MARK}-->`;
 
 /**
  * Keeps a container showing a list of blocks by replacing only what changed. Typing edits one
@@ -88,7 +89,7 @@ function buildBlocks(scratch: HTMLElement, blocks: RenderedBlock[]) {
   scratch.innerHTML = blocks.map((block) => block.html + BLOCK_END).join('');
   let nodes: ChildNode[] = [];
   for (const node of [...scratch.childNodes]) {
-    if (node.nodeType === Node.COMMENT_NODE && (node as Comment).data === '|') {
+    if (node.nodeType === Node.COMMENT_NODE && (node as Comment).data === BLOCK_END_MARK) {
       const block = blocks[built.length];
       built.push({ signature: block.signature, line: block.line, nodes });
       nodes = [];

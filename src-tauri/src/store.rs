@@ -58,7 +58,7 @@ pub fn read_snapshots(data_dir: &Path) -> Vec<Snapshot> {
     read_json::<Snapshot>(&path).into_iter().collect()
 }
 
-pub fn clear_snapshot(data_dir: &Path) -> io::Result<()> {
+pub fn clear_snapshots(data_dir: &Path) -> io::Result<()> {
     match fs::remove_file(data_dir.join(SNAPSHOT_FILE)) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         result => result,
@@ -127,9 +127,9 @@ mod tests {
         save_snapshots(&dir, &snapshots).unwrap();
         assert_eq!(read_snapshots(&dir), snapshots);
 
-        clear_snapshot(&dir).unwrap();
+        clear_snapshots(&dir).unwrap();
         assert!(read_snapshots(&dir).is_empty());
-        clear_snapshot(&dir).unwrap();
+        clear_snapshots(&dir).unwrap();
     }
 
     #[test]

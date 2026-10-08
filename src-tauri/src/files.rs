@@ -74,18 +74,21 @@ pub fn write(path: &Path, text: &str, meta: FileMeta) -> io::Result<u64> {
     let name = target.file_name().unwrap_or_default().to_string_lossy();
     let tmp = dir.join(format!(".{name}.marky-{}.tmp", std::process::id()));
 
-    let result = (|| {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
-        drop(f);
-        replace(&target, &tmp)
-    })();
+    let result = write_temp_then_swap(&tmp, &target, &bytes);
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     result?;
     mtime_ms(&target)
+}
+
+/// Writes `bytes` to `tmp`, flushes them to disk, then swaps `tmp` in for `target`.
+fn write_temp_then_swap(tmp: &Path, target: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = fs::File::create(tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    replace(target, tmp)
 }
 
 fn encode(text: &str, meta: FileMeta) -> Vec<u8> {

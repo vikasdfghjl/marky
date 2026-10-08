@@ -1,4 +1,4 @@
-import { FONT_SIZES, type Settings, type SettingsStore } from './settings';
+import { FONT_SIZES, readSettings, type Settings, type SettingsStore } from './settings';
 
 // Static markup (no user data). Every control names its setting in data-setting,
 // so one pair of handlers reads and writes all of them.
@@ -28,10 +28,11 @@ const TEMPLATE = `
 
 type Control = HTMLInputElement | HTMLSelectElement;
 
-function controlValue(control: Control): Settings[keyof Settings] {
+/** The control's raw value; `readSettings` decides whether it is a valid setting. */
+function controlValue(control: Control): unknown {
   if (control instanceof HTMLInputElement && control.type === 'checkbox') return control.checked;
-  if (control instanceof HTMLSelectElement) return Number(control.value) as Settings['fontSize'];
-  return control.value as Settings['theme'];
+  if (control instanceof HTMLSelectElement) return Number(control.value);
+  return control.value;
 }
 
 /** The gear's panel: opens under the gear, closes on Esc, outside click or a second press. */
@@ -61,7 +62,10 @@ export function createSettingsPanel(gear: HTMLButtonElement, store: SettingsStor
   panel.addEventListener('change', (e) => {
     const control = e.target as Control;
     const name = control.dataset.setting as keyof Settings | undefined;
-    if (name) store.update({ [name]: controlValue(control) });
+    if (!name) return;
+    // Through the same reader as the saved file, so a control can only produce a valid value.
+    const next = readSettings({ ...store.get(), [name]: controlValue(control) });
+    store.update({ [name]: next[name] });
   });
   // Shortcuts and menu toggles change settings too; keep the open panel truthful.
   store.onChange(() => {

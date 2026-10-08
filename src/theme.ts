@@ -2,7 +2,8 @@
 // color-scheme (light-dark() tokens in styles.css); code that renders its own colours
 // (Mermaid) asks isDark() and listens with onThemeChange().
 
-export type ThemeSetting = 'system' | 'light' | 'dark';
+export const THEME_SETTINGS = ['system', 'light', 'dark'] as const;
+export type ThemeSetting = (typeof THEME_SETTINGS)[number];
 
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
 const listeners = new Set<() => void>();

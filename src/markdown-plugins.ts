@@ -35,7 +35,8 @@ export function frontmatter(md: MarkdownIt) {
   });
 }
 
-function lineText(state: StateBlock, line: number): string {
+/** A source line without its indentation or trailing whitespace. */
+export function lineText(state: StateBlock, line: number): string {
   return state.src.slice(state.bMarks[line] + state.tShift[line], state.eMarks[line]).trimEnd();
 }
 

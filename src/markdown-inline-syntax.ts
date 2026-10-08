@@ -6,6 +6,9 @@ import { Tag, tags as t } from '@lezer/highlight';
  * (preview.worker.ts): ~sub~, ^sup^ and ==marked==. Both panes must agree on what counts as
  * each, so the parsing rules follow those plugins.
  */
+const BACKSLASH = 92;
+const EQUALS = 61;
+
 export const markdownTags = {
   subscript: Tag.define(),
   superscript: Tag.define(),
@@ -18,7 +21,7 @@ export const markdownTags = {
  * that a later style rule cannot override, so this runs first and emits nodes of its own.
  */
 function singleDelimiter(node: string, char: string, before: string, tag: Tag): MarkdownConfig {
-  const code = char.charCodeAt(0);
+  const delimiter = char.charCodeAt(0);
   const mark = `${node}Mark`;
   return {
     defineNodes: [
@@ -29,27 +32,40 @@ function singleDelimiter(node: string, char: string, before: string, tag: Tag): 
       {
         name: node,
         before,
-        parse(cx: InlineContext, next: number, pos: number) {
-          if (next !== code || cx.char(pos + 1) === code) return -1;
-          const children = [cx.elt(mark, pos, pos + 1)];
-          for (let i = pos + 1; i < cx.end; i++) {
-            const ch = cx.char(i);
-            if (ch === code) {
-              if (i === pos + 1) return -1;
-              return cx.addElement(cx.elt(node, pos, i + 1, [...children, cx.elt(mark, i, i + 1)]));
-            }
-            if (ch === 92 /* \ */) children.push(cx.elt('Escape', i, i++ + 2));
-            else if (/\s/.test(String.fromCharCode(ch))) return -1;
-          }
-          return -1;
-        },
+        parse: (cx, next, pos) => parseSingleDelimited(cx, next, pos, { node, mark, delimiter }),
       },
     ],
   };
 }
 
+/** Matches `~text~` or `^text^` at `pos`: non-empty, no unescaped whitespace. Returns the end, or -1. */
+function parseSingleDelimited(
+  cx: InlineContext,
+  next: number,
+  pos: number,
+  { node, mark, delimiter }: { node: string; mark: string; delimiter: number },
+): number {
+  if (next !== delimiter || cx.char(pos + 1) === delimiter) return -1;
+  const children = [cx.elt(mark, pos, pos + 1)];
+  let i = pos + 1;
+  while (i < cx.end) {
+    const ch = cx.char(i);
+    if (ch === delimiter) {
+      if (i === pos + 1) return -1; // empty: `~~` is strikethrough's
+      return cx.addElement(cx.elt(node, pos, i + 1, [...children, cx.elt(mark, i, i + 1)]));
+    }
+    if (ch === BACKSLASH) {
+      children.push(cx.elt('Escape', i, i + 2));
+      i += 2;
+      continue;
+    }
+    if (/\s/.test(String.fromCharCode(ch))) return -1;
+    i++;
+  }
+  return -1;
+}
+
 const PUNCTUATION = /[\p{P}\p{S}]/u;
-const EQUALS = 61; // '='
 const MARKED_DELIMITER = { resolve: 'Marked', mark: 'MarkedMark' };
 
 /**

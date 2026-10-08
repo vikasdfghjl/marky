@@ -3,8 +3,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { browserApi } from './browser-api';
 
-
-export type LineEnding = 'lf' | 'crlf';
+export const LINE_ENDINGS = ['lf', 'crlf'] as const;
+export type LineEnding = (typeof LINE_ENDINGS)[number];
 
 export interface FileMeta {
   bom: boolean;

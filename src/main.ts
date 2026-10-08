@@ -15,6 +15,8 @@ import { createSettingsPanel } from './settings-panel';
 import { applyTheme } from './theme';
 import { URL_SCHEME, UNTITLED, fileName, folderOf } from './paths';
 import { api, type FileMeta, type OpenedFile, type Snapshot } from './ipc';
+import { byId } from './dom';
+import { createSerialQueue } from './serial-queue';
 
 const TYPING_PAUSE_MS = 150;
 /** Bursts of watcher events (a save is several events) collapse into one check. */
@@ -26,12 +28,6 @@ const PREVIEW_AUTO_OFF_BYTES = 5 * 1024 * 1024;
 const AUTO_SAVE_DELAY_MS = 1000;
 /** PRD F14: up to 20 open files. */
 const MAX_TABS = 20;
-
-function $(id: string): HTMLElement {
-  const element = document.getElementById(id);
-  if (!element) throw new Error(`index.html has no #${id}`);
-  return element;
-}
 
 /** What a tab shows: a file from disk, or a new untitled document (path null). */
 type EditorDocument = Pick<OpenedFile, 'text' | 'meta' | 'readOnly'> & {
@@ -66,36 +62,36 @@ let lastEditAt = 0;
 let nextTabId = 1;
 /** Mirrors Rust's close guard: true while any tab has unsaved changes. */
 let windowDirty = false;
-/** The recovery file's current content, to skip rewriting it unchanged. */
-let lastSnapshotJson = '[]';
+/** The recovery file's current content, to skip rewriting it unchanged; null when unknown (a write failed). */
+let lastSnapshotJson: string | null = '[]';
 /** `#anchor` of a cross-file link, applied once the linked file's preview has rendered. */
 let pendingAnchor: string | null = null;
-/** Opens run one at a time, so a multi-file drop creates tabs in order. */
-let openQueue: Promise<void> = Promise.resolve();
+/** One at a time, so a multi-file drop creates tabs in order. */
+const opens = createSerialQueue();
+/** One at a time, so an older snapshot never lands after a newer one (or after the clear on save). */
+const snapshotWrites = createSerialQueue();
+/** One at a time: saves share settings.json.tmp on the Rust side. */
+const settingsWrites = createSerialQueue();
 const fileChangeTimers = new Map<number, number>();
 
 performance.mark('js-start');
-const editor = createEditor($('editor'), onEditorUpdate);
+const editor = createEditor(byId('editor'), onEditorUpdate);
 performance.mark('editor-ready');
-const preview = createPreview($('preview'), onPreviewRendered, (href) => void followLink(href));
-const syncPreviewScroll = syncPreviewToEditor(editor.view, $('preview'));
-const outline = createOutline($('outline'), editor.view, (line) => editor.goToLine(line));
-const tabStrip = createTabStrip($('tabs'), {
+const preview = createPreview(byId('preview'), onPreviewRendered, (href) => void followLink(href));
+const syncPreviewScroll = syncPreviewToEditor(editor.view, byId('preview'));
+const outline = createOutline(byId('outline'), editor.view, (line) => editor.goToLine(line));
+const tabStrip = createTabStrip(byId('tabs'), {
   onActivate: (id) => activate(tabById(id)),
   onClose: (id) => void closeTab(tabById(id)),
 });
 
-/** Settings saves run one at a time: async commands can finish out of order and share a temp file. */
-let settingsSaving: Promise<unknown> = Promise.resolve();
-const settings = createSettingsStore((current) => {
-  settingsSaving = settingsSaving.then(() => api.saveSettings(current)).catch(() => {});
-});
+const settings = createSettingsStore((current) => settingsWrites.push(() => api.saveSettings(current)));
 settings.onChange(applySettings);
-const settingsPanel = createSettingsPanel($('settings-button') as HTMLButtonElement, settings);
+const settingsPanel = createSettingsPanel(byId('settings-button') as HTMLButtonElement, settings);
 /** Input trims nothing; going quiet for a while does (idle.ts). Non-input use calls this directly. */
 const noteActivity = trimMemoryWhenIdle();
-$('new-tab-button').addEventListener('click', () => runCommand('new'));
-const editorToggle = $('editor-toggle');
+byId('new-tab-button').addEventListener('click', () => runCommand('new'));
+const editorToggle = byId('editor-toggle');
 editorToggle.addEventListener('click', () => runCommand('toggle-editor'));
 
 const tabs: Tab[] = [];
@@ -298,18 +294,18 @@ function applyPaneVisibility() {
 }
 
 function setEditorVisible(visible: boolean) {
-  const pane = $('editor');
+  const pane = byId('editor');
   editorToggle.setAttribute('aria-pressed', String(visible));
   if (pane.hidden === !visible) return;
   const hadFocus = pane.contains(document.activeElement);
   pane.hidden = !visible;
   // Keep keyboard focus on something visible.
   if (visible) editor.view.focus();
-  else if (hadFocus) $('preview').focus();
+  else if (hadFocus) byId('preview').focus();
 }
 
 /** Find and replace work in the editor, so they bring it back when it is hidden. */
-function inEditor(action: () => void) {
+function showingEditor(action: () => void) {
   return () => {
     if (!settings.get().showEditor) settings.update({ showEditor: true });
     action();
@@ -359,7 +355,7 @@ function toggleSetting(setting: (typeof MENU_TOGGLES)[keyof typeof MENU_TOGGLES]
 }
 
 /** An empty untitled document with the configured line ending. */
-function newDocumentContent(): EditorDocument {
+function untitledDocument(): EditorDocument {
   return { ...NEW_DOCUMENT, meta: { bom: false, lineEnding: settings.get().newFileLineEnding } };
 }
 
@@ -377,7 +373,7 @@ async function resolveUnsavedChanges(): Promise<boolean> {
 
 function queueOpen(path: string) {
   noteActivity();
-  openQueue = openQueue.then(() => openPath(path));
+  opens.push(() => openPath(path));
 }
 
 /** Focuses the file's tab if it is open; otherwise opens it in a new tab (or the pristine one). */
@@ -398,14 +394,14 @@ async function openPath(path: string) {
 
 function newDocument() {
   if (isPristine(active)) return editor.view.focus();
-  addTab(newDocumentContent());
+  addTab(untitledDocument());
 }
 
 /** Closing the last tab closes the window, as in Windows Notepad. */
 async function closeTab(tab: Tab = active) {
   activate(tab);
   if (!(await resolveUnsavedChanges())) return;
-  if (tabs.length === 1) return api.closeWindow();
+  if (tabs.length === 1) return closeWindowNow();
 
   const index = tabs.indexOf(tab);
   tabs.splice(index, 1);
@@ -418,11 +414,17 @@ async function closeTab(tab: Tab = active) {
 }
 
 /** Asks about every unsaved tab in turn; Cancel on any of them keeps the window open. */
-async function closeWindow() {
+async function confirmAndCloseWindow() {
   for (const tab of tabs.filter((t) => t.dirty)) {
     activate(tab);
     if (!(await resolveUnsavedChanges())) return;
   }
+  await closeWindowNow();
+}
+
+/** Rust clears the recovery file as it closes the window, so a snapshot still in flight must land first. */
+async function closeWindowNow() {
+  await snapshotWrites.drained();
   await api.closeWindow();
 }
 
@@ -503,7 +505,7 @@ async function followLink(href: string) {
 
 /** Moves the editor to the anchor target's source line (a footnote); synced scroll then brings the preview along. */
 function jumpToAnchor(id: string) {
-  const target = $('preview').querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`);
+  const target = byId('preview').querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`);
   const line = target?.closest<HTMLElement>('[data-line]')?.dataset.line;
   if (line !== undefined) editor.goToLine(Number(line));
 }
@@ -544,12 +546,13 @@ async function reconcileWithDisk(tab: Tab) {
 }
 
 async function reloadKeepingPosition(tab: Tab) {
-  const wasActive = tab === active;
-  const position = wasActive ? editor.viewPosition() : null;
+  const path = tab.path;
+  if (!path) return;
+  const position = tab === active ? editor.viewPosition() : null;
   const scrollTop = tab.scrollTop;
   let file: OpenedFile;
   try {
-    file = await api.openFile(tab.path!);
+    file = await api.openFile(path);
   } catch {
     return; // Mid-write by the other program; the next watcher event retries.
   }
@@ -573,8 +576,17 @@ function snapshotDirtyTabs() {
     .map((t) => ({ path: t.path, text: tabText(t), meta: t.meta }));
   const json = JSON.stringify(snapshots);
   if (json === lastSnapshotJson) return;
+  writeSnapshots(snapshots, json);
+}
+
+/** Queues a recovery-file write. A failed write forgets the file's content, so the next snapshot retries. */
+function writeSnapshots(snapshots: Snapshot[], json = JSON.stringify(snapshots)) {
   lastSnapshotJson = json;
-  void api.snapshotBuffers(snapshots);
+  snapshotWrites.push(() =>
+    api.snapshotBuffers(snapshots).catch(() => {
+      if (lastSnapshotJson === json) lastSnapshotJson = null;
+    }),
+  );
 }
 
 /** Offers back the unsaved tabs of a session that did not end cleanly. */
@@ -585,10 +597,7 @@ async function offerRecovery(snapshots: Snapshot[]) {
     'Restore',
     'Discard',
   );
-  if (!restore) {
-    lastSnapshotJson = '[]';
-    return void api.snapshotBuffers([]);
-  }
+  if (!restore) return writeSnapshots([]);
   for (const snapshot of snapshots) await restoreSnapshot(snapshot);
   snapshotDirtyTabs();
 }
@@ -618,8 +627,8 @@ const commands = {
   close: () => closeTab(),
   undo: editor.undo,
   redo: editor.redo,
-  find: inEditor(editor.openFind),
-  replace: inEditor(editor.openReplace),
+  find: showingEditor(editor.openFind),
+  replace: showingEditor(editor.openReplace),
   'toggle-editor': () => toggleSetting('showEditor'),
   'toggle-preview': () => toggleSetting('showPreview'),
   'toggle-outline': () => toggleSetting('showOutline'),
@@ -664,7 +673,7 @@ async function start() {
   const listening = Promise.all([
     api.onOpenRequest(queueOpen),
     api.onMenuCommand(runCommand),
-    api.onCloseRequested(() => void closeWindow()),
+    api.onCloseRequested(() => void confirmAndCloseWindow()),
     api.onFileChanged(onFileChangedOnDisk),
     api.onDragHover((hovering) => {
       noteActivity();
@@ -676,8 +685,13 @@ async function start() {
   settings.load(readSettings(startup.settings));
 
   // Paint first: the file was pre-read in Rust while WebView2 started.
-  if (startup.file) loadIntoTab(active, startup.file);
-  else showActiveTab();
+  if (startup.file) {
+    loadIntoTab(active, startup.file);
+  } else {
+    // The first tab was created before settings loaded; give it the configured line ending.
+    active.meta = untitledDocument().meta;
+    showActiveTab();
+  }
   performance.mark('file-loaded');
   measureColdStart((ms) => statusBar.startup(ms));
 

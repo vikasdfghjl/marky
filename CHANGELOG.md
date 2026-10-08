@@ -4,6 +4,12 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Fixed
+
+- The untitled document Marky opens with now uses the line ending chosen under "Line ending for new files". It was always CRLF.
+- Marky no longer offers to restore a file you had already saved. An older crash-recovery copy could land after the newer one.
+- Opening and saving at the same moment (for example, an auto-save while a file opens) no longer drops a file from Open Recent.
+
 ## [0.2.9] - 2026-10-01
 
 ### Removed

@@ -1,6 +1,6 @@
 import type { MarkdownIt, StateBlock, StateInline, Token } from 'markdown-it';
 import type katexModule from 'katex';
-import { dataLineAttr, fenceLanguage } from './markdown-plugins';
+import { dataLineAttr, fenceLanguage, lineText } from './markdown-plugins';
 
 // Math in the preview (PRD F16): `$…$` inline, `$$…$$` blocks
 // and ```math fences. KaTeX renders to a string, so it runs here in the worker and
@@ -60,8 +60,7 @@ export function renderMathFence(token: Token, escapeHtml: (s: string) => string)
 
 /** `$$` on its own line (or `$$ … $$` on one line) up to a closing `$$`. */
 function mathBlock(state: StateBlock, startLine: number, endLine: number, silent: boolean): boolean {
-  const start = state.bMarks[startLine] + state.tShift[startLine];
-  const firstLine = state.src.slice(start, state.eMarks[startLine]).trim();
+  const firstLine = lineText(state, startLine);
   if (state.sCount[startLine] - state.blkIndent >= 4 || !firstLine.startsWith('$$')) return false;
 
   const opening = firstLine.slice(2);
@@ -73,9 +72,9 @@ function mathBlock(state: StateBlock, startLine: number, endLine: number, silent
     content = opening.trimEnd().slice(0, -2);
   } else {
     let closing = startLine + 1;
-    while (closing < endLine && !lineText(state, closing).trimEnd().endsWith('$$')) closing++;
+    while (closing < endLine && !lineText(state, closing).endsWith('$$')) closing++;
     if (closing >= endLine) return false;
-    const closingText = lineText(state, closing).trimEnd();
+    const closingText = lineText(state, closing);
     content = [opening, state.getLines(startLine + 1, closing, state.tShift[startLine], false), closingText.slice(0, -2)]
       .filter((part) => part.trim() !== '')
       .join('\n');
@@ -90,10 +89,6 @@ function mathBlock(state: StateBlock, startLine: number, endLine: number, silent
   token.map = [startLine, lastLine + 1];
   state.line = lastLine + 1;
   return true;
-}
-
-function lineText(state: StateBlock, line: number): string {
-  return state.src.slice(state.bMarks[line] + state.tShift[line], state.eMarks[line]);
 }
 
 /** Index of the next unescaped `$` that follows a non-space and precedes no digit, or -1. */

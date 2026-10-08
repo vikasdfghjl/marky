@@ -45,6 +45,9 @@ struct AppState {
     dirty: AtomicBool,
     /// One watcher per open tab's file; dropping an entry stops that watch.
     watchers: Mutex<HashMap<PathBuf, RecommendedWatcher>>,
+    /// Held while updating recent.json. Opens and saves run concurrently (an auto-save during an
+    /// open), and its read-modify-write through one temp file would otherwise lose an entry.
+    recent_list_writes: Mutex<()>,
 }
 
 impl AppState {
@@ -89,7 +92,7 @@ fn first_file_arg(args: impl IntoIterator<Item = String>, cwd: &Path) -> Option<
     args.into_iter().find(|a| !a.starts_with('-')).map(|a| cwd.join(a))
 }
 
-fn display(path: &Path) -> String {
+fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
@@ -105,6 +108,8 @@ fn local_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// preview load images from the document's folder (F12). Neither may fail the open/save.
 fn record_file_access(app: &AppHandle, path: &Path) {
     if let Ok(dir) = config_dir(app) {
+        let state = app.state::<AppState>();
+        let _one_writer = state.recent_list_writes.lock().unwrap();
         let _ = store::push_recent(&dir, path);
     }
     if let Some(folder) = path.parent() {
@@ -128,15 +133,14 @@ async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<Sta
         return Ok(StartupState { file: None, file_error: None, recovery, settings });
     };
     let (path, read) = pending_read.join().map_err(|_| "startup file reader panicked".to_string())?;
-    let mut startup = StartupState { file: None, file_error: None, recovery, settings };
-    match read {
+    let (file, file_error) = match read {
         Ok(file) => {
             record_file_access(&app, &path);
-            startup.file = Some(file);
+            (Some(file), None)
         }
-        Err(e) => startup.file_error = Some(format!("Could not open {}\n\n{e}", display(&path))),
-    }
-    Ok(startup)
+        Err(e) => (None, Some(format!("Could not open {}\n\n{e}", path_string(&path)))),
+    };
+    Ok(StartupState { file, file_error, recovery, settings })
 }
 
 /// Milliseconds since process start; the frontend calls this on its first editable frame.
@@ -168,7 +172,7 @@ async fn pick_open(window: WebviewWindow, state: State<'_, AppState>) -> Result<
         .blocking_pick_file();
     let Some(picked) = picked else { return Ok(None) };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    Ok(Some(display(&state.remember_user_choice(path))))
+    Ok(Some(path_string(&state.remember_user_choice(path))))
 }
 
 #[tauri::command]
@@ -188,7 +192,7 @@ async fn pick_save(
     }
     let Some(picked) = dialog.blocking_save_file() else { return Ok(None) };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    Ok(Some(display(&state.remember_user_choice(path))))
+    Ok(Some(path_string(&state.remember_user_choice(path))))
 }
 
 #[tauri::command]
@@ -237,9 +241,9 @@ async fn resolve_link(state: State<'_, AppState>, from: String, target: String) 
         return Err(format!("Marky follows links to .md, .markdown and .txt files only: {target}"));
     }
     if !path.is_file() {
-        return Err(format!("Linked file not found: {}", display(&path)));
+        return Err(format!("Linked file not found: {}", path_string(&path)));
     }
-    Ok(display(&state.remember_user_choice(path)))
+    Ok(path_string(&state.remember_user_choice(path)))
 }
 
 /// Opens a web or mail link in the default app. Anything else (file:, javascript:, …) is refused.
@@ -262,7 +266,7 @@ async fn watch_file(app: AppHandle, state: State<'_, AppState>, path: String) ->
         return Ok(());
     }
     let emitter = app.clone();
-    let payload = display(&path);
+    let payload = path_string(&path);
     let watcher = watcher::watch(&path, move || {
         let _ = emitter.emit_to("main", "file-changed", &payload);
     })
@@ -286,7 +290,7 @@ async fn recent_files(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<
     Ok(recent
         .into_iter()
         .filter(|p| p.is_file())
-        .map(|p| display(&state.remember_user_choice(p)))
+        .map(|p| path_string(&state.remember_user_choice(p)))
         .collect())
 }
 
@@ -296,7 +300,7 @@ async fn recent_files(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<
 #[tauri::command]
 async fn snapshot_buffers(app: AppHandle, snapshots: Vec<Snapshot>) -> Result<(), String> {
     let dir = local_data_dir(&app)?;
-    let result = if snapshots.is_empty() { store::clear_snapshot(&dir) } else { store::save_snapshots(&dir, &snapshots) };
+    let result = if snapshots.is_empty() { store::clear_snapshots(&dir) } else { store::save_snapshots(&dir, &snapshots) };
     result.map_err(|e| e.to_string())
 }
 
@@ -387,14 +391,14 @@ async fn show_error(window: WebviewWindow, message: String) {
 #[tauri::command]
 fn close_window(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
     if let Ok(dir) = local_data_dir(&app) {
-        let _ = store::clear_snapshot(&dir);
+        let _ = store::clear_snapshots(&dir);
     }
     window.destroy().map_err(|e| e.to_string())
 }
 
 fn request_open(app: &AppHandle, path: PathBuf) {
     let path = app.state::<AppState>().remember_user_choice(path);
-    let _ = app.emit_to("main", "open-request", display(&path));
+    let _ = app.emit_to("main", "open-request", path_string(&path));
 }
 
 fn has_unsaved_changes(window: &Window) -> bool {
@@ -435,6 +439,7 @@ fn main() {
         startup_read: Mutex::new(None),
         dirty: AtomicBool::new(false),
         watchers: Mutex::default(),
+        recent_list_writes: Mutex::default(),
     };
     if let Some(path) = startup {
         let path = state.remember_user_choice(path);

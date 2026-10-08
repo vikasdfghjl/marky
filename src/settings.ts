@@ -1,5 +1,5 @@
-import type { LineEnding } from './ipc';
-import type { ThemeSetting } from './theme';
+import { LINE_ENDINGS, type LineEnding } from './ipc';
+import { THEME_SETTINGS, type ThemeSetting } from './theme';
 
 export interface Settings {
   theme: ThemeSetting;
@@ -42,12 +42,12 @@ export function readSettings(raw: unknown): Settings {
   const flag = (value: unknown, fallback: boolean) => (typeof value === 'boolean' ? value : fallback);
 
   return {
-    theme: pick(saved.theme, ['system', 'light', 'dark'] as const, DEFAULT_SETTINGS.theme),
+    theme: pick(saved.theme, THEME_SETTINGS, DEFAULT_SETTINGS.theme),
     fontSize: pick(saved.fontSize, FONT_SIZES, DEFAULT_SETTINGS.fontSize as (typeof FONT_SIZES)[number]),
     wordWrap: flag(saved.wordWrap, DEFAULT_SETTINGS.wordWrap),
     typographer: flag(saved.typographer, DEFAULT_SETTINGS.typographer),
     autoSave: flag(saved.autoSave, DEFAULT_SETTINGS.autoSave),
-    newFileLineEnding: pick(saved.newFileLineEnding, ['crlf', 'lf'] as const, DEFAULT_SETTINGS.newFileLineEnding),
+    newFileLineEnding: pick(saved.newFileLineEnding, LINE_ENDINGS, DEFAULT_SETTINGS.newFileLineEnding),
     showEditor: flag(saved.showEditor, DEFAULT_SETTINGS.showEditor),
     showPreview: flag(saved.showPreview, DEFAULT_SETTINGS.showPreview),
     showOutline: flag(saved.showOutline, DEFAULT_SETTINGS.showOutline),
