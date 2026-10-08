@@ -8,25 +8,25 @@ Marky opens a `.md` file, lets you edit it with syntax highlighting and a live s
 
 ## Benchmarks
 
-Latest run: 29 Sep 2026 on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with `scripts/fixtures/typical.md` open: a 5 KB document with YAML frontmatter, `bash` and `json` code fences and a table, about the median Markdown file on a developer machine. Each figure is the median of 5–7 runs. The budgets are in [PRD.md](PRD.md), where the evidence for them is too.
+Latest runs: 9 Oct 2026 for sizes, cold start and idle RAM (`./scripts/bench.ps1`), 29 Sep 2026 for the other rows, on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with `scripts/fixtures/typical.md` open: a 5 KB document with YAML frontmatter, `bash` and `json` code fences and a table, about the median Markdown file on a developer machine. Each figure is the median of 5–7 runs. The budgets are in [PRD.md](PRD.md), where the evidence for them is too.
 
 | Metric                                 | Measured             | Target   | Hard limit | Status |
 | -------------------------------------- | -------------------- | -------- | ---------- | ------ |
 | Installer (NSIS)                       | 4.46 MB              | ≤ 6 MB   | 10 MB      | ✅     |
-| App exe                                | 6.70 MB              | ≤ 8 MB   | 12 MB      | ✅     |
+| App exe                                | 6.71 MB              | ≤ 8 MB   | 12 MB      | ✅     |
 | Window visible in theme colour         | 187 ms (119–207)     | ≤ 300 ms | 500 ms     | ✅     |
 | White flash at launch (dark mode)      | 0 ms                 | 0 ms     | 0 ms       | ✅     |
-| Cold start to editable                 | 899 ms (858–947)     | ≤ 900 ms | 1,000 ms   | ✅     |
+| Cold start to editable                 | 815 ms (782–849)     | ≤ 900 ms | 1,000 ms   | ✅     |
 | Typing latency, p50 (input to painted) | 11 ms                | ≤ 20 ms  | 33 ms      | ✅     |
 | Preview update after typing stops      | ~163 ms              | ≤ 200 ms | 400 ms     | ✅     |
-| Idle RAM in use                        | 98.8 MB              | ≤ 105 MB | 120 MB     | ✅     |
-| Idle RAM after 30 s with no input      | 77.5 MB              | ≤ 85 MB  | 100 MB     | ✅     |
+| Idle RAM in use                        | 99.6 MB              | ≤ 105 MB | 120 MB     | ✅     |
+| Idle RAM after 30 s with no input      | 75.3 MB              | ≤ 85 MB  | 100 MB     | ✅     |
 | First keystroke after an idle trim     | 35–38 ms             | ≤ 60 ms  | 100 ms     | ✅     |
 | Idle CPU                               | 0.25% of the machine | ≈ 0%     | < 0.5%     | ✅     |
 
 Real documents cost a little more than the fixture. On a developer workstation the median real file (5.7 KB, frontmatter plus two fences) idles at 102 MB and the 95th-percentile files (30 KB) at 110–114 MB, inside the 120 MB limit. Each ordinary feature adds memory: a code-fence language 3–6 MB, YAML frontmatter about 6 MB, a table about 2 MB.
 
-Cold start breaks down into about 545–590 ms for WebView2 to create its browser process (before any app code runs) and about 270–300 ms in the frontend: 90 ms to load and compile the startup JavaScript, then one ~80 ms task that lays out the opened file. Run-to-run spread on this machine is about ±50 ms, and larger on busy days; it drifts by 1–2 MB and 30 ms from day to day, so compare figures only within one session. Idle RAM is almost all WebView2 itself: the renderer (44 MB), the browser process (33 MB) and the GPU process (18 MB); Marky's own process is 4 MB. After 30 seconds without input (and while minimised) Marky asks WebView2 to trim its memory, which takes a typical document from about 99 MB to about 77 MB; a minimised window drops to about 60–70 MB. Hovering does not count as activity, so a resting mouse does not stop the trim.
+Cold start breaks down into about 520–570 ms for WebView2 to create its browser process (before any app code runs) and about 260–290 ms in the frontend: about 80 ms to load and compile the startup JavaScript, then one 60–80 ms task that lays out the opened file. Run-to-run spread on this machine is about ±50 ms, and larger on busy days; it drifts by 1–2 MB and 30 ms from day to day, so compare figures only within one session. Idle RAM is almost all WebView2 itself: the renderer (44 MB), the browser process (33 MB) and the GPU process (18 MB); Marky's own process is 4 MB. After 30 seconds without input (and while minimised) Marky asks WebView2 to trim its memory, which takes a typical document from about 100 MB to about 75 MB; a minimised window drops to about 60–70 MB. Hovering does not count as activity, so a resting mouse does not stop the trim.
 
 **Launch flash.** With Windows in dark mode the window used to show white for 630–730 ms before the UI painted. `window.rs` now creates the window with the theme's background colour, and `./scripts/bench-flash.ps1` measures 0 ms of white. Cold start did not change.
 
