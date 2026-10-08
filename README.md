@@ -8,7 +8,7 @@ Marky opens a `.md` file, lets you edit it with syntax highlighting and a live s
 
 ## Benchmarks
 
-Latest runs: 9 Oct 2026 for sizes, cold start and idle RAM (`./scripts/bench.ps1`), 29 Sep 2026 for the other rows, on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with `scripts/fixtures/typical.md` open: a 5 KB document with YAML frontmatter, `bash` and `json` code fences and a table, about the median Markdown file on a developer machine. Each figure is the median of 5–7 runs. The budgets are in [PRD.md](PRD.md), where the evidence for them is too.
+Latest runs: 9 Oct 2026 for sizes, cold start, idle RAM (`./scripts/bench.ps1`) and the preview update (`./scripts/bench-large.ps1`), 29 Sep 2026 for the other rows, on an Intel Core i5-9300H laptop with 16 GB RAM, using a release build with `scripts/fixtures/typical.md` open: a 5 KB document with YAML frontmatter, `bash` and `json` code fences and a table, about the median Markdown file on a developer machine. Each figure is the median of 5–7 runs. The budgets are in [PRD.md](PRD.md), where the evidence for them is too.
 
 | Metric                                 | Measured             | Target   | Hard limit | Status |
 | -------------------------------------- | -------------------- | -------- | ---------- | ------ |
@@ -18,7 +18,7 @@ Latest runs: 9 Oct 2026 for sizes, cold start and idle RAM (`./scripts/bench.ps1
 | White flash at launch (dark mode)      | 0 ms                 | 0 ms     | 0 ms       | ✅     |
 | Cold start to editable                 | 815 ms (782–849)     | ≤ 900 ms | 1,000 ms   | ✅     |
 | Typing latency, p50 (input to painted) | 11 ms                | ≤ 20 ms  | 33 ms      | ✅     |
-| Preview update after typing stops      | ~163 ms              | ≤ 200 ms | 400 ms     | ✅     |
+| Preview update after typing stops      | 42 ms                | ≤ 200 ms | 400 ms     | ✅     |
 | Idle RAM in use                        | 99.6 MB              | ≤ 105 MB | 120 MB     | ✅     |
 | Idle RAM after 30 s with no input      | 75.3 MB              | ≤ 85 MB  | 100 MB     | ✅     |
 | First keystroke after an idle trim     | 35–38 ms             | ≤ 60 ms  | 100 ms     | ✅     |
@@ -30,13 +30,13 @@ Cold start breaks down into about 520–570 ms for WebView2 to create its browse
 
 **Launch flash.** With Windows in dark mode the window used to show white for 630–730 ms before the UI painted. `window.rs` now creates the window with the theme's background colour, and `./scripts/bench-flash.ps1` measures 0 ms of white. Cold start did not change.
 
-**Larger documents.** Measured 29 Sep 2026 with `./scripts/bench-large.ps1` on generated docs-style Markdown (headings, tables, fenced code in four languages; denser in code than real files, so it overstates cost). The 8 MB file is above the 5 MB threshold, so its preview turns itself off. Files over 100 KB are about 1 in 700 on a real workstation (see the PRD), so these are held to "stays usable", not to a memory budget.
+**Larger documents.** Measured with `./scripts/bench-large.ps1` (rows up to 1 MB on 9 Oct 2026, 4 MB and 8 MB on 29 Sep) on generated docs-style Markdown (headings, tables, fenced code in four languages; denser in code than real files, so it overstates cost). The 8 MB file is above the 5 MB threshold, so its preview turns itself off. Files over 100 KB are about 1 in 700 on a real workstation (see the PRD), so these are held to "stays usable", not to a memory budget.
 
 | Document           | Cold start with file | Idle RAM   | Typing p50 / p95 | Preview update after typing stops | Longest main-thread stall |
 | ------------------ | -------------------- | ---------- | ---------------- | --------------------------------- | ------------------------- |
-| 5 KB (typical)     | 899 ms               | 99 MB      | 11 / 18 ms       | 163 ms (parse 2 ms)               | none                      |
-| 100 KB             | 877 ms               | 151 MB     | 11 / 18 ms       | 198 ms (parse 34 ms)              | none                      |
-| 1 MB               | 938 ms               | 470 MB     | 12 / 18 ms       | 488 ms (parse 298 ms)             | 100 ms                    |
+| 6 KB (typical)     | 825 ms               | 105 MB     | 19 / 22 ms       | 42 ms (parse 3 ms)                | none                      |
+| 100 KB             | 784 ms               | 155 MB     | 18 / 22 ms       | 124 ms (parse 39 ms)              | none                      |
+| 1 MB               | 864 ms               | 468 MB     | 19 / 21 ms       | 468 ms (parse 278 ms)             | 112 ms                    |
 | 4 MB               | 1,022 ms             | 0.3–1.1 GB | 12 / 27 ms       | 1,439 ms (parse 1,181 ms)         | 544 ms                    |
 | 8 MB (preview off) | 1,098 ms             | 197 MB     | 10 / 15 ms       | –                                 | 90 ms                     |
 
@@ -49,7 +49,9 @@ RAM for the 4 MB file varies between runs because Windows trims an untouched win
 | Preview update after typing  | 291 → 198 ms | 1,228 → 488 ms | 4,676 → 1,439 ms |
 | RAM after typing 40 keys     | 291 → 176 MB | 1,498 → 567 MB | 2,464 → 1,388 MB |
 
-What is still open: the first render builds the whole preview DOM, so memory grows about 0.4 MB per KB of document (151 MB at 100 KB), and parsing is done over the whole document in the worker (1.2 s at 4 MB). The PRD deliberately does not budget for this; windowed rendering is the fix if large files turn out to matter. Typing latency is input to the next painted frame, so it includes one frame; it was 19–20 ms in an earlier, busier session on the same machine, which is why it is compared only within a session. Opening a 1 MB file costs about 100 ms between IPC ready and loaded (budget 150 ms).
+What is still open: the first render builds the whole preview DOM, so memory grows about 0.4 MB per KB of document (151 MB at 100 KB), and parsing is done over the whole document in the worker (1.2 s at 4 MB). The PRD deliberately does not budget for this; windowed rendering is the fix if large files turn out to matter. Typing latency is input to the next painted frame, so it includes one frame; it was 19–20 ms in an earlier, busier session on the same machine, which is why it is compared only within a session. Opening a 1 MB file costs about 115–125 ms between IPC ready and loaded (budget 150 ms).
+
+**Preview pause.** The preview used to wait a fixed 150 ms after the last keystroke. It now waits twice the last parse time, between 30 and 150 ms, so a typical document keeps up almost at once while a large one keeps the full pause. Same session, before → after: 6 KB 176 → 42 ms, 100 KB 198 → 124 ms, 1 MB 477 → 468 ms, with typing p50 unchanged (6 KB 20.8 → 19.2 ms, 1 MB 20.3 → 18.5 ms). That session was busier than the 29 Sep one, which is why typing reads 18–19 ms here and 11 ms in the older rows.
 
 Two things skew benchmarks, and the scripts now guard against both: a crash-recovery snapshot left by a killed run (an 8.5 MB one once added about 150 ms to every start and 20+ MB of RAM), which the harnesses delete; and Windows trimming an untouched window's memory, which is why RAM is quoted in use and after the idle trim.
 

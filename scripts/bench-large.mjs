@@ -103,7 +103,8 @@ async function measure(label) {
   await key('keyUp', 'Home', 'Home', 36, 2);
   await sleep(1500); // let the initial preview render and highlighting settle
 
-  // Burst: keys 70 ms apart stay inside the 150 ms typing pause, so this is editing without preview work.
+  // Burst: keys 70 ms apart. A large document's typing pause is longer, so this is editing without preview
+  // work; a small one re-renders between keys (its pause is down to 30 ms), and that cost is included.
   await evaluate('window.__latency.length = 0; window.__stalls.length = 0');
   for (let i = 0; i < 30; i++) {
     await send('Input.insertText', { text: 'a' });

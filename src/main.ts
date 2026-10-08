@@ -21,7 +21,13 @@ import { logError, logUncaughtErrors } from './core/error-log';
 
 logUncaughtErrors();
 
-const TYPING_PAUSE_MS = 150;
+/**
+ * The preview waits for a pause in typing, scaled to how long the last parse took: a typical
+ * document parses in a few milliseconds and keeps up almost at once, while a large one gets the
+ * full pause, so its parsing never competes with typing.
+ */
+const MAX_TYPING_PAUSE_MS = 150;
+const MIN_TYPING_PAUSE_MS = 30;
 /** Bursts of watcher events (a save is several events) collapse into one check. */
 const FILE_CHANGE_SETTLE_MS = 100;
 const SNAPSHOT_INTERVAL_MS = 30_000;
@@ -62,6 +68,7 @@ const NEW_DOCUMENT: EditorDocument = {
 let typingPauseTimer: number | undefined;
 let autoSaveTimer: number | undefined;
 let lastEditAt = 0;
+let lastParseMs = 0;
 let nextTabId = 1;
 /** Mirrors Rust's close guard: true while any tab has unsaved changes. */
 let windowDirty = false;
@@ -229,7 +236,7 @@ function onEditorUpdate(update: ViewUpdate) {
   lastEditAt = performance.now();
   setDirty(true);
   clearTimeout(typingPauseTimer);
-  typingPauseTimer = window.setTimeout(refreshTextViews, TYPING_PAUSE_MS);
+  typingPauseTimer = window.setTimeout(refreshTextViews, typingPauseMs());
   scheduleAutoSave();
 }
 
@@ -270,7 +277,12 @@ function refreshTextViews() {
   outline.refresh();
 }
 
+function typingPauseMs(): number {
+  return Math.min(MAX_TYPING_PAUSE_MS, Math.max(MIN_TYPING_PAUSE_MS, 2 * lastParseMs));
+}
+
 function onPreviewRendered(parseMs: number) {
+  lastParseMs = parseMs;
   if (pendingAnchor) {
     jumpToAnchor(pendingAnchor);
     pendingAnchor = null;

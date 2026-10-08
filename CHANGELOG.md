@@ -11,6 +11,7 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 ### Changed
 
 - Files larger than 128 MB are refused with a message instead of risking running out of memory. Files up to that size open as before.
+- The preview keeps up with your typing much sooner: about 40 ms after you stop typing in a typical document, instead of about 160 ms. Large documents keep the longer pause, so typing in them stays smooth.
 
 ### Security
 

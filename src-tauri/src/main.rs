@@ -229,8 +229,9 @@ async fn resolve_link(state: State<'_, AppState>, from: String, target: String) 
 }
 
 /// Opens a web or mail link in the default app. Anything else (file:, javascript:, …) is refused.
+/// Async like every command that can block: Tauri runs non-async commands on the UI thread.
 #[tauri::command]
-fn open_external(url: String) -> Result<(), String> {
+async fn open_external(url: String) -> Result<(), String> {
     let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
     if !["http", "https", "mailto"].contains(&scheme.as_str()) {
         return Err(format!("Refusing to open a {scheme}: link"));
@@ -257,11 +258,13 @@ async fn watch_file(app: AppHandle, state: State<'_, AppState>, path: String) ->
     Ok(())
 }
 
-/// No allowlist check: dropping a watch exposes nothing.
+/// No allowlist check: dropping a watch exposes nothing. Async because dropping a watcher waits
+/// for its thread to stop.
 #[tauri::command]
-fn unwatch_file(state: State<'_, AppState>, path: String) {
-    let Ok(path) = std::path::absolute(&path) else { return };
+async fn unwatch_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let Ok(path) = std::path::absolute(&path) else { return Ok(()) };
     state.watchers.lock().unwrap().remove(&path);
+    Ok(())
 }
 
 // ---- recent files (F9) ----
@@ -310,7 +313,7 @@ fn apply_window_theme(window: &WebviewWindow, settings: &serde_json::Value) {
 
 /// An uncaught error or a failed background write in the webview, for marky.log.
 #[tauri::command]
-fn log_error(message: String) {
+async fn log_error(message: String) {
     diagnostics::write(&format!("frontend: {message}"));
 }
 

@@ -45,7 +45,7 @@ Revised 29 Sep 2026. The first version of this table was written from assumption
 | Cold start to editable, typical document | ≤ 900 ms | 1,000 ms | `scripts/bench.ps1`: process start to first CodeMirror paint |
 | Open 1 MB file | ≤ 150 ms | 300 ms | `scripts/bench-large.ps1`: IPC ready to file loaded |
 | Typing latency, input event to next painted frame (p50) | ≤ 20 ms | 33 ms | `scripts/bench-large.mjs measure`; includes one 60 Hz frame, so 16 ms is the floor, not a target |
-| Preview update after typing stops | ≤ 200 ms | 400 ms | Same harness; includes the 150 ms typing pause |
+| Preview update after typing stops | ≤ 200 ms | 400 ms | Same harness; includes the typing pause (30–150 ms, scaled to parse time) |
 | Idle RAM in use, typical document | ≤ 105 MB | 120 MB | `scripts/bench.ps1`: app + WebView2 child processes, 10 s after launch |
 | Idle RAM in use, 95th-percentile document (30 KB) | ≤ 120 MB | 135 MB | Same, on a real 30 KB file |
 | Idle RAM after 30 s with no input | ≤ 85 MB | 100 MB | `scripts/bench.ps1`, 42 s after launch (memory trimmed while idle) |
@@ -83,7 +83,7 @@ The MVP (P0) is single-file open, edit, preview and save; everything else is lay
 | F1 | P0 | Open file (dialog, drag-drop, CLI arg, Explorer "Open with") | `.md`, `.markdown`, `.txt` open; UTF-8 and UTF-8 BOM detected; BOM and line endings (CRLF/LF) preserved on save |
 | F2 | P0 | Edit with Markdown syntax highlighting | CodeMirror 6 with `@codemirror/lang-markdown` (GFM); fenced code blocks highlighted for top 15 languages via lazy-loaded language packs |
 | F3 | P0 | Save / Save As, Ctrl+S | Atomic write (temp file + rename); dirty indicator in title bar; no data loss if app is killed mid-save |
-| F4 | P0 | Live preview pane | GFM (tables, task lists, strikethrough, autolinks); debounced 150 ms; sanitized HTML; toggle with Ctrl+Shift+V |
+| F4 | P0 | Live preview pane | GFM (tables, task lists, strikethrough, autolinks); debounced by a typing pause scaled to parse time (30–150 ms); sanitized HTML; toggle with Ctrl+Shift+V |
 | F5 | P0 | Unsaved-changes guard | Prompt on close/open-new when dirty |
 | F6 | P0 | Light/dark theme following Windows setting | Switches live when OS theme changes |
 | F7 | P0 | Find and replace | Ctrl+F / Ctrl+H, regex and case toggles (`@codemirror/search`) |
@@ -186,7 +186,7 @@ flowchart LR
 **Design rules**
 
 - **No per-keystroke IPC.** Typing never leaves the webview.
-- **Preview off the main thread.** The worker receives the full text at most once per 150 ms and returns one HTML string per top-level block (with `data-line` source maps for synced scroll); the page diffs blocks and replaces only the changed ones.
+- **Preview off the main thread.** The worker receives the full text at most once per typing pause (twice the last parse time, 30–150 ms) and returns one HTML string per top-level block (with `data-line` source maps for synced scroll); the page diffs blocks and replaces only the changed ones.
 - **Lazy everything.** Language packs, KaTeX and Mermaid load via dynamic `import()` only when content needs them; the initial JS bundle budget is ≤ 250 KB gzipped.
 - **Config** (theme override, recent files, window state) stored as JSON in the app config dir via tauri-plugin-store or plain Rust serde.
 - **Encoding:** UTF-8 only in v1; other encodings open read-only with a warning (open question below).
