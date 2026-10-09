@@ -1,10 +1,10 @@
 # PRD — Markdown Editor for Windows (Tauri 2 + CodeMirror 6)
 
-Sep 26, 2026 · @Vikas Singh
+Sep 26, 2026 · @Vikas Singh · performance budgets revised 29 Sep 2026
 
 ## Overview
 
-Build a Windows-native Markdown editor that opens in under 500 ms, ships as a sub-10 MB installer and idles under 120 MB total RAM, using Tauri 2 and CodeMirror 6.
+Build a Windows-native Markdown editor that shows its window in about 150 ms, opens a typical file in under 900 ms, ships as a sub-10 MB installer and idles around 100 MB total RAM (under 80 MB when left alone), using Tauri 2 and CodeMirror 6.
 
 **Problem.** Popular Markdown editors on Windows are either Electron apps (150–300 MB RAM, 80–150 MB installers) or bare text editors with no live preview. Opening a single README should not cost the memory of a browser.
 
@@ -31,20 +31,34 @@ v1.0 succeeds when every performance budget below holds on a mid-range Windows 1
 
 **Performance budgets**
 
+Revised 29 Sep 2026. The first version of this table was written from assumptions (a "100 KB file", 500 ms starts, 16 ms typing) and two rows had to be walked back after measurement. These budgets are set from evidence instead:
+
+- **What people open.** A scan of the 737 `.md` files on a developer / AI-agent workstation (dependency and build folders excluded; one machine, so treat it as indicative): median 5.9 KB, 90th percentile 22 KB, 95th 31 KB, 99th 54 KB; 98.8% are under 50 KB and only one file exceeds 100 KB (a 484 KB cached changelog). Most contain YAML frontmatter and a few fenced code blocks. Budgets are therefore measured on a **typical document**, `scripts/fixtures/typical.md` (5 KB: frontmatter, `bash` and `json` fences, a table), and checked against real 95th-percentile files (30 KB).
+- **What the platform costs.** WebView2's own processes use about 95 MB and about 545 ms of every cold start before any Marky code runs. Each ordinary feature adds a little more (a code-fence language +3–6 MB, YAML frontmatter +6 MB, a table +2 MB). Budgets have to sit above that floor.
+- **What Windows does.** An untouched process has its working set trimmed by Windows, so RAM is quoted in use (10 s after launch) and after the idle trim described below.
+
 | Metric | Target | Hard limit | How measured |
 | --- | --- | --- | --- |
 | Installer size (NSIS .exe) | ≤ 6 MB | 10 MB | CI artifact size |
 | App binary (.exe) | ≤ 8 MB | 12 MB | CI artifact size |
-| Cold start to editable | ≤ 800 ms | 1,000 ms | Timestamp from process start to first CodeMirror paint |
-| Open 1 MB file | ≤ 150 ms | 300 ms | Rust read + editor state init |
-| Typing latency (keypress to paint) | ≤ 16 ms | 33 ms | Chrome DevTools performance trace in WebView2 |
-| Preview update after typing stops | ≤ 200 ms | 400 ms | Debounced render timer |
-| Idle RAM, one 100 KB file | ≤ 90 MB | 120 MB | Task Manager, app + WebView2 child processes |
+| Window visible in the theme's colour (no white flash) | ≤ 300 ms | 500 ms | `scripts/bench-flash.ps1`, pixel probe; white time must be 0 ms |
+| Cold start to editable, typical document | ≤ 900 ms | 1,000 ms | `scripts/bench.ps1`: process start to first CodeMirror paint |
+| Open 1 MB file | ≤ 150 ms | 300 ms | `scripts/bench-large.ps1`: IPC ready to file loaded |
+| Typing latency, input event to next painted frame (p50) | ≤ 20 ms | 33 ms | `scripts/bench-large.mjs measure`; includes one 60 Hz frame, so 16 ms is the floor, not a target |
+| Preview update after typing stops | ≤ 200 ms | 400 ms | Same harness; includes the typing pause (30–150 ms, scaled to parse time) |
+| Idle RAM in use, typical document | ≤ 105 MB | 120 MB | `scripts/bench.ps1`: app + WebView2 child processes, 10 s after launch |
+| Idle RAM in use, 95th-percentile document (30 KB) | ≤ 120 MB | 135 MB | Same, on a real 30 KB file |
+| Idle RAM after 30 s with no input | ≤ 85 MB | 100 MB | `scripts/bench.ps1`, 42 s after launch (memory trimmed while idle) |
 | Idle CPU | 0% | < 0.5% | Task Manager over 60 s |
+| First keystroke after an idle trim | ≤ 60 ms | 100 ms | Real key press after 40 s idle |
+
+**Large documents are held to "stays usable", not to a memory budget.** Files up to 1 MB must keep typing latency ≤ 33 ms (p95) and never stall the main thread for more than 150 ms; the preview turns itself off above 5 MB, and the editor stays responsive at 8 MB and beyond. Memory grows about 0.4 MB per KB of document while the preview is on, and that is accepted because files over 100 KB are rare (see above). Windowed preview rendering (draw only the blocks near the viewport) would fix it and is deliberately not built; revisit if real usage shows large files matter.
 
 RAM is measured across all WebView2 helper processes, not just the main process, so the number stays honest against Electron comparisons.
 
-**M0 baseline (27 Sep 2026, i5-9300H, 16 GB):** installer 1.68 MB, exe 3.75 MB, idle RAM 97.5 MB, cold start 891 ms (median of 5). About 610 ms of cold start is WebView2 creating its browser process before app code runs, so the budget was revised from 400 / 700 ms to 800 / 1,000 ms. Current numbers live in the README's Benchmarks section.
+**Idle trimming.** After 30 seconds without input, and while the window is minimised, Marky asks WebView2 to trim its memory (`MemoryUsageTargetLevel`, Microsoft's guidance for inactive webviews). A typical document drops from about 100 MB to about 77 MB, and the first keystroke after coming back costs about 5 ms extra. Hovering does not count as activity; keys, clicks, scrolling, menu commands and files changing on disk do. Not on focus loss, so Alt+Tab back into the editor stays instant.
+
+**History of the revised rows.** The M0 baseline (27 Sep 2026, i5-9300H, 16 GB) measured installer 1.68 MB, exe 3.75 MB, idle RAM 97.5 MB and cold start 891 ms, with about 610 ms of cold start being WebView2 creating its browser process, so the cold-start budget was revised from 400 / 700 ms to 800 / 1,000 ms. On 28 Sep the RAM target moved from ≤ 90 MB to ≤ 105 MB for the same reason. On 29 Sep the RAM rows were re-based on typical documents, the impossible "16 ms typing" target became 20 ms, cold start became 900 ms (the best measured was 816 ms with a 545 ms platform floor), and the idle-trim and window-visible rows were added. Current numbers live in the README's Benchmarks section.
 
 ## Target users and use cases
 
@@ -53,8 +67,10 @@ Primary users are developers and technical writers who live in Markdown and want
 | Persona | Core use case | What they care about |
 | --- | --- | --- |
 | Developer | Edit READMEs, CHANGELOGs, ADRs, docs in repos | Instant open from Explorer, GFM, code-block highlighting |
-| Technical writer | Long-form docs, notes, blog drafts | Distraction-free editing, word count, stable large-file performance |
-| AI power user | Review and edit prompt files, agent context docs (`CLAUDE.md`, `AGENTS.md`) | Fast open/close, external-change detection when agents rewrite files |
+| Technical writer | Long-form docs, notes, blog drafts | Distraction-free editing, word count, documents up to about 1 MB staying responsive |
+| AI power user | Review and edit prompt files, agent context docs (`CLAUDE.md`, `AGENTS.md`, `SKILL.md`) | Fast open/close, external-change detection when agents rewrite files, YAML frontmatter shown properly |
+
+The file-size data behind the budgets supports these personas: on a developer workstation the typical Markdown file is a 6 KB README, skill or instruction file, usually with frontmatter and a few code blocks; files above 100 KB are about 1 in 700.
 
 Key scenarios: double-click a `.md` in Explorer and start typing; drag a file onto the window; edit while another tool (git, an AI agent) changes the file on disk.
 
@@ -67,7 +83,7 @@ The MVP (P0) is single-file open, edit, preview and save; everything else is lay
 | F1 | P0 | Open file (dialog, drag-drop, CLI arg, Explorer "Open with") | `.md`, `.markdown`, `.txt` open; UTF-8 and UTF-8 BOM detected; BOM and line endings (CRLF/LF) preserved on save |
 | F2 | P0 | Edit with Markdown syntax highlighting | CodeMirror 6 with `@codemirror/lang-markdown` (GFM); fenced code blocks highlighted for top 15 languages via lazy-loaded language packs |
 | F3 | P0 | Save / Save As, Ctrl+S | Atomic write (temp file + rename); dirty indicator in title bar; no data loss if app is killed mid-save |
-| F4 | P0 | Live preview pane | GFM (tables, task lists, strikethrough, autolinks); debounced 150 ms; sanitized HTML; toggle with Ctrl+Shift+V |
+| F4 | P0 | Live preview pane | GFM (tables, task lists, strikethrough, autolinks); debounced by a typing pause scaled to parse time (30–150 ms); sanitized HTML; toggle with Ctrl+Shift+V |
 | F5 | P0 | Unsaved-changes guard | Prompt on close/open-new when dirty |
 | F6 | P0 | Light/dark theme following Windows setting | Switches live when OS theme changes |
 | F7 | P0 | Find and replace | Ctrl+F / Ctrl+H, regex and case toggles (`@codemirror/search`) |
@@ -89,8 +105,8 @@ The MVP (P0) is single-file open, edit, preview and save; everything else is lay
 
 Performance budgets are release-blocking; the rest are v1.0 quality gates.
 
-- **Performance:** budgets in the metrics table are enforced in CI on every release build. Files up to 10 MB stay responsive (CodeMirror renders only the visible viewport); files above 5 MB open with preview off by default.
-- **Large-file preview:** Markdown parsing runs in a Web Worker so the UI thread never parses more than the visible diff.
+- **Performance:** size budgets are enforced in CI on every release build; the timing and RAM budgets are release-blocking and checked by the scripts named in the table. Files up to 1 MB stay fully responsive with the preview on; the editor stays responsive at 8 MB and beyond (CodeMirror renders only the visible viewport); files above 5 MB open with preview off by default.
+- **Large-file preview:** Markdown parsing runs in a Web Worker, which renders each top-level block separately; the page replaces only the blocks an edit changed, and the panes are CSS-contained so editing never re-walks the preview.
 - **Security:** strict CSP, sanitized preview, least-privilege Tauri capabilities (see Security model). No telemetry by default.
 - **Accessibility:** WCAG 2.2 AA contrast in both themes; full keyboard navigation; CodeMirror screen-reader support verified with NVDA and Windows Narrator.
 - **Input:** IME composition (e.g. Chinese, Japanese, Korean input methods) works without dropped characters.
@@ -170,7 +186,7 @@ flowchart LR
 **Design rules**
 
 - **No per-keystroke IPC.** Typing never leaves the webview.
-- **Preview off the main thread.** The worker receives the full text at most once per 150 ms and returns HTML plus a line map for synced scroll.
+- **Preview off the main thread.** The worker receives the full text at most once per typing pause (twice the last parse time, 30–150 ms) and returns one HTML string per top-level block (with `data-line` source maps for synced scroll); the page diffs blocks and replaces only the changed ones.
 - **Lazy everything.** Language packs, KaTeX and Mermaid load via dynamic `import()` only when content needs them; the initial JS bundle budget is ≤ 250 KB gzipped.
 - **Config** (theme override, recent files, window state) stored as JSON in the app config dir via tauri-plugin-store or plain Rust serde.
 - **Encoding:** UTF-8 only in v1; other encodings open read-only with a warning (open question below).
@@ -241,7 +257,9 @@ MVP in 3 weeks and v1.0 in 7 weeks, assuming one developer part-time (\~20 h/wee
 
 **M2 status (27 Sep 2026):** F8, F10, F11, F12, F13 crash recovery, and F9's recent list (Ctrl+R) are done; CI, size budgets and the portable ZIP are in `.github/workflows/ci.yml`. Deferred: F9 taskbar jump-list entries (need Win32 code outside Tauri's API). Synced scroll is one-way (editor drives preview).
 
-**M3 status (27 Sep 2026):** WCAG AA contrast is verified by script in both themes; keyboard and screen-reader fixes are in (focusable preview, no live-region spam, listbox semantics); IME composition is covered by the end-to-end test. Signing is wired route-agnostically (`scripts/build-signed.ps1`, CI secret `MARKY_SIGN_COMMAND`) and the winget manifest generator is validated; both wait on the signing decision and a first public release. The exit gate 'all budgets at target' is not met: cold start is about 940 ms (target 800) and idle RAM about 103 MB (target 90). Both are dominated by WebView2 itself; see the README Benchmarks section and AGENTS.md for what was tried. Manual NVDA and Narrator passes are still to do.
+**M3 status (27 Sep 2026):** WCAG AA contrast is verified by script in both themes; keyboard and screen-reader fixes are in (focusable preview, no live-region spam, listbox semantics); IME composition is covered by the end-to-end test. Signing is wired route-agnostically (`scripts/build-signed.ps1`, CI secret `MARKY_SIGN_COMMAND`) and the winget manifest generator is validated; both wait on the signing decision and a first public release. The exit gate 'all budgets at target' was not met at the time (cold start about 940 ms against a target of 800, idle RAM about 103 MB against 90); both targets were set from assumptions and are re-based below. Manual NVDA and Narrator passes are still to do.
+
+**Performance pass (28–29 Sep 2026):** cold start 924 → about 850–900 ms (network service in-process, Markdown without the JavaScript and CSS parsers in the startup bundle, initial JS 229 → 175 KB gzipped); no more white flash at launch (the window is created in code with the theme's colour: 630–730 ms of white → 0 ms); the preview updates by block and the panes are CSS-contained (a 1 MB file: longest freeze 901 → about 100 ms, typing 30 → 18 ms; 4 MB typing 67 → 19 ms); idle trimming (about 100 → 77 MB after 30 s without input). The budgets were then re-based on how Markdown is actually used (see Performance budgets). Measured against the revised table, every row is met on the typical document; the cold-start row is the tightest (about 850–900 ms against 900). Benchmarks now run on `scripts/fixtures/typical.md` and the harnesses clean up their own crash snapshots: an 8.5 MB leftover `recovery.json` had been inflating cold start by about 150 ms and RAM by 20+ MB in earlier runs.
 
 **F14 status (27 Sep 2026):** tabs shipped early with a native menu bar and multi-file drag and drop. Measured memory growth is 2.5 MB per extra 100 KB tab (budget 3 MB).
 
@@ -251,12 +269,13 @@ MVP in 3 weeks and v1.0 in 7 weeks, assuming one developer part-time (\~20 h/wee
 
 ## Risks and open questions
 
-The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike exists to measure it before any feature work.
+The biggest risk is WebView2 memory creeping past the 120 MB limit as features are added: a typical document sits at about 100 MB against a ~95 MB platform floor, so each new feature that loads code or DOM eats into a thin margin. Measure with `scripts/bench.ps1` on the typical fixture before and after any feature.
 
 | Risk | Likelihood | Impact | Mitigation |
 | --- | --- | --- | --- |
-| WebView2 helper processes push RAM over budget | Medium | High | Measure in M0; disable unused browser features via WebView2 args; keep DOM small (virtualized preview for huge files) |
-| Preview jank on large files | Medium | Medium | Worker-based parsing, 150 ms debounce, auto-disable preview above 5 MB |
+| WebView2 helper processes push RAM over budget | Medium | High | Measured in M0 and on every performance pass; unused browser features disabled via WebView2 args; network service in-process; memory trimmed after 30 s idle and while minimised; lazy-load everything |
+| Preview jank or RAM growth on large files | Low (files over 100 KB are about 1 in 700) | Medium | Worker-based parsing, block-level preview updates, CSS containment, preview auto-off above 5 MB; windowed rendering held back until usage justifies it |
+| Benchmarks fooled by leftovers or by Windows | Medium | Medium | Harnesses delete their own crash snapshots; RAM is reported in use and after the idle trim; compare runs only within one session (machine background load moves typing latency by up to 2×) |
 | XSS via crafted Markdown reaching IPC | Low | High | `html: false`, DOMPurify, strict CSP, minimal capabilities |
 | Save corruption on crash or power loss | Low | High | Temp-file + flush + atomic rename; crash snapshots |
 | SmartScreen warnings hurt adoption | High (unsigned) | Medium | Decide signing route before v1.0 (see table in Build section) |
@@ -270,11 +289,15 @@ The biggest risk is WebView2 memory creeping past the 120 MB limit; the M0 spike
 - [ ] Should raw HTML in Markdown render (sanitized) by default, or stay off?
 - [x] Open source under the MIT license (decided 27 Sep 2026).
 - [ ] Is an ARM64 Windows build needed for v1.0?
-- [ ] Idle RAM target: WebView2's own baseline is about 95–100 MB on the test laptop. Revise the target to ≤ 105 MB (hard limit 120 MB unchanged), or keep 90 MB as aspirational?
-- [x] Cold-start budget revised to ≤ 800 ms target / 1,000 ms hard limit after M0 measured a ~610 ms WebView2 floor.
+- [x] Idle RAM target revised from ≤ 90 MB to ≤ 105 MB, hard limit 120 MB unchanged (decided 28 Sep 2026). WebView2's own processes use about 95 MB on the test laptop, so 90 MB was out of reach for any WebView2 app. Re-based on a typical document on 29 Sep (see below).
+- [x] Cold-start budget revised to ≤ 800 ms target / 1,000 ms hard limit after M0 measured a ~610 ms WebView2 floor; on 29 Sep the target became ≤ 900 ms (best measured 816 ms, platform floor about 545 ms).
+- [x] Budgets re-based on evidence instead of assumption (decided 29 Sep 2026): measured on a typical document (median file 5.9 KB, 95th percentile 31 KB) instead of a "100 KB file"; typing target 20 ms because 16 ms is one 60 Hz frame; large files held to "stays usable" rather than a memory budget.
+- [x] Idle memory trimming adopted (decided 29 Sep 2026): after 30 s without input, and while minimised, at the cost of about 5 ms on the first keystroke afterwards.
+- [ ] Windowed preview rendering for large files: not built. The first render still creates the whole preview DOM (about 0.4 MB per KB of document). Revisit only if usage data shows files over 100 KB matter.
 
 ## Sources
 
+- Markdown file-size scan, 29 Sep 2026: 737 files under the user's Projects, Documents, Desktop, Downloads and `.claude` folders of one developer workstation, dependency and build folders excluded, sizes only (the source of the budget evidence above; repeat it on other machines before treating it as general)
 - [Tauri ecosystem releases](https://v2.tauri.app/release/) (core 2.11.x, plugins)
 - npm registry and crates.io, queried 26 Sep 2026, for all version numbers in the Tech stack table
 - [Artifact Signing quickstart — Microsoft Learn](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) (eligibility)

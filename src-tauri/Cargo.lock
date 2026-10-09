@@ -2048,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "marky"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "notify",
  "serde",
@@ -2058,6 +2058,9 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "webview2-com",
+ "windows-core 0.62.2",
+ "winreg",
 ]
 
 [[package]]

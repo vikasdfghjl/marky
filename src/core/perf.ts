@@ -1,4 +1,4 @@
-import { api } from './ipc';
+import { api } from '../platform/ipc';
 
 // Startup instrumentation for the cold-start budget. The Rust side writes the
 // timeline to MARKY_PERF_LOG when set (see scripts/bench.ps1).

@@ -5,9 +5,17 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
+/// The extensions Marky opens, offers in dialogs and follows links to.
+pub const MARKDOWN_EXTS: &[&str] = &["md", "markdown", "txt"];
 const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+const MB: u64 = 1024 * 1024;
+/// Larger files are refused before reading. Opening one costs about 13 times its size in RAM at
+/// peak (copies in Rust, over IPC and in the editor: a 100 MB file peaked near 1.3 GB), so this
+/// keeps the worst case under about 2 GB on the 8 GB laptop the PRD targets.
+pub const MAX_OPEN_BYTES: u64 = 128 * MB;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -36,6 +44,11 @@ pub struct OpenedFile {
 }
 
 pub fn read(path: &Path) -> io::Result<OpenedFile> {
+    let size = fs::metadata(path)?.len();
+    if size > MAX_OPEN_BYTES {
+        let message = format!("The file is {} MB. Marky opens files up to {} MB.", size.div_ceil(MB), MAX_OPEN_BYTES / MB);
+        return Err(io::Error::other(message));
+    }
     let bytes = fs::read(path)?;
     let (bom, body) = match bytes.strip_prefix(BOM) {
         Some(rest) => (true, rest),
@@ -61,31 +74,40 @@ pub fn read(path: &Path) -> io::Result<OpenedFile> {
     })
 }
 
-/// Encode `text` (LF) with the file's BOM and line ending, write it to a temp
-/// file beside the target, flush it to disk, then atomically swap it in.
-/// Returns the new mtime so the watcher can ignore our own write.
+/// Writes `text` (LF) back with the file's BOM and line ending. Returns the new mtime, so the
+/// frontend can tell its own save from another program's change.
 pub fn write(path: &Path, text: &str, meta: FileMeta) -> io::Result<u64> {
     let target = resolve_symlink(path)?;
-    let bytes = encode(text, meta);
+    write_atomically(&target, &encode(text, meta))?;
+    mtime_ms(&target)
+}
 
+/// Replaces `target` with `bytes` through a temp file beside it. Documents and the app's own
+/// JSON files (settings, recent files, crash recovery) all go through here.
+pub fn write_atomically(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    static WRITES: AtomicU64 = AtomicU64::new(0);
     let dir = target
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent folder"))?;
     let name = target.file_name().unwrap_or_default().to_string_lossy();
-    let tmp = dir.join(format!(".{name}.marky-{}.tmp", std::process::id()));
+    // Unique per write, so two writes of one file in flight never share a temp file.
+    let write_id = WRITES.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.marky-{}-{write_id}.tmp", std::process::id()));
 
-    let result = (|| {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
-        drop(f);
-        replace(&target, &tmp)
-    })();
+    let result = write_temp_then_swap(&tmp, target, bytes);
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
-    result?;
-    mtime_ms(&target)
+    result
+}
+
+/// Flushes before the swap, so a crash or power loss leaves the old file or the new one, never a torn one.
+fn write_temp_then_swap(tmp: &Path, target: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = fs::File::create(tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    replace(target, tmp)
 }
 
 fn encode(text: &str, meta: FileMeta) -> Vec<u8> {
@@ -127,6 +149,11 @@ pub fn mtime_ms(path: &Path) -> io::Result<u64> {
     Ok(modified.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0))
 }
 
+/// Whether two paths name the same file. Windows ignores case for every letter, not only ASCII.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    a == b || a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +188,22 @@ mod tests {
         assert_eq!(opened.meta, FileMeta { bom: false, line_ending: LineEnding::Lf });
         write(&path, "a\nb\nc\n", opened.meta).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"a\nb\nc\n");
+    }
+
+    #[test]
+    fn compares_paths_without_case_for_every_letter() {
+        assert!(same_path(Path::new(r"C:\Docs\Ä.md"), Path::new(r"c:\docs\ä.MD")));
+        assert!(!same_path(Path::new(r"C:\docs\a.md"), Path::new(r"C:\docs\b.md")));
+    }
+
+    #[test]
+    fn refuses_files_over_the_size_limit() {
+        let path = temp_path("huge.md");
+        // set_len extends without writing the bytes, so the test stays fast.
+        fs::File::create(&path).unwrap().set_len(MAX_OPEN_BYTES + 1).unwrap();
+        let err = read(&path).unwrap_err();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(err.to_string(), "The file is 129 MB. Marky opens files up to 128 MB.");
     }
 
     #[test]

@@ -51,7 +51,7 @@ export function createOutline(el: HTMLElement, view: EditorView, onSelect: (line
     if (button) onSelect(Number(button.dataset.line));
   });
 
-  /** Highlights the section containing the cursor (like VS Code), which stays right at the end of short files where the heading cannot scroll to the top. */
+  /** Follows the cursor, not the scroll position: the last headings of a short file never reach the top. */
   function highlightCurrent() {
     const cursorLine = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
     let current = -1;
@@ -64,6 +64,13 @@ export function createOutline(el: HTMLElement, view: EditorView, onSelect: (line
   }
 
   function render() {
+    if (headings.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'outline-empty';
+      empty.textContent = 'No headings';
+      el.replaceChildren(empty);
+      return;
+    }
     const list = document.createElement('ul');
     for (const heading of headings) {
       const button = document.createElement('button');
@@ -74,13 +81,6 @@ export function createOutline(el: HTMLElement, view: EditorView, onSelect: (line
       const item = document.createElement('li');
       item.append(button);
       list.append(item);
-    }
-    if (headings.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'outline-empty';
-      empty.textContent = 'No headings';
-      el.replaceChildren(empty);
-      return;
     }
     el.replaceChildren(list);
     highlightCurrent();
@@ -96,7 +96,6 @@ export function createOutline(el: HTMLElement, view: EditorView, onSelect: (line
       if (isVisible()) reload();
     },
     setVisible,
-    isVisible,
   };
 
   function isVisible(): boolean {

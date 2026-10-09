@@ -2,8 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
+  # release.yml runs this whole workflow first and publishes the installer it built and tested.
+  workflow_call:
 
 permissions:
   contents: read
@@ -32,6 +34,9 @@ jobs:
 
       - name: Type-check
         run: npm run typecheck
+
+      - name: Shortcuts agree across code, menu, tooltips and README
+        run: node scripts/check-shortcuts.mjs
 
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

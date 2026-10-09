@@ -1,5 +1,5 @@
 import type { Mermaid } from 'mermaid';
-import { isDark, onThemeChange } from './theme';
+import { isDark, onThemeChange } from '../core/theme';
 
 // Draws ```mermaid fences (PRD F16). Mermaid is about 1 MB, so it loads only when a
 // document contains a diagram, and each SVG is cached by source and theme: the preview

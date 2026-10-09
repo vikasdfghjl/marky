@@ -58,7 +58,8 @@ export function createTabStrip(el: HTMLElement, handlers: TabStripHandlers) {
           return item;
         }),
       );
-      el.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      // Next frame: scrolling now would force a layout in the middle of the caller's DOM updates.
+      requestAnimationFrame(() => el.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
     },
   };
 }

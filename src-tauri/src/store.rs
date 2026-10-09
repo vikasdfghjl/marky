@@ -1,7 +1,7 @@
-//! Small JSON files in the app's own folders: the recent-files list (F9) and the
-//! crash-recovery snapshot of an unsaved buffer (F13).
+//! Small JSON files in the app's own folders: recent files (F9), settings, and the
+//! crash-recovery snapshots of unsaved tabs (F13).
 
-use crate::files::FileMeta;
+use crate::files::{self, FileMeta};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 const RECENT_FILE: &str = "recent.json";
 const RECENT_LIMIT: usize = 10;
 const SNAPSHOT_FILE: &str = "recovery.json";
+const SETTINGS_FILE: &str = "settings.json";
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -27,13 +28,11 @@ pub fn load_recent(config_dir: &Path) -> Vec<PathBuf> {
 
 pub fn push_recent(config_dir: &Path, path: &Path) -> io::Result<()> {
     let mut recent = load_recent(config_dir);
-    recent.retain(|p| !p.as_os_str().eq_ignore_ascii_case(path.as_os_str()));
+    recent.retain(|p| !files::same_path(p, path));
     recent.insert(0, path.to_path_buf());
     recent.truncate(RECENT_LIMIT);
     write_json(&config_dir.join(RECENT_FILE), &recent)
 }
-
-const SETTINGS_FILE: &str = "settings.json";
 
 /// The user's settings as the frontend wrote them (it owns the schema and fills defaults).
 /// Missing or corrupt reads as `Null`, which means "all defaults".
@@ -45,7 +44,6 @@ pub fn save_settings(config_dir: &Path, settings: &serde_json::Value) -> io::Res
     write_json(&config_dir.join(SETTINGS_FILE), settings)
 }
 
-/// One entry per unsaved tab.
 pub fn save_snapshots(data_dir: &Path, snapshots: &[Snapshot]) -> io::Result<()> {
     write_json(&data_dir.join(SNAPSHOT_FILE), snapshots)
 }
@@ -59,7 +57,7 @@ pub fn read_snapshots(data_dir: &Path) -> Vec<Snapshot> {
     read_json::<Snapshot>(&path).into_iter().collect()
 }
 
-pub fn clear_snapshot(data_dir: &Path) -> io::Result<()> {
+pub fn clear_snapshots(data_dir: &Path) -> io::Result<()> {
     match fs::remove_file(data_dir.join(SNAPSHOT_FILE)) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         result => result,
@@ -71,15 +69,11 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Temp file + rename so a crash never leaves half-written JSON.
 fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> io::Result<()> {
-    let folder = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent folder"))?;
-    fs::create_dir_all(folder)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec(value).map_err(io::Error::other)?)?;
-    fs::rename(&tmp, path)
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder)?;
+    }
+    files::write_atomically(path, &serde_json::to_vec(value).map_err(io::Error::other)?)
 }
 
 #[cfg(test)]
@@ -128,9 +122,9 @@ mod tests {
         save_snapshots(&dir, &snapshots).unwrap();
         assert_eq!(read_snapshots(&dir), snapshots);
 
-        clear_snapshot(&dir).unwrap();
+        clear_snapshots(&dir).unwrap();
         assert!(read_snapshots(&dir).is_empty());
-        clear_snapshot(&dir).unwrap();
+        clear_snapshots(&dir).unwrap();
     }
 
     #[test]

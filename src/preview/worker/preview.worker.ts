@@ -1,9 +1,15 @@
 import MarkdownIt, { type Token } from 'markdown-it';
+import abbreviations from 'markdown-it-abbr';
+import definitionLists from 'markdown-it-deflist';
+import marked from 'markdown-it-mark';
+import subscript from 'markdown-it-sub';
+import superscript from 'markdown-it-sup';
 import taskLists from 'markdown-it-task-lists';
 import { highlightFence, prepareLanguages } from './code-highlight';
-import { dataLineAttr, fenceLanguage, frontmatter, githubAlerts, headingAnchors } from './markdown-plugins';
+import { dataLineAttr, fenceLanguage, footnotes, frontmatter } from './markdown-plugins';
 import { mathPlugin, prepareMath, renderMathFence } from './math';
-import { URL_SCHEME, joinWindowsPath } from './paths';
+import { URL_SCHEME, joinWindowsPath } from '../../core/paths';
+import type { RenderedBlock } from '../preview-blocks';
 
 export interface RenderRequest {
   id: number;
@@ -12,13 +18,22 @@ export interface RenderRequest {
   documentFolder: string | null;
   /** URL prefix of Tauri's asset protocol (`http://asset.localhost/` on Windows); empty outside Tauri. */
   assetBase: string;
+  typographer: boolean;
 }
 
 export interface RenderResult {
   id: number;
-  html: string;
+  blocks: RenderedBlock[];
   ms: number;
 }
+
+/** A render that threw: the page logs it and keeps showing the last good preview. */
+export interface RenderFailure {
+  id: number;
+  error: string;
+}
+
+export type RenderReply = RenderResult | RenderFailure;
 
 // A type alias (not an interface) so it satisfies markdown-it's index-signature Env.
 type RenderEnv = {
@@ -29,9 +44,19 @@ type RenderEnv = {
 // html: false renders raw HTML as text, so untrusted files cannot inject markup.
 const md = new MarkdownIt({ html: false, linkify: true })
   .use(taskLists, { enabled: false })
+  // H~2~O and 19^th^. A single ~ never reaches strikethrough, which needs ~~, and math and
+  // code spans are tokenised before these.
+  .use(subscript)
+  .use(superscript)
+  // ==marked== (<mark>). The editor's markdown-inline-syntax.ts highlights these three with
+  // the same rules.
+  .use(marked)
+  .use(footnotes)
+  // Term, then `: definition` lines. dl, dt and dd keep their source maps.
+  .use(definitionLists)
+  // `*[HTML]: Hyper Text Markup Language` turns every HTML in the document into <abbr title>.
+  .use(abbreviations)
   .use(frontmatter)
-  .use(githubAlerts)
-  .use(headingAnchors)
   .use(mathPlugin);
 md.set({ highlight: (code, language) => (language ? highlightFence(code, language, md.utils.escapeHtml) : '') });
 
@@ -96,14 +121,73 @@ function fenceLanguages(tokens: Token[]): Set<string> {
   return names;
 }
 
-self.onmessage = async (e: MessageEvent<RenderRequest>) => {
+/**
+ * Renders each top-level block on its own, so the page can replace only the blocks an edit
+ * changed (preview-blocks.ts). A block is a level-0 token, or a level-0 open token through
+ * its matching close, found by nesting depth: the footnote plugin's trailing section leaves
+ * every token at level 0, so a level check would split it after its first footnote.
+ */
+function renderBlocks(tokens: Token[], env: RenderEnv): RenderedBlock[] {
+  const blocks: RenderedBlock[] = [];
+  for (let start = 0; start < tokens.length; ) {
+    const end = blockEnd(tokens, start);
+    const block = tokens.slice(start, end + 1);
+    const html = md.renderer.render(block, md.options, env);
+    const line = block[0].map?.[0] ?? 0;
+    blocks.push({ html, line, signature: signatureOf(html, line) });
+    start = end + 1;
+  }
+  return blocks;
+}
+
+function blockEnd(tokens: Token[], start: number): number {
+  if (tokens[start].nesting !== 1) return start;
+  let depth = 1;
+  for (let i = start + 1; i < tokens.length; i++) {
+    depth += tokens[i].nesting;
+    if (depth === 0) return i;
+  }
+  return tokens.length - 1;
+}
+
+/** Content identity ignoring position: `data-line` becomes an offset from the block's own line. */
+function signatureOf(html: string, line: number): string {
+  const relative = html.replace(/ data-line="(\d+)"/g, (_, value) => ` data-line="+${Number(value) - line}"`);
+  return `${relative.length}:${hash(relative)}`;
+}
+
+/** cyrb53: a fast 53-bit string hash; with the length it makes an accidental clash negligible. */
+function hash(text: string): number {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+async function render({ id, text, documentFolder, assetBase, typographer }: RenderRequest): Promise<RenderResult> {
   const start = performance.now();
-  const { id, text, documentFolder, assetBase } = e.data;
   const env: RenderEnv = { documentFolder, assetBase };
+  // Only parsing reads it (the replacements and smartquotes rules), and parsing is synchronous.
+  md.set({ typographer });
   // Parse once; load any fence languages (async, first use only), then render synchronously.
   const tokens = md.parse(text, env);
   await Promise.all([prepareLanguages(fenceLanguages(tokens)), prepareMath(tokens)]);
-  const html = md.renderer.render(tokens, md.options, env);
-  const result: RenderResult = { id, html, ms: performance.now() - start };
-  self.postMessage(result);
+  return { id, blocks: renderBlocks(tokens, env), ms: performance.now() - start };
+}
+
+// An async handler turns any exception into a rejection nobody sees, so failures are replied, not thrown.
+self.onmessage = async (e: MessageEvent<RenderRequest>) => {
+  let reply: RenderReply;
+  try {
+    reply = await render(e.data);
+  } catch (err) {
+    reply = { id: e.data.id, error: err instanceof Error ? (err.stack ?? err.message) : String(err) };
+  }
+  self.postMessage(reply);
 };

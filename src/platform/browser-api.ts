@@ -1,5 +1,5 @@
-import type { FileMeta, MarkyApi, OpenedFile, UnsavedChoice } from './ipc';
-import { folderOf, joinWindowsPath } from './paths';
+import type { Choice, FileMeta, MarkyApi, OpenedFile, UnsavedChoice } from './ipc';
+import { folderOf, joinWindowsPath } from '../core/paths';
 import { SAMPLE } from './sample';
 
 // Stand-in for the Rust core when the frontend runs in a plain browser (`npm run dev`).
@@ -81,7 +81,11 @@ export const browserApi: MarkyApi = {
   setDirty: async () => {},
   askUnsavedChanges: async (name): Promise<UnsavedChoice> =>
     window.confirm(`Discard unsaved changes to ${name}?`) ? 'discard' : 'cancel',
-  askChoice: async (message, confirm, cancel) => window.confirm(`${message}\n\nOK: ${confirm}\nCancel: ${cancel}`),
+  // confirm() has two buttons, so Cancel stands for `dismiss` when there is one, as Esc does natively.
+  askChoice: async (message, confirm, deny, dismiss): Promise<Choice> => {
+    if (window.confirm(`${message}\n\nOK: ${confirm}\nCancel: ${dismiss ?? deny}`)) return 'confirm';
+    return dismiss ? 'dismiss' : 'deny';
+  },
   showError: async (message) => window.alert(message),
   closeWindow: async () => window.location.reload(),
   onOpenRequest: noListener,
@@ -91,6 +95,9 @@ export const browserApi: MarkyApi = {
   onCloseRequested: noListener,
   setTitle: async () => {},
   saveSettings: async (settings) => storeSettings(settings),
+  setMenuChecks: async () => {},
+  setIdle: async () => {},
+  logError: async (message) => console.error(message),
   // No asset protocol: relative images stay unresolved in the browser.
   assetBase: () => '',
 };

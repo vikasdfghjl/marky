@@ -1,4 +1,4 @@
-import { FONT_SIZES, type Settings, type SettingsStore } from './settings';
+import { FONT_SIZES, readSettings, type Settings, type SettingsStore } from '../core/settings';
 
 // Static markup (no user data). Every control names its setting in data-setting,
 // so one pair of handlers reads and writes all of them.
@@ -14,25 +14,28 @@ const TEMPLATE = `
     <select data-setting="fontSize">${FONT_SIZES.map((size) => `<option value="${size}">${size} px</option>`).join('')}</select>
   </label>
   <label><input type="checkbox" data-setting="wordWrap"> Word wrap</label>
+  <label><input type="checkbox" data-setting="typographer"> Smart quotes and dashes in the preview</label>
   <label><input type="checkbox" data-setting="autoSave"> Auto-save files after you stop typing</label>
   <fieldset>
     <legend>Line ending for new files</legend>
     <label><input type="radio" name="newFileLineEnding" value="crlf" data-setting="newFileLineEnding"> CRLF (Windows)</label>
     <label><input type="radio" name="newFileLineEnding" value="lf" data-setting="newFileLineEnding"> LF (Unix)</label>
   </fieldset>
+  <label><input type="checkbox" data-setting="showEditor"> Show editor</label>
   <label><input type="checkbox" data-setting="showPreview"> Show preview</label>
   <label><input type="checkbox" data-setting="showOutline"> Show outline</label>
 `;
 
 type Control = HTMLInputElement | HTMLSelectElement;
 
-function controlValue(control: Control): Settings[keyof Settings] {
+/** The control's raw value; `readSettings` decides whether it is a valid setting. */
+function controlValue(control: Control): unknown {
   if (control instanceof HTMLInputElement && control.type === 'checkbox') return control.checked;
-  if (control instanceof HTMLSelectElement) return Number(control.value) as Settings['fontSize'];
-  return control.value as Settings['theme'];
+  if (control instanceof HTMLSelectElement) return Number(control.value);
+  return control.value;
 }
 
-/** The gear's panel: opens under the gear, closes on Esc, outside click or a second press. */
+/** The gear's panel: opens under the gear, closes on Esc, an outside click or a second toggle. */
 export function createSettingsPanel(gear: HTMLButtonElement, store: SettingsStore) {
   const panel = document.createElement('div');
   panel.id = 'settings-panel';
@@ -59,7 +62,10 @@ export function createSettingsPanel(gear: HTMLButtonElement, store: SettingsStor
   panel.addEventListener('change', (e) => {
     const control = e.target as Control;
     const name = control.dataset.setting as keyof Settings | undefined;
-    if (name) store.update({ [name]: controlValue(control) });
+    if (!name) return;
+    // Through the same reader as the saved file, so a control can only produce a valid value.
+    const next = readSettings({ ...store.get(), [name]: controlValue(control) });
+    store.update({ [name]: next[name] });
   });
   // Shortcuts and menu toggles change settings too; keep the open panel truthful.
   store.onChange(() => {
@@ -85,7 +91,7 @@ export function createSettingsPanel(gear: HTMLButtonElement, store: SettingsStor
     else close();
   }
 
-  gear.addEventListener('click', toggle);
+  // The gear's click runs the `settings` command (data-command in index.html), which calls toggle.
   panel.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     e.stopPropagation();

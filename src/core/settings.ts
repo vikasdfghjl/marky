@@ -1,14 +1,18 @@
-import type { LineEnding } from './ipc';
-import type { ThemeSetting } from './theme';
+import { LINE_ENDINGS, type LineEnding } from '../platform/ipc';
+import { THEME_SETTINGS, type ThemeSetting } from './theme';
 
 export interface Settings {
   theme: ThemeSetting;
   /** Editor font size in px. */
   fontSize: number;
   wordWrap: boolean;
+  /** Preview turns quotes, dashes, "..." and (c)/(tm)/(r) into typographic characters. */
+  typographer: boolean;
   /** Save files (not untitled documents) shortly after typing stops. PRD F13: off by default. */
   autoSave: boolean;
   newFileLineEnding: LineEnding;
+  /** Off gives a preview-only reading view; the preview then shows even if showPreview is off. */
+  showEditor: boolean;
   showPreview: boolean;
   showOutline: boolean;
 }
@@ -17,8 +21,10 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   fontSize: 14,
   wordWrap: true,
+  typographer: true,
   autoSave: false,
   newFileLineEnding: 'crlf',
+  showEditor: true,
   showPreview: true,
   showOutline: false,
 };
@@ -36,11 +42,13 @@ export function readSettings(raw: unknown): Settings {
   const flag = (value: unknown, fallback: boolean) => (typeof value === 'boolean' ? value : fallback);
 
   return {
-    theme: pick(saved.theme, ['system', 'light', 'dark'] as const, DEFAULT_SETTINGS.theme),
+    theme: pick(saved.theme, THEME_SETTINGS, DEFAULT_SETTINGS.theme),
     fontSize: pick(saved.fontSize, FONT_SIZES, DEFAULT_SETTINGS.fontSize as (typeof FONT_SIZES)[number]),
     wordWrap: flag(saved.wordWrap, DEFAULT_SETTINGS.wordWrap),
+    typographer: flag(saved.typographer, DEFAULT_SETTINGS.typographer),
     autoSave: flag(saved.autoSave, DEFAULT_SETTINGS.autoSave),
-    newFileLineEnding: pick(saved.newFileLineEnding, ['crlf', 'lf'] as const, DEFAULT_SETTINGS.newFileLineEnding),
+    newFileLineEnding: pick(saved.newFileLineEnding, LINE_ENDINGS, DEFAULT_SETTINGS.newFileLineEnding),
+    showEditor: flag(saved.showEditor, DEFAULT_SETTINGS.showEditor),
     showPreview: flag(saved.showPreview, DEFAULT_SETTINGS.showPreview),
     showOutline: flag(saved.showOutline, DEFAULT_SETTINGS.showOutline),
   };

@@ -3,11 +3,13 @@
   Bumps the version, commits, and creates the annotated tag vX.Y.Z. Does not push.
 .DESCRIPTION
   package.json is the version source (tauri.conf.json points at it); Cargo.toml is kept
-  in sync. Pushing the tag triggers .github/workflows/release.yml, which builds and
-  publishes the GitHub Release. 0.x versions are published as pre-releases (beta).
+  in sync. CHANGELOG.md's Unreleased section is stamped with the version and date and
+  must not be empty. Pushing the tag triggers .github/workflows/release.yml, which runs the full
+  CI workflow on the tag and publishes the installer it tested as a GitHub Release. 0.x versions
+  are published as pre-releases (beta).
 .EXAMPLE
   ./scripts/release.ps1 -Version 0.2.0
-  git push origin main --follow-tags
+  git push origin HEAD --follow-tags
 #>
 param([Parameter(Mandatory)][string]$Version)
 $ErrorActionPreference = 'Stop'
@@ -22,6 +24,13 @@ try {
   $current = (Get-Content package.json -Raw | ConvertFrom-Json).version
   if ([version]$Version -le [version]$current) { throw "Version $Version must be greater than the current $current." }
 
+  # The Unreleased section becomes this release's notes (release.yml reads it back by version).
+  & (Join-Path $PSScriptRoot 'release-notes.ps1') Unreleased | Out-Null
+  $changelog = Get-Content CHANGELOG.md -Raw
+  $stamped = "## [Unreleased]`n`n## [$Version] - $(Get-Date -Format 'yyyy-MM-dd')"
+  $changelog = ([regex]'(?m)^## \[Unreleased\][^\n]*').Replace($changelog, $stamped, 1)
+  Set-Content CHANGELOG.md $changelog -NoNewline
+
   npm version $Version --no-git-tag-version | Out-Null
   $cargoToml = 'src-tauri/Cargo.toml'
   $cargo = Get-Content $cargoToml -Raw
@@ -30,7 +39,7 @@ try {
   cargo update --manifest-path $cargoToml --package marky --offline --quiet
   if ($LASTEXITCODE -ne 0) { throw 'cargo update failed' }
 
-  git add package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+  git add package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock CHANGELOG.md
   git commit --quiet -m "Release $tag"
   git tag -a $tag -m "Marky $Version"
   Write-Host "Created $tag. Publish it with: git push origin HEAD --follow-tags"

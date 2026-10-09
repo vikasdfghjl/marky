@@ -28,6 +28,7 @@ coverage/
 
 # Claude Code: keep shared launch config, ignore personal settings
 .claude/settings.local.json
+.commandcode
 
 # graphify knowledge-graph output
 graphify-out/

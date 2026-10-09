@@ -1,6 +1,6 @@
 [package]
 name = "marky"
-version = "0.2.1"
+version = "0.3.0"
 description = "A fast Markdown editor for Windows"
 license = "MIT"
 edition = "2021"
@@ -17,6 +17,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 notify = "8.2"
 tauri-plugin-opener = "2.5"
+# Already in the tree through Tauri; used directly for WebView2's memory target (memory.rs).
+webview2-com = "0.39"
+windows-core = "0.62"
+# System light/dark mode before any window exists (window.rs); also in the tree via Tauri's build tooling.
+winreg = "0.55"
 
 [profile.release]
 opt-level = "s"

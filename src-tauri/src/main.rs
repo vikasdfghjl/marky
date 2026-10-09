@@ -1,62 +1,51 @@
 // Release builds use the GUI subsystem so no console window opens.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod allowlist;
+mod diagnostics;
 mod files;
+mod memory;
 mod menu;
 mod store;
 mod watcher;
+mod window;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use files::{FileMeta, OpenedFile};
+use allowlist::UserChosenPaths;
+use files::{FileMeta, OpenedFile, MARKDOWN_EXTS};
 use notify::RecommendedWatcher;
 use serde::Serialize;
 use store::Snapshot;
 use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, WebviewWindow, Window, WindowEvent, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
-const MARKDOWN_EXTS: &[&str] = &["md", "markdown", "txt"];
 const APP_NAME: &str = "Marky";
 const SAVE_LABEL: &str = "Save";
 const DONT_SAVE_LABEL: &str = "Don't save";
 const CANCEL_LABEL: &str = "Cancel";
+/// Settings are small; anything larger is not ours.
+const SETTINGS_MAX_BYTES: usize = 16 * 1024;
 
-/// Background read of the startup file: the path and its result.
 type StartupRead = std::thread::JoinHandle<(PathBuf, io::Result<OpenedFile>)>;
 
 struct AppState {
     started: Instant,
-    /// Paths the user chose via dialog, drag-drop, CLI arg, Explorer, recent files or
-    /// crash recovery. The webview can only touch these, so a compromised preview
-    /// cannot reach other files.
-    user_chosen: Mutex<HashSet<PathBuf>>,
+    user_chosen: UserChosenPaths,
     /// The CLI/Explorer file, read on a background thread while WebView2 starts (~600 ms).
     startup_read: Mutex<Option<StartupRead>>,
     /// Mirrors the editor's unsaved state so a clean window closes without a JS round trip.
     dirty: AtomicBool,
     /// One watcher per open tab's file; dropping an entry stops that watch.
     watchers: Mutex<HashMap<PathBuf, RecommendedWatcher>>,
-}
-
-impl AppState {
-    fn remember_user_choice(&self, path: PathBuf) -> PathBuf {
-        let path = std::path::absolute(&path).unwrap_or(path);
-        self.user_chosen.lock().unwrap().insert(path.clone());
-        path
-    }
-
-    fn require_user_choice(&self, path: &str) -> Result<PathBuf, String> {
-        let path = std::path::absolute(path).map_err(|e| e.to_string())?;
-        if !self.user_chosen.lock().unwrap().contains(&path) {
-            return Err("path was not selected by the user".into());
-        }
-        Ok(path)
-    }
+    /// Held while updating recent.json. Opens and saves run concurrently (an auto-save during an
+    /// open), and its read-modify-write would otherwise lose an entry.
+    recent_list_writes: Mutex<()>,
 }
 
 /// Everything the frontend needs for its first paint, in one IPC round trip.
@@ -80,12 +69,20 @@ enum UnsavedChoice {
     Cancel,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Choice {
+    Confirm,
+    Deny,
+    Dismiss,
+}
+
 /// The first non-flag argument, resolved against the launching process's cwd.
 fn first_file_arg(args: impl IntoIterator<Item = String>, cwd: &Path) -> Option<PathBuf> {
     args.into_iter().find(|a| !a.starts_with('-')).map(|a| cwd.join(a))
 }
 
-fn display(path: &Path) -> String {
+fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
@@ -101,21 +98,26 @@ fn local_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// preview load images from the document's folder (F12). Neither may fail the open/save.
 fn record_file_access(app: &AppHandle, path: &Path) {
     if let Ok(dir) = config_dir(app) {
-        let _ = store::push_recent(&dir, path);
+        let state = app.state::<AppState>();
+        let _one_writer = state.recent_list_writes.lock().unwrap();
+        if let Err(e) = store::push_recent(&dir, path) {
+            diagnostics::write(&format!("could not update the recent files list: {e}"));
+        }
     }
     if let Some(folder) = path.parent() {
+        // Recursive: images usually sit in a subfolder such as img/.
         let _ = app.asset_protocol_scope().allow_directory(folder, true);
     }
 }
 
 // ---- startup & diagnostics ----
 
-/// One-shot: the pre-read startup file and any crash-recovery snapshot (whose path is re-authorised).
+/// Called once. Recovered paths are re-authorised so the restored tabs can be saved back.
 #[tauri::command]
 async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<StartupState, String> {
     let recovery = store::read_snapshots(&local_data_dir(&app)?);
     for path in recovery.iter().filter_map(|s| s.path.as_ref()) {
-        state.remember_user_choice(PathBuf::from(path));
+        state.user_chosen.remember(PathBuf::from(path));
     }
 
     let settings = store::load_settings(&config_dir(&app)?);
@@ -124,18 +126,14 @@ async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<Sta
         return Ok(StartupState { file: None, file_error: None, recovery, settings });
     };
     let (path, read) = pending_read.join().map_err(|_| "startup file reader panicked".to_string())?;
-    match read {
+    let (file, file_error) = match read {
         Ok(file) => {
             record_file_access(&app, &path);
-            Ok(StartupState { file: Some(file), file_error: None, recovery, settings })
+            (Some(file), None)
         }
-        Err(e) => Ok(StartupState {
-            file: None,
-            file_error: Some(format!("Could not open {}\n\n{e}", display(&path))),
-            recovery,
-            settings,
-        }),
-    }
+        Err(e) => (None, Some(format!("Could not open {}\n\n{e}", path_string(&path)))),
+    };
+    Ok(StartupState { file, file_error, recovery, settings })
 }
 
 /// Milliseconds since process start; the frontend calls this on its first editable frame.
@@ -167,7 +165,7 @@ async fn pick_open(window: WebviewWindow, state: State<'_, AppState>) -> Result<
         .blocking_pick_file();
     let Some(picked) = picked else { return Ok(None) };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    Ok(Some(display(&state.remember_user_choice(path))))
+    Ok(Some(path_string(&state.user_chosen.remember(path))))
 }
 
 #[tauri::command]
@@ -187,12 +185,12 @@ async fn pick_save(
     }
     let Some(picked) = dialog.blocking_save_file() else { return Ok(None) };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    Ok(Some(display(&state.remember_user_choice(path))))
+    Ok(Some(path_string(&state.user_chosen.remember(path))))
 }
 
 #[tauri::command]
 async fn open_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<OpenedFile, String> {
-    let path = state.require_user_choice(&path)?;
+    let path = state.user_chosen.require(&path)?;
     let opened = files::read(&path).map_err(|e| e.to_string())?;
     record_file_access(&app, &path);
     Ok(opened)
@@ -207,7 +205,7 @@ async fn save_file(
     text: String,
     meta: FileMeta,
 ) -> Result<u64, String> {
-    let path = state.require_user_choice(&path)?;
+    let path = state.user_chosen.require(&path)?;
     let mtime = files::write(&path, &text, meta).map_err(|e| e.to_string())?;
     record_file_access(&app, &path);
     Ok(mtime)
@@ -216,34 +214,24 @@ async fn save_file(
 /// None when the file no longer exists.
 #[tauri::command]
 async fn file_mtime(state: State<'_, AppState>, path: String) -> Result<Option<u64>, String> {
-    let path = state.require_user_choice(&path)?;
+    let path = state.user_chosen.require(&path)?;
     Ok(files::mtime_ms(&path).ok())
 }
 
 // ---- links in the preview ----
 
-/// Resolves a relative link clicked in `from`'s preview. Only links from a user-chosen
-/// file to an existing .md/.markdown/.txt file are followed; clicking one is the user's
-/// choice, so the target joins the allowlist.
+/// Resolves a relative link clicked in a user-chosen file's preview (rules in `allowlist::link_target`).
 #[tauri::command]
 async fn resolve_link(state: State<'_, AppState>, from: String, target: String) -> Result<String, String> {
-    let from = state.require_user_choice(&from)?;
-    let folder = from.parent().ok_or("the document has no folder")?;
-    // absolute() normalises `.` and `..` on Windows.
-    let path = std::path::absolute(folder.join(&target)).map_err(|e| e.to_string())?;
-    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if !MARKDOWN_EXTS.contains(&extension.as_str()) {
-        return Err(format!("Marky follows links to .md, .markdown and .txt files only: {target}"));
-    }
-    if !path.is_file() {
-        return Err(format!("Linked file not found: {}", display(&path)));
-    }
-    Ok(display(&state.remember_user_choice(path)))
+    let from = state.user_chosen.require(&from)?;
+    let path = allowlist::link_target(&from, &target)?;
+    Ok(path_string(&state.user_chosen.remember(path)))
 }
 
 /// Opens a web or mail link in the default app. Anything else (file:, javascript:, …) is refused.
+/// Async like every command that can block: Tauri runs non-async commands on the UI thread.
 #[tauri::command]
-fn open_external(url: String) -> Result<(), String> {
+async fn open_external(url: String) -> Result<(), String> {
     let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
     if !["http", "https", "mailto"].contains(&scheme.as_str()) {
         return Err(format!("Refusing to open a {scheme}: link"));
@@ -256,12 +244,12 @@ fn open_external(url: String) -> Result<(), String> {
 /// Emits `file-changed` (payload: the path) whenever another program touches `path`.
 #[tauri::command]
 async fn watch_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
-    let path = state.require_user_choice(&path)?;
+    let path = state.user_chosen.require(&path)?;
     if state.watchers.lock().unwrap().contains_key(&path) {
         return Ok(());
     }
     let emitter = app.clone();
-    let payload = display(&path);
+    let payload = path_string(&path);
     let watcher = watcher::watch(&path, move || {
         let _ = emitter.emit_to("main", "file-changed", &payload);
     })
@@ -270,10 +258,13 @@ async fn watch_file(app: AppHandle, state: State<'_, AppState>, path: String) ->
     Ok(())
 }
 
+/// No allowlist check: dropping a watch exposes nothing. Async because dropping a watcher waits
+/// for its thread to stop.
 #[tauri::command]
-fn unwatch_file(state: State<'_, AppState>, path: String) {
-    let Ok(path) = std::path::absolute(&path) else { return };
+async fn unwatch_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let Ok(path) = std::path::absolute(&path) else { return Ok(()) };
     state.watchers.lock().unwrap().remove(&path);
+    Ok(())
 }
 
 // ---- recent files (F9) ----
@@ -285,7 +276,7 @@ async fn recent_files(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<
     Ok(recent
         .into_iter()
         .filter(|p| p.is_file())
-        .map(|p| display(&state.remember_user_choice(p)))
+        .map(|p| path_string(&state.user_chosen.remember(p)))
         .collect())
 }
 
@@ -295,15 +286,11 @@ async fn recent_files(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<
 #[tauri::command]
 async fn snapshot_buffers(app: AppHandle, snapshots: Vec<Snapshot>) -> Result<(), String> {
     let dir = local_data_dir(&app)?;
-    let result = if snapshots.is_empty() { store::clear_snapshot(&dir) } else { store::save_snapshots(&dir, &snapshots) };
+    let result = if snapshots.is_empty() { store::clear_snapshots(&dir) } else { store::save_snapshots(&dir, &snapshots) };
     result.map_err(|e| e.to_string())
 }
 
-
 // ---- settings ----
-
-/// Settings are small; anything larger is not ours.
-const SETTINGS_MAX_BYTES: usize = 16 * 1024;
 
 #[tauri::command]
 async fn save_settings(app: AppHandle, window: WebviewWindow, settings: serde_json::Value) -> Result<(), String> {
@@ -321,12 +308,25 @@ async fn save_settings(app: AppHandle, window: WebviewWindow, settings: serde_js
 /// Title bar and native menu follow the theme setting; `system` (or anything else) follows Windows.
 /// Done here rather than from JS so the webview needs no set-theme permission.
 fn apply_window_theme(window: &WebviewWindow, settings: &serde_json::Value) {
-    let theme = match settings.get("theme").and_then(|t| t.as_str()) {
-        Some("light") => Some(tauri::Theme::Light),
-        Some("dark") => Some(tauri::Theme::Dark),
-        _ => None,
-    };
-    let _ = window.set_theme(theme);
+    let _ = window.set_theme(window::saved_theme(settings));
+}
+
+/// An uncaught error or a failed background write in the webview, for marky.log.
+#[tauri::command]
+async fn log_error(message: String) {
+    diagnostics::write(&format!("frontend: {message}"));
+}
+
+/// The user has gone idle or come back; Rust trims WebView2's memory while idle (memory.rs).
+#[tauri::command]
+fn set_idle(app: AppHandle, idle: bool) {
+    memory::set_idle(&app, idle);
+}
+
+/// Menu ticks for toggle settings; the frontend sends them whenever one changes.
+#[tauri::command]
+fn set_menu_checks(app: AppHandle, checks: HashMap<String, bool>) {
+    menu::set_checks(&app, &checks);
 }
 
 // ---- prompts & window lifecycle ----
@@ -350,6 +350,8 @@ async fn ask_unsaved_changes(window: WebviewWindow, file_name: String) -> Unsave
             CANCEL_LABEL.into(),
         ))
         .blocking_show_with_result();
+    // The plugin reports every button, Esc and the X by label (Esc and the X as Cancel). The role
+    // arms only guard against a plugin update that stops doing so.
     match result {
         MessageDialogResult::Custom(label) if label == SAVE_LABEL => UnsavedChoice::Save,
         MessageDialogResult::Custom(label) if label == DONT_SAVE_LABEL => UnsavedChoice::Discard,
@@ -360,16 +362,22 @@ async fn ask_unsaved_changes(window: WebviewWindow, file_name: String) -> Unsave
     }
 }
 
-/// Two-button question; true only when the user picks `confirm`.
+/// Esc and the title-bar X are reported as the last button: `dismiss` when given, otherwise
+/// `deny`. A question whose `deny` destroys something must offer a harmless `dismiss`.
 #[tauri::command]
-async fn ask_choice(window: WebviewWindow, message: String, confirm: String, cancel: String) -> bool {
-    let result = message_dialog(&window, message, MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(confirm.clone(), cancel))
-        .blocking_show_with_result();
+async fn ask_choice(window: WebviewWindow, message: String, confirm: String, deny: String, dismiss: Option<String>) -> Choice {
+    let buttons = match dismiss {
+        Some(dismiss) => MessageDialogButtons::YesNoCancelCustom(confirm.clone(), deny.clone(), dismiss),
+        None => MessageDialogButtons::OkCancelCustom(confirm.clone(), deny.clone()),
+    };
+    let result = message_dialog(&window, message, MessageDialogKind::Warning).buttons(buttons).blocking_show_with_result();
+    // The role arm guards against a plugin update that stops reporting buttons by label;
+    // anything unrecognised is the harmless Dismiss.
     match result {
-        MessageDialogResult::Custom(label) => label == confirm,
-        MessageDialogResult::Ok => true,
-        _ => false,
+        MessageDialogResult::Custom(label) if label == confirm => Choice::Confirm,
+        MessageDialogResult::Custom(label) if label == deny => Choice::Deny,
+        MessageDialogResult::Ok | MessageDialogResult::Yes => Choice::Confirm,
+        _ => Choice::Dismiss,
     }
 }
 
@@ -378,19 +386,16 @@ async fn show_error(window: WebviewWindow, message: String) {
     message_dialog(&window, message, MessageDialogKind::Error).blocking_show();
 }
 
-/// Closes without raising CloseRequested again; the frontend has already resolved
-/// unsaved changes, so any recovery snapshot is obsolete.
+/// Closes without raising CloseRequested again. The frontend has already resolved unsaved changes
+/// and written the recovery file's final content, which keeps any recovery the user postponed.
 #[tauri::command]
-fn close_window(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
-    if let Ok(dir) = local_data_dir(&app) {
-        let _ = store::clear_snapshot(&dir);
-    }
+fn close_window(window: WebviewWindow) -> Result<(), String> {
     window.destroy().map_err(|e| e.to_string())
 }
 
 fn request_open(app: &AppHandle, path: PathBuf) {
-    let path = app.state::<AppState>().remember_user_choice(path);
-    let _ = app.emit_to("main", "open-request", display(&path));
+    let path = app.state::<AppState>().user_chosen.remember(path);
+    let _ = app.emit_to("main", "open-request", path_string(&path));
 }
 
 fn has_unsaved_changes(window: &Window) -> bool {
@@ -415,6 +420,7 @@ fn on_window_event(window: &Window, event: &WindowEvent) {
             api.prevent_close();
             let _ = window.emit_to("main", "close-requested", ());
         }
+        WindowEvent::Resized(_) => memory::follow_minimized(window),
         _ => {}
     }
 }
@@ -426,13 +432,14 @@ fn main() {
 
     let state = AppState {
         started,
-        user_chosen: Mutex::default(),
+        user_chosen: UserChosenPaths::default(),
         startup_read: Mutex::new(None),
         dirty: AtomicBool::new(false),
         watchers: Mutex::default(),
+        recent_list_writes: Mutex::default(),
     };
     if let Some(path) = startup {
-        let path = state.remember_user_choice(path);
+        let path = state.user_chosen.remember(path);
         let reader = std::thread::spawn(move || {
             let read = files::read(&path);
             (path, read)
@@ -456,10 +463,13 @@ fn main() {
         .on_menu_event(menu::on_event)
         .manage(state)
         .setup(move |app| {
-            // Theme the title bar before the first paint, from the last saved settings.
-            if let (Some(window), Ok(dir)) = (app.get_webview_window("main"), config_dir(app.handle())) {
-                apply_window_theme(&window, &store::load_settings(&dir));
+            if let Ok(dir) = local_data_dir(app.handle()) {
+                diagnostics::init(&dir, &app.package_info().version.to_string());
             }
+            // The window is created here, not from config, so its title bar and background
+            // already match the saved theme when it first appears (no white flash).
+            let settings = config_dir(app.handle()).map(|dir| store::load_settings(&dir)).unwrap_or_default();
+            window::create_main(app.handle(), &settings)?;
             perf_log(&format!("setup_ms={:.0}", started.elapsed().as_secs_f64() * 1000.0));
             Ok(())
         })
@@ -483,6 +493,9 @@ fn main() {
             recent_files,
             snapshot_buffers,
             save_settings,
+            set_menu_checks,
+            set_idle,
+            log_error,
             set_dirty,
             ask_unsaved_changes,
             ask_choice,

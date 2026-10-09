@@ -3,8 +3,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { browserApi } from './browser-api';
 
-
-export type LineEnding = 'lf' | 'crlf';
+export const LINE_ENDINGS = ['lf', 'crlf'] as const;
+export type LineEnding = (typeof LINE_ENDINGS)[number];
 
 export interface FileMeta {
   bom: boolean;
@@ -24,7 +24,7 @@ export interface OpenedFile {
 // Paths are only ever produced by the Rust side (dialog, drag-drop, CLI arg),
 // which records them in an allowlist; open/save refuse anything else.
 const tauriApi = {
-  /** One-shot at startup: the pre-read CLI/Explorer file and any crash-recovery snapshot. */
+  /** Called once: everything the first paint needs, in one round trip. */
   startupState: () => invoke<StartupState>('startup_state'),
   /** `jsMs` is time since navigation start, so Rust can split webview vs. frontend cost. */
   startupMs: (jsMs: number, marks: string) => invoke<number>('startup_ms', { jsMs, marks }),
@@ -46,9 +46,9 @@ const tauriApi = {
   snapshotBuffers: (snapshots: Snapshot[]) => invoke<void>('snapshot_buffers', { snapshots }),
   setDirty: (dirty: boolean) => invoke<void>('set_dirty', { dirty }),
   askUnsavedChanges: (fileName: string) => invoke<UnsavedChoice>('ask_unsaved_changes', { fileName }),
-  /** True only when the user picks `confirm`. */
-  askChoice: (message: string, confirm: string, cancel: string) =>
-    invoke<boolean>('ask_choice', { message, confirm, cancel }),
+  /** Esc and the title-bar X answer `dismiss` when it is given, otherwise `deny`. */
+  askChoice: (message: string, confirm: string, deny: string, dismiss?: string) =>
+    invoke<Choice>('ask_choice', { message, confirm, deny, dismiss }),
   showError: (message: string) => invoke<void>('show_error', { message }),
   closeWindow: () => invoke<void>('close_window'),
   onOpenRequest: (cb: (path: string) => void): Promise<UnlistenFn> =>
@@ -67,6 +67,12 @@ const tauriApi = {
   setTitle: (title: string) => getCurrentWindow().setTitle(title),
   /** Persists settings; Rust also applies the theme to the title bar and native menu. */
   saveSettings: (settings: object) => invoke<void>('save_settings', { settings }),
+  /** Ticks native menu check items, keyed by command id. */
+  setMenuChecks: (checks: Record<string, boolean>) => invoke<void>('set_menu_checks', { checks }),
+  /** Reports the user going idle or active again, so Rust can trim WebView2's memory while idle. */
+  setIdle: (idle: boolean) => invoke<void>('set_idle', { idle }),
+  /** Appends a line to marky.log in the app's data folder; it never leaves the machine. */
+  logError: (message: string) => invoke<void>('log_error', { message }),
   /** URL prefix of the asset protocol that serves preview images from opened folders. */
   assetBase: () => convertFileSrc(''),
 };
@@ -74,12 +80,14 @@ const tauriApi = {
 export type MarkyApi = typeof tauriApi;
 
 /**
- * The Rust core, or an in-memory stand-in when the frontend runs in a plain browser
- * (`npm run dev`). Callers never branch on which one they got.
+ * The Rust core, or an in-memory stand-in when `npm run dev` runs in a plain browser. Callers
+ * never branch on which one they got. Production builds always use the core, so the stand-in
+ * (and its sample document) is left out of them.
  */
-export const api: MarkyApi = '__TAURI_INTERNALS__' in window ? tauriApi : browserApi;
+export const api: MarkyApi = import.meta.env.DEV && !('__TAURI_INTERNALS__' in window) ? browserApi : tauriApi;
 
 export type UnsavedChoice = 'save' | 'discard' | 'cancel';
+export type Choice = 'confirm' | 'deny' | 'dismiss';
 
 export interface StartupState {
   file: OpenedFile | null;

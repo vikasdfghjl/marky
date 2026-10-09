@@ -7,12 +7,13 @@ tags: [markdown, docs, ai]
 
 # Marky
 
-Fast Markdown for docs, READMEs and AI context files. Jump to [the code](#code-blocks).
+Fast Markdown for docs, READMEs and AI context files.[^small]
 
-> [!NOTE]
-> GitHub alerts render as callouts: NOTE, TIP, IMPORTANT, WARNING, CAUTION.
+H~2~O, 19^th^, ==marked== text, and HTML as an abbreviation.
 
-> [!WARNING]
+Preview
+:   Rendered in a worker, scrolled in sync with the editor.
+
 > Raw HTML such as <script>alert(1)</script> is shown as text, never run.
 
 ## Tasks
@@ -64,4 +65,8 @@ export const answer: number = 42;
 \`\`\`json
 { "model": "claude", "maxTokens": 1024 }
 \`\`\`
+
+[^small]: Small and fast is the point: see the budgets in PRD.md.
+
+*[HTML]: Hyper Text Markup Language
 `;

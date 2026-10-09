@@ -1,4 +1,4 @@
-import { fileName } from './paths';
+import { fileName } from '../core/paths';
 
 /**
  * Keyboard-first recent-files list (F9, Ctrl+R). Resolves with the chosen path,

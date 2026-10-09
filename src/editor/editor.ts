@@ -16,6 +16,7 @@ import { languages } from '@codemirror/language-data';
 import { yamlFrontmatter } from '@codemirror/lang-yaml';
 import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from '@codemirror/search';
 import { tags as t } from '@lezer/highlight';
+import { markdownInlineSyntax, markdownTags } from './markdown-inline-syntax';
 
 // Colours come from CSS variables so the OS light/dark switch needs no JS.
 const highlight = HighlightStyle.define([
@@ -23,6 +24,11 @@ const highlight = HighlightStyle.define([
   { tag: t.strong, fontWeight: '700' },
   { tag: t.emphasis, fontStyle: 'italic' },
   { tag: t.strikethrough, textDecoration: 'line-through' },
+  // Shifted with relative positioning, not vertical-align, which would grow the line box and
+  // make line heights jump as you type.
+  { tag: markdownTags.subscript, fontSize: '80%', position: 'relative', top: '0.25em' },
+  { tag: markdownTags.superscript, fontSize: '80%', position: 'relative', top: '-0.4em' },
+  { tag: markdownTags.marked, backgroundColor: 'var(--mark)' },
   { tag: [t.link, t.url], color: 'var(--hl-link)' },
   { tag: t.monospace, color: 'var(--hl-code)' },
   { tag: t.quote, color: 'var(--hl-quote)' },
@@ -58,8 +64,6 @@ export interface Editor {
   createState(text: string, opts?: { readOnly?: boolean }): EditorState;
   /** Shows a tab's state, keeping its undo history and selection, and restores its scroll position. */
   show(state: EditorState, scrollTop?: number): void;
-  /** Replace the document and reset undo history (used when opening a file). */
-  load(text: string, opts?: { readOnly?: boolean }): void;
   text(): string;
   undo(): void;
   redo(): void;
@@ -85,7 +89,7 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
   let wordWrap = true;
   const wrapExtension = () => (wordWrap ? EditorView.lineWrapping : []);
 
-  const extensions = (ro: boolean): Extension[] => [
+  const extensions = (readOnly: boolean): Extension[] => [
     highlightSpecialChars(),
     history(),
     drawSelection(),
@@ -97,12 +101,13 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     highlightSelectionMatches(),
     search({ top: true }),
     // YAML frontmatter (SKILL.md, docs sites, AI config files) is highlighted as YAML.
-    yamlFrontmatter({ content: markdown({ base: markdownLanguage, codeLanguages: languages }) }),
+    // No tag completion: the editor has no autocompletion UI, and markdown-html.ts stubs it out.
+    yamlFrontmatter({ content: markdown({ base: markdownLanguage, codeLanguages: languages, completeHTMLTags: false, extensions: markdownInlineSyntax }) }),
     syntaxHighlighting(highlight),
     wrap.of(wrapExtension()),
     EditorView.contentAttributes.of({ spellcheck: 'false', 'aria-label': 'Markdown source' }),
     theme,
-    EditorState.readOnly.of(ro),
+    EditorState.readOnly.of(readOnly),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     EditorView.updateListener.of(onUpdate),
   ];
@@ -120,6 +125,8 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     view.setState(state);
     // A background tab may predate the last word-wrap change.
     if (wrap.get(state) !== wrapExtension()) view.dispatch({ effects: wrap.reconfigure(wrapExtension()) });
+    // Focusing here forces the layout synchronously. Keep it: deferring it to the next frame
+    // lets the preview's HTML land before the first paint and delays it by ~100 ms (measured).
     view.focus();
     // Wait for the new document's layout before scrolling.
     if (scrollTop) requestAnimationFrame(() => (view.scrollDOM.scrollTop = scrollTop));
@@ -129,7 +136,6 @@ export function createEditor(parent: HTMLElement, onUpdate: (u: ViewUpdate) => v
     view,
     createState,
     show,
-    load: (text, opts) => show(createState(text, opts)),
     text: () => view.state.doc.toString(),
     undo: () => runAndFocus(undo),
     redo: () => runAndFocus(redo),

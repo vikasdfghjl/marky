@@ -14,5 +14,19 @@ function Get-ProcessTree([int]$RootId) {
 }
 
 function Stop-ProcessTree([int]$RootId) {
-  Get-ProcessTree $RootId | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+  $ids = Get-ProcessTree $RootId
+  $ids | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+  # Return only once the tree is gone: a relaunch while it lingers would be forwarded to it (single instance).
+  Wait-Until { -not (Get-Process -Id $ids -ErrorAction SilentlyContinue) } 10 | Out-Null
+}
+
+# Polls $Condition until it returns something truthy or $TimeoutSeconds pass, and returns its last
+# result. Wait for state, not time: a cold CI runner starts WebView2 many times slower than a warm laptop.
+function Wait-Until([scriptblock]$Condition, [int]$TimeoutSeconds = 60) {
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ($true) {
+    $result = & $Condition
+    if ($result -or (Get-Date) -ge $deadline) { return $result }
+    Start-Sleep -Milliseconds 200
+  }
 }

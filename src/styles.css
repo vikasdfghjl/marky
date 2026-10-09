@@ -13,6 +13,8 @@
   --selection: light-dark(#b6d6fd, #264f78);
   --active-line: light-dark(#f6f8fa, #25272b);
   --match: light-dark(#fff1a8, #4b4521);
+  /* ==marked== text: an orange highlighter, not --match's yellow, or it would read as a search hit. */
+  --mark: light-dark(#ffeed8, #4b3218);
   --code-bg: light-dark(#f3f4f6, #2b2d31);
   --link: light-dark(#0969da, #58a6ff);
 
@@ -29,11 +31,8 @@
   --hl-type: light-dark(#953800, #ffa657);
   --hl-prop: light-dark(#0550ae, #79c0ff);
 
-  --alert-note: light-dark(#0969da, #4493f8);
-  --alert-tip: light-dark(#1a7f37, #3fb950);
-  --alert-important: light-dark(#8250df, #ab7df8);
-  --alert-warning: light-dark(#9a6700, #d29922);
-  --alert-caution: light-dark(#d1242f, #f85149);
+  /* Mermaid and math syntax errors. */
+  --error: light-dark(#d1242f, #f85149);
 }
 
 :root[data-theme='light'] {
@@ -77,8 +76,23 @@ body {
   overflow: auto;
 }
 
+/*
+ * The panes are independent, so tell the browser. Without containment every keystroke in the
+ * editor re-walked the whole preview DOM (14 ms of layout and 13 ms of paint prep at 1 MB,
+ * about 50 ms at 4 MB). The panes get their size from the flex layout, never from content.
+ */
+#editor,
+#preview,
+#outline {
+  contain: strict;
+}
+
 #editor {
   overflow: hidden;
+}
+
+#editor[hidden] {
+  display: none;
 }
 
 #preview {
@@ -173,14 +187,14 @@ body {
 
 .markdown-body .mermaid-error {
   padding: 8px 12px;
-  border-left: 4px solid var(--alert-caution);
+  border-left: 4px solid var(--error);
   font-family: var(--font-mono);
   font-size: 0.85em;
   text-align: left;
   white-space: pre-wrap;
 }
 
-/* ---- toolbar: tabs + settings ---- */
+/* ---- toolbar: tabs, new tab, settings ---- */
 
 #toolbar {
   display: flex;
@@ -189,21 +203,36 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-#settings-button {
+.toolbar-button {
   flex: 0 0 auto;
-  width: 36px;
+  width: 34px;
   border: 0;
-  border-left: 1px solid var(--border);
   background: none;
   color: var(--muted);
   font-size: 17px;
   cursor: pointer;
 }
 
-#settings-button:hover,
-#settings-button[aria-expanded='true'] {
+.toolbar-button:hover,
+.toolbar-button[aria-expanded='true'] {
   background: var(--active-line);
   color: var(--fg);
+}
+
+#new-tab-button {
+  font-size: 20px;
+}
+
+/* Pushes the pane toggle and the gear to the right edge; + stays after the last tab, as in browsers. */
+#editor-toggle {
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  border-left: 1px solid var(--border);
+}
+
+#editor-toggle[aria-pressed='false'] .editor-pane {
+  opacity: 0;
 }
 
 #settings-panel {
@@ -264,7 +293,7 @@ body {
 /* ---- tabs ---- */
 
 #tabs {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   overflow-x: auto;
@@ -469,6 +498,30 @@ body.drag-over #app::after {
   background: none;
 }
 
+.markdown-body dl {
+  margin: 0 0 1em;
+}
+
+.markdown-body dt {
+  margin-top: 0.75em;
+  font-weight: 600;
+}
+
+.markdown-body dd {
+  margin: 0.25em 0 0 1.5em;
+}
+
+/* The title shows on hover; the dotted line says there is one. */
+.markdown-body abbr[title] {
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+.markdown-body mark {
+  background: var(--mark);
+  color: inherit;
+}
+
 .markdown-body blockquote {
   margin: 0 0 1em;
   padding: 0 1em;
@@ -571,27 +624,24 @@ body.drag-over #app::after {
   font-size: 0.82em;
 }
 
-/* ---- preview: GitHub alerts ---- */
+/* ---- preview: footnotes ---- */
 
-.markdown-body .markdown-alert {
-  color: inherit;
-  border-left: 4px solid var(--alert-color);
-  padding: 4px 16px;
+.markdown-body .footnotes-sep {
+  margin: 2em 0 1em;
+  border: 0;
+  border-top: 1px solid var(--border);
 }
 
-.markdown-body .markdown-alert-title {
-  display: flex;
-  gap: 6px;
-  margin: 4px 0 6px;
-  color: var(--alert-color);
-  font-weight: 600;
+.markdown-body .footnotes {
+  color: var(--muted);
+  font-size: 0.9em;
 }
 
-.markdown-alert-note { --alert-color: var(--alert-note); }
-.markdown-alert-tip { --alert-color: var(--alert-tip); }
-.markdown-alert-important { --alert-color: var(--alert-important); }
-.markdown-alert-warning { --alert-color: var(--alert-warning); }
-.markdown-alert-caution { --alert-color: var(--alert-caution); }
+.markdown-body .footnote-ref a,
+.markdown-body .footnote-backref {
+  text-decoration: none;
+}
+
 /* ---- math (KaTeX styles load lazily) ---- */
 
 .markdown-body .math-block {
