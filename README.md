@@ -268,6 +268,7 @@ scripts/
   check-size.ps1        Size budgets (release-blocking)
   contrast.mjs          WCAG AA contrast audit of the theme tokens
   check-shortcuts.mjs   Fails when menu hints, tooltips or this README disagree with the app's shortcuts
+  knip.json             Optional unused-code scan: `npx knip` (scripts/*.mjs are harness entry points)
   sign.ps1              Signing hook (route-agnostic, driven by MARKY_SIGN_COMMAND)
   build-signed.ps1      Signed release build plus signature verification
   winget-manifest.ps1   winget manifests for a published release

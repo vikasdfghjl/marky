@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["src/preview/worker/preview.worker.ts"],
+  "project": ["src/**/*.ts"],
+  "ignore": ["scripts/**/*.mjs"],
+  "ignoreBinaries": ["pwsh"]
+}

@@ -19,7 +19,7 @@ const LIGHT_BACKGROUND: Color = Color(0xff, 0xff, 0xff, 0xff);
 static GEOMETRY_SAVE_TICK: AtomicU64 = AtomicU64::new(0);
 
 /// The theme forced by the saved settings; `None` (`system` or anything else) follows Windows.
-pub fn saved_theme(settings: &serde_json::Value) -> Option<Theme> {
+pub(crate) fn saved_theme(settings: &serde_json::Value) -> Option<Theme> {
     match settings.get("theme").and_then(|t| t.as_str()) {
         Some("light") => Some(Theme::Light),
         Some("dark") => Some(Theme::Dark),

@@ -17,6 +17,7 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 ### Changed
 
 - Failed file watches (for example on some network shares) are recorded in `marky.log` instead of failing silently.
+- Removed TypeScript exports that were only used inside their own modules; added `knip.json` for optional dead-code scans (`npx knip`).
 
 ## [0.3.0] - 2026-10-09
 

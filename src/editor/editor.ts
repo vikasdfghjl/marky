@@ -78,7 +78,7 @@ export interface Editor {
   restoreViewPosition(position: ViewPosition): void;
 }
 
-export interface ViewPosition {
+interface ViewPosition {
   cursor: number;
   scrollTop: number;
 }

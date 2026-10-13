@@ -17,7 +17,7 @@ export interface Settings {
   showOutline: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = {
+const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   fontSize: 14,
   wordWrap: true,

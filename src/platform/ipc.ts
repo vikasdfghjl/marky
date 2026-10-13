@@ -89,7 +89,7 @@ export const api: MarkyApi = import.meta.env.DEV && !('__TAURI_INTERNALS__' in w
 export type UnsavedChoice = 'save' | 'discard' | 'cancel';
 export type Choice = 'confirm' | 'deny' | 'dismiss';
 
-export interface StartupState {
+interface StartupState {
   file: OpenedFile | null;
   fileError: string | null;
   /** Unsaved tabs left by a session that did not end cleanly; empty when none. */
