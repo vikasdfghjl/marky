@@ -550,7 +550,7 @@ function jumpToAnchor(id: string) {
 /** Moves a tab's file watch from `previous` to `next` (either may be null). Best-effort, e.g. on network shares. */
 function watchPath(next: string | null, previous: string | null) {
   if (previous && !tabByPath(previous)) void api.unwatchFile(previous);
-  if (next) api.watchFile(next).catch(() => {});
+  if (next) api.watchFile(next).catch((err) => logError('watchFile', err));
 }
 
 function onFileChangedOnDisk(path: string) {

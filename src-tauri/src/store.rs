@@ -1,6 +1,7 @@
 //! Small JSON files in the app's own folders: recent files (F9), settings, and the
 //! crash-recovery snapshots of unsaved tabs (F13).
 
+use crate::diagnostics;
 use crate::files::{self, FileMeta};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs;
@@ -11,9 +12,37 @@ const RECENT_FILE: &str = "recent.json";
 const RECENT_LIMIT: usize = 10;
 const SNAPSHOT_FILE: &str = "recovery.json";
 const SETTINGS_FILE: &str = "settings.json";
+const WINDOW_FILE: &str = "window.json";
+/// Refuse to load larger recovery files: parsing and IPC would dominate startup (see AGENTS.md).
+const RECOVERY_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Last main-window bounds in logical pixels (`tauri.conf.json` defaults apply when missing).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowGeometry {
+    pub width: f64,
+    pub height: f64,
+    pub x: f64,
+    pub y: f64,
+    pub maximized: bool,
+}
+
+impl WindowGeometry {
+    /// Rejects corrupt or absurd values from hand-edited JSON.
+    pub fn is_usable(&self) -> bool {
+        const MIN_W: f64 = 480.0;
+        const MIN_H: f64 = 320.0;
+        const MAX: f64 = 10_000.0;
+        self.width >= MIN_W
+            && self.height >= MIN_H
+            && self.width <= MAX
+            && self.height <= MAX
+            && self.x.abs() <= MAX
+            && self.y.abs() <= MAX
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     /// None for an untitled document.
     pub path: Option<String>,
@@ -44,6 +73,17 @@ pub fn save_settings(config_dir: &Path, settings: &serde_json::Value) -> io::Res
     write_json(&config_dir.join(SETTINGS_FILE), settings)
 }
 
+pub fn load_window_geometry(config_dir: &Path) -> Option<WindowGeometry> {
+    read_json(&config_dir.join(WINDOW_FILE)).filter(WindowGeometry::is_usable)
+}
+
+pub fn save_window_geometry(config_dir: &Path, geometry: &WindowGeometry) -> io::Result<()> {
+    if !geometry.is_usable() {
+        return Ok(());
+    }
+    write_json(&config_dir.join(WINDOW_FILE), geometry)
+}
+
 pub fn save_snapshots(data_dir: &Path, snapshots: &[Snapshot]) -> io::Result<()> {
     write_json(&data_dir.join(SNAPSHOT_FILE), snapshots)
 }
@@ -51,6 +91,15 @@ pub fn save_snapshots(data_dir: &Path, snapshots: &[Snapshot]) -> io::Result<()>
 /// Empty when there is nothing to recover. Also reads the single-snapshot format written before tabs.
 pub fn read_snapshots(data_dir: &Path) -> Vec<Snapshot> {
     let path = data_dir.join(SNAPSHOT_FILE);
+    if let Ok(meta) = fs::metadata(&path) {
+        let size = meta.len();
+        if size > RECOVERY_MAX_BYTES {
+            let mb = size.div_ceil(1024 * 1024);
+            let limit = RECOVERY_MAX_BYTES / (1024 * 1024);
+            diagnostics::write(&format!("recovery file is {mb} MB; ignoring it (limit {limit} MB)"));
+            return vec![];
+        }
+    }
     if let Some(snapshots) = read_json::<Vec<Snapshot>>(&path) {
         return snapshots;
     }
@@ -142,5 +191,33 @@ mod tests {
         let single = Snapshot { path: None, text: "old\n".into(), meta: FileMeta { bom: false, line_ending: LineEnding::Lf } };
         write_json(&dir.join(SNAPSHOT_FILE), &single).unwrap();
         assert_eq!(read_snapshots(&dir), vec![single]);
+    }
+
+    #[test]
+    fn window_geometry_round_trips_and_rejects_invalid() {
+        let dir = temp_dir("window");
+        let ok = WindowGeometry { width: 1000.0, height: 700.0, x: 40.0, y: 80.0, maximized: false };
+        save_window_geometry(&dir, &ok).unwrap();
+        assert_eq!(load_window_geometry(&dir), Some(ok.clone()));
+
+        let bad = WindowGeometry { width: 100.0, height: 700.0, x: 0.0, y: 0.0, maximized: false };
+        save_window_geometry(&dir, &bad).unwrap();
+        assert_eq!(load_window_geometry(&dir), Some(ok));
+
+        save_window_geometry(&dir, &WindowGeometry { width: 1200.0, height: 800.0, x: 0.0, y: 0.0, maximized: true }).unwrap();
+        assert!(load_window_geometry(&dir).unwrap().maximized);
+    }
+
+    #[test]
+    fn oversized_recovery_file_reads_as_empty() {
+        use std::io::Write;
+
+        let dir = temp_dir("huge-recovery");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(SNAPSHOT_FILE);
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(b" ").unwrap();
+        file.set_len(RECOVERY_MAX_BYTES + 1).unwrap();
+        assert!(read_snapshots(&dir).is_empty());
     }
 }

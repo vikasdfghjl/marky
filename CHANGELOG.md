@@ -4,6 +4,20 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- The main window remembers its size, position and maximized state between sessions (`window.json` in the app's config folder).
+- Frontend unit tests for path helpers and preview Markdown plugins (`npm run test`).
+- A manual **Benchmark** GitHub Actions workflow (`bench.yml`) for cold-start and size checks on demand.
+
+### Fixed
+
+- Crash-recovery files larger than 8 MB are ignored at launch so a leftover snapshot cannot slow startup or use extra memory. A line is written to `marky.log` when that happens.
+
+### Changed
+
+- Failed file watches (for example on some network shares) are recorded in `marky.log` instead of failing silently.
+
 ## [0.3.0] - 2026-10-09
 
 ### Added
