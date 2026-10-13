@@ -95,6 +95,7 @@ Working now:
 - Links: footnote numbers and ↩ jump within the document, relative `.md` links open in a new tab, and web links open in your browser
 - Local images in the preview: relative paths resolve against the file's folder; remote images are blocked
 - Raw HTML in Markdown is shown as text, never executed
+- Remembers the main window's size, position and maximized state between launches
 - Light/dark theme that follows the Windows setting
 - Find and replace
 - Status bar: line/column, word and character count, line ending, encoding
@@ -276,6 +277,8 @@ scripts/
   package-portable.ps1  Portable ZIP with LICENSE and notices
 .github/workflows/
   ci.yml                Windows CI on main, dev and PRs: checks, tests, audits, build, budgets, e2e, installer + portable ZIP
+  dependabot.yml        Weekly npm and Cargo dependency update PRs
+  bench.yml             Manual cold-start and size benchmark (Actions → Benchmark)
   release.yml           On tag vX.Y.Z: run ci.yml, then publish the artifacts it tested as a GitHub Release
 ```
 

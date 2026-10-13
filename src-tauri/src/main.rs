@@ -39,6 +39,8 @@ struct AppState {
     user_chosen: UserChosenPaths,
     /// The CLI/Explorer file, read on a background thread while WebView2 starts (~600 ms).
     startup_read: Mutex<Option<StartupRead>>,
+    /// Loaded once in `setup` for the window theme; `startup_state` reuses it instead of reading disk again.
+    cached_settings: Mutex<serde_json::Value>,
     /// Mirrors the editor's unsaved state so a clean window closes without a JS round trip.
     dirty: AtomicBool,
     /// One watcher per open tab's file; dropping an entry stops that watch.
@@ -120,7 +122,7 @@ async fn startup_state(app: AppHandle, state: State<'_, AppState>) -> Result<Sta
         state.user_chosen.remember(PathBuf::from(path));
     }
 
-    let settings = store::load_settings(&config_dir(&app)?);
+    let settings = state.cached_settings.lock().unwrap().clone();
     let pending_read = state.startup_read.lock().unwrap().take();
     let Some(pending_read) = pending_read else {
         return Ok(StartupState { file: None, file_error: None, recovery, settings });
@@ -301,6 +303,7 @@ async fn save_settings(app: AppHandle, window: WebviewWindow, settings: serde_js
         return Err("settings are too large".into());
     }
     store::save_settings(&config_dir(&app)?, &settings).map_err(|e| e.to_string())?;
+    *app.state::<AppState>().cached_settings.lock().unwrap() = settings.clone();
     apply_window_theme(&window, &settings);
     Ok(())
 }
@@ -416,11 +419,28 @@ fn on_window_event(window: &Window, event: &WindowEvent) {
                 request_open(window.app_handle(), path.clone());
             }
         }
-        WindowEvent::CloseRequested { api, .. } if has_unsaved_changes(window) => {
-            api.prevent_close();
-            let _ = window.emit_to("main", "close-requested", ());
+        WindowEvent::CloseRequested { api, .. } => {
+            if let Ok(dir) = config_dir(window.app_handle()) {
+                if let Some(main) = window.app_handle().get_webview_window("main") {
+                    let _ = window::persist_geometry(&main, &dir);
+                }
+            }
+            if has_unsaved_changes(window) {
+                api.prevent_close();
+                let _ = window.emit_to("main", "close-requested", ());
+            }
         }
-        WindowEvent::Resized(_) => memory::follow_minimized(window),
+        WindowEvent::Resized(_) => {
+            memory::follow_minimized(window);
+            if let Ok(dir) = config_dir(window.app_handle()) {
+                window::schedule_geometry_save(window.app_handle(), dir);
+            }
+        }
+        WindowEvent::Moved(_) => {
+            if let Ok(dir) = config_dir(window.app_handle()) {
+                window::schedule_geometry_save(window.app_handle(), dir);
+            }
+        }
         _ => {}
     }
 }
@@ -434,6 +454,7 @@ fn main() {
         started,
         user_chosen: UserChosenPaths::default(),
         startup_read: Mutex::new(None),
+        cached_settings: Mutex::new(serde_json::Value::Null),
         dirty: AtomicBool::new(false),
         watchers: Mutex::default(),
         recent_list_writes: Mutex::default(),
@@ -468,8 +489,11 @@ fn main() {
             }
             // The window is created here, not from config, so its title bar and background
             // already match the saved theme when it first appears (no white flash).
-            let settings = config_dir(app.handle()).map(|dir| store::load_settings(&dir)).unwrap_or_default();
-            window::create_main(app.handle(), &settings)?;
+            let config = config_dir(app.handle());
+            let settings = config.as_ref().map(|dir| store::load_settings(dir)).unwrap_or(serde_json::Value::Null);
+            *app.state::<AppState>().cached_settings.lock().unwrap() = settings.clone();
+            let config = config?;
+            window::create_main(app.handle(), &settings, &config)?;
             perf_log(&format!("setup_ms={:.0}", started.elapsed().as_secs_f64() * 1000.0));
             Ok(())
         })

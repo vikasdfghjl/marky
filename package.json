@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && node scripts/check-shortcuts.mjs && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && node scripts/check-shortcuts.mjs && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
     "release": "pwsh -NoProfile -File scripts/release.ps1",
     "tauri": "tauri"
   },
@@ -39,7 +40,8 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.5",
     "typescript": "^7.0.2",
-    "vite": "^8.3.1"
+    "vite": "^8.3.1",
+    "vitest": "^3.2.7"
   },
   "overrides": {
     "lodash-es": "^4.18.1",

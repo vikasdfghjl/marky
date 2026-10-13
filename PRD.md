@@ -112,7 +112,7 @@ Performance budgets are release-blocking; the rest are v1.0 quality gates.
 - **Input:** IME composition (e.g. Chinese, Japanese, Korean input methods) works without dropped characters.
 - **Reliability:** atomic saves; crash-recovery snapshots; zero data loss on forced termination during save.
 - **Offline:** 100% offline; no network calls except the opt-in update check.
-- **Localization-ready:** all UI strings in one JSON catalogue; English only in v1.
+- **Localization-ready (deferred):** v1 strings live in TypeScript, HTML and `menu.rs`; a single JSON catalogue is a later refactor. English only in v1.
 - **Portability:** a portable ZIP build runs without installation (WebView2 must already be present).
 
 ## Tech stack
@@ -125,18 +125,16 @@ Tauri 2.11 on Rust stable with a vanilla-TypeScript frontend, CodeMirror 6 and m
 | CLI | @tauri-apps/cli | 2.11.5 | Dev server, build, NSIS/MSI bundling |
 | JS bridge | @tauri-apps/api | 2.11.1 | `invoke`, events, window APIs |
 | Native dialogs | tauri-plugin-dialog | 2.7.3 | Open/Save As/confirm dialogs |
-| File system | tauri-plugin-fs | 2.5.2 | Scoped fs for image asset paths; core I/O stays in custom Rust commands |
+| External links | tauri-plugin-opener | 2.5.x | Opens http(s)/mailto from custom `open_external`; no shell permission on the webview |
 | Single instance | tauri-plugin-single-instance | 2.4.5 | Second double-click opens file in the running window |
-| Window state | tauri-plugin-window-state | 2.4.1 | Restore size/position |
-| Updater (P2) | tauri-plugin-updater | 2.12.0 | Signed delta-free updates |
+| Updater (P2) | tauri-plugin-updater | 2.12.0 | Signed delta-free updates (not wired in v1 beta) |
 | File watching | notify (crate) | 8.2.0 | External change detection (F8) |
 | Editor | @codemirror/view / state | 6.43.13 / 6.7.6 | Viewport rendering, transactions |
 | Markdown mode | @codemirror/lang-markdown | 6.5.2 | GFM syntax tree, nested code highlighting |
 | Code-block languages | @codemirror/language-data | 6.5.2 | Lazy-loads language packs on demand |
 | Search | @codemirror/search | 6.7.2 | Find/replace panel |
 | Commands | @codemirror/commands | 6.11.1 | Keymaps, history |
-| Preview renderer | markdown-it | 15.0.2 | Fast, CommonMark + GFM plugins, source-line maps for synced scroll |
-| Sanitizer | DOMPurify | 3.4.16 | Strip scripts/handlers from preview HTML |
+| Preview renderer | markdown-it | 15.0.2 | Fast, CommonMark + GFM plugins, source-line maps for synced scroll; `html: false` so raw HTML is text |
 | Math (P2) | KaTeX | 0.18.9 | Lazy-loaded |
 | Diagrams (P2) | Mermaid | 12.0.0 | Lazy-loaded, heavy (\~1 MB), never in the main chunk |
 | Build | Vite | 8.3.1 | Fast dev, code-splitting |
@@ -163,7 +161,7 @@ flowchart LR
   subgraph WebView2
     CM[CodeMirror 6 editor]
     WK[Web Worker: markdown-it]
-    PV[Preview pane: DOMPurify]
+    PV[Preview pane: html false + CSP]
   end
   RC -- file text --> CM
   CM -- save payload --> RC
@@ -188,20 +186,20 @@ flowchart LR
 - **No per-keystroke IPC.** Typing never leaves the webview.
 - **Preview off the main thread.** The worker receives the full text at most once per typing pause (twice the last parse time, 30–150 ms) and returns one HTML string per top-level block (with `data-line` source maps for synced scroll); the page diffs blocks and replaces only the changed ones.
 - **Lazy everything.** Language packs, KaTeX and Mermaid load via dynamic `import()` only when content needs them; the initial JS bundle budget is ≤ 250 KB gzipped.
-- **Config** (theme override, recent files, window state) stored as JSON in the app config dir via tauri-plugin-store or plain Rust serde.
+- **Config** (theme override, recent files, settings, window bounds) stored as JSON in the app config dir via plain Rust serde (`store.rs`, `window.json` for size/position/maximized).
 - **Encoding:** UTF-8 only in v1; other encodings open read-only with a warning (open question below).
 
 ## Security model
 
 Treat every Markdown file as untrusted input: a malicious file must not be able to run script, reach IPC, or read files outside what the user opened.
 
-- **Preview sanitization:** markdown-it runs with `html: false` by default (raw HTML rendered as text); if the user enables raw HTML, output passes through DOMPurify with scripts, event handlers, `iframe`, `object` and `form` stripped.
+- **Preview sanitization:** markdown-it runs with `html: false` (raw HTML rendered as text, never executed). A future raw-HTML option would require DOMPurify before any HTML reaches the DOM (see `AGENTS.md`). Mermaid may pull DOMPurify transitively; Marky does not render user HTML today.
 - **CSP** in `tauri.conf.json`: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'`.
-- **Capabilities (least privilege):** the main window gets only the custom commands, `dialog:allow-open`, `dialog:allow-save`, `dialog:allow-ask`, and window-state/single-instance defaults. No `shell`, no `http`, no broad `fs` scope.
+- **Capabilities (least privilege):** the main window webview gets only `core:event` and `core:window:allow-set-title` (`capabilities/default.json`). Dialogs, file I/O and link opening run in Rust via plugins and custom commands, not as webview permissions.
 - **File scope:** custom commands only touch paths the user selected (dialog, drag-drop, CLI arg); the asset protocol scope for preview images is widened at runtime to the open file's folder only.
 - **Links:** clicks on `http(s)` links in preview are intercepted and opened in the default browser via tauri-plugin-opener; the webview never navigates away.
 - **Updates:** updater artifacts signed with the Tauri minisign key; the private key lives only in CI secrets.
-- **Supply chain:** lockfiles committed; `cargo audit` and `npm audit` gate every CI build; Dependabot/Renovate for weekly updates.
+- **Supply chain:** lockfiles committed; `cargo audit` and `npm audit` gate every CI build; Dependabot weekly PRs (`.github/dependabot.yml`).
 
 ## Build, packaging and distribution
 
@@ -276,7 +274,7 @@ The biggest risk is WebView2 memory creeping past the 120 MB limit as features a
 | WebView2 helper processes push RAM over budget | Medium | High | Measured in M0 and on every performance pass; unused browser features disabled via WebView2 args; network service in-process; memory trimmed after 30 s idle and while minimised; lazy-load everything |
 | Preview jank or RAM growth on large files | Low (files over 100 KB are about 1 in 700) | Medium | Worker-based parsing, block-level preview updates, CSS containment, preview auto-off above 5 MB; windowed rendering held back until usage justifies it |
 | Benchmarks fooled by leftovers or by Windows | Medium | Medium | Harnesses delete their own crash snapshots; RAM is reported in use and after the idle trim; compare runs only within one session (machine background load moves typing latency by up to 2×) |
-| XSS via crafted Markdown reaching IPC | Low | High | `html: false`, DOMPurify, strict CSP, minimal capabilities |
+| XSS via crafted Markdown reaching IPC | Low | High | `html: false`, strict CSP, minimal capabilities, no webview navigation |
 | Save corruption on crash or power loss | Low | High | Temp-file + flush + atomic rename; crash snapshots |
 | SmartScreen warnings hurt adoption | High (unsigned) | Medium | Decide signing route before v1.0 (see table in Build section) |
 | Mermaid bundle bloat | High if eager | Medium | Dynamic import only when a `mermaid` block exists |
