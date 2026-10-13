@@ -2,7 +2,7 @@ import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import type { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 
-export interface Heading {
+interface Heading {
   level: number;
   text: string;
   /** 0-based source line, the same unit as the preview's data-line. */
@@ -17,7 +17,7 @@ const PARSE_BUDGET_MS = 50;
  * Headings from the Markdown syntax tree (PRD F17), so `#` lines inside code
  * fences or frontmatter never show up.
  */
-export function extractHeadings(state: EditorState): Heading[] {
+function extractHeadings(state: EditorState): Heading[] {
   const tree = ensureSyntaxTree(state, state.doc.length, PARSE_BUDGET_MS) ?? syntaxTree(state);
   const headings: Heading[] = [];
   tree.iterate({

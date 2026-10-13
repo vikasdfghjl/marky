@@ -1,4 +1,7 @@
 # Weekly dependency PRs; CI still runs npm audit and cargo audit on every build.
+#
+# After merging a Cargo PR, run `tsx scripts/third-party-notices.ts` and commit
+# THIRD_PARTY_NOTICES.txt if the lockfile changed (CI enforces this).
 version: 2
 updates:
   - package-ecosystem: npm
@@ -18,3 +21,12 @@ updates:
     directory: /src-tauri
     schedule:
       interval: weekly
+    # One PR per week keeps THIRD_PARTY_NOTICES.txt in sync with a single regen step.
+    groups:
+      rust:
+        patterns:
+          - '*'
+    ignore:
+      # Tauri/webview2_com expect windows-core 0.62; 0.100 duplicates windows_core and breaks memory.rs.
+      - dependency-name: windows-core
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']

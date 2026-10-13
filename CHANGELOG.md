@@ -10,13 +10,15 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 - Frontend unit tests for path helpers and preview Markdown plugins (`npm run test`).
 - A manual **Benchmark** GitHub Actions workflow (`bench.yml`) for cold-start and size checks on demand.
 
+### Changed
+
+- Harness scripts under `scripts/` are TypeScript (`tsx`, checked via `tsconfig.scripts.json`) instead of JavaScript.
+- Failed file watches (for example on some network shares) are recorded in `marky.log` instead of failing silently.
+- Removed TypeScript exports that were only used inside their own modules; added `knip.json` for optional dead-code scans (`npx knip`).
+
 ### Fixed
 
 - Crash-recovery files larger than 8 MB are ignored at launch so a leftover snapshot cannot slow startup or use extra memory. A line is written to `marky.log` when that happens.
-
-### Changed
-
-- Failed file watches (for example on some network shares) are recorded in `marky.log` instead of failing silently.
 
 ## [0.3.0] - 2026-10-09
 

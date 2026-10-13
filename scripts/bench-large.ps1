@@ -34,7 +34,7 @@ function Get-TreeRamMb([int]$rootId) {
 
 foreach ($kb in $SizesKb) {
   $file = Join-Path $dir "doc-$kb.md"
-  node (Join-Path $PSScriptRoot 'bench-large.mjs') gen $kb $file
+  npx tsx (Join-Path $PSScriptRoot 'bench-large.ts') gen $kb $file
   $actualKb = [math]::Round((Get-Item $file).Length / 1KB)
   "== $actualKb KB ($([math]::Round($actualKb / 1024, 1)) MB)"
 
@@ -61,10 +61,10 @@ foreach ($kb in $SizesKb) {
   $app = Start-Process $exe -ArgumentList "`"$file`"" -PassThru
   Start-Sleep -Seconds 8
   $untouched = Get-TreeRamMb $app.Id
-  node (Join-Path $PSScriptRoot 'bench-large.mjs') wake
+  npx tsx (Join-Path $PSScriptRoot 'bench-large.ts') wake
   Start-Sleep -Seconds 6
   "idle RAM $untouched MB untouched (Windows trims idle working sets), $(Get-TreeRamMb $app.Id) MB after waking"
-  node (Join-Path $PSScriptRoot 'bench-large.mjs') measure "$actualKb KB"
+  npx tsx (Join-Path $PSScriptRoot 'bench-large.ts') measure "$actualKb KB"
   "RAM after typing $(Get-TreeRamMb $app.Id) MB"
   Stop-ProcessTree $app.Id
   Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue

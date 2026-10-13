@@ -139,7 +139,7 @@ Not yet built: taskbar jump-list entries for recent files (F9, needs Win32 code)
 
 ## Accessibility
 
-- All text meets WCAG 2.2 AA contrast (4.5:1) in both themes; `node scripts/contrast.mjs` checks every text/background pair and runs in CI.
+- All text meets WCAG 2.2 AA contrast (4.5:1) in both themes; `tsx scripts/contrast.ts` checks every text/background pair and runs in CI.
 - Everything works from the keyboard. The preview pane is focusable, so it can be scrolled with the arrow and Page keys.
 - The editor is exposed to screen readers by CodeMirror. The status bar is deliberately not a live region, so it does not announce every keystroke.
 - IME composition (verified with Japanese input in the end-to-end test) commits cleanly and saves as UTF-8.
@@ -260,18 +260,19 @@ src-tauri/
 scripts/
   fixtures/typical.md   The benchmark document: 5 KB, frontmatter, code fences, a table (about the median real file)
   bench.ps1             Release-build benchmark on scripts/fixtures/typical.md: cold start, WebView2 ready, idle RAM in use and after the idle trim, sizes
-  bench-large.ps1, .mjs Large-document benchmark: cold start, RAM, typing latency, preview update, stalls
+  bench-large.ps1, .ts  Large-document benchmark: cold start, RAM, typing latency, preview update, stalls
   bench-flash.ps1       Times the white flash at launch (pixel probe; needs a desktop)
   lib.ps1               Shared script helpers (process-tree walk and stop, Wait-Until)
-  cdp.mjs               Minimal DevTools-protocol client shared by e2e.mjs and bench-large.mjs
-  e2e.ps1, e2e.mjs      Release-build smoke test driven over the WebView2 DevTools protocol
+  cdp.ts                Minimal DevTools-protocol client shared by e2e.ts and bench-large.ts
+  e2e.ps1, e2e.ts       Release-build smoke test driven over the WebView2 DevTools protocol
   check-size.ps1        Size budgets (release-blocking)
-  contrast.mjs          WCAG AA contrast audit of the theme tokens
-  check-shortcuts.mjs   Fails when menu hints, tooltips or this README disagree with the app's shortcuts
+  contrast.ts           WCAG AA contrast audit of the theme tokens
+  check-shortcuts.ts    Fails when menu hints, tooltips or this README disagree with the app's shortcuts
+  knip.json             Optional unused-code scan: `npx knip` (scripts/*.ts are harness entry points)
   sign.ps1              Signing hook (route-agnostic, driven by MARKY_SIGN_COMMAND)
   build-signed.ps1      Signed release build plus signature verification
   winget-manifest.ps1   winget manifests for a published release
-  third-party-notices.mjs  THIRD_PARTY_NOTICES.txt from the npm and Cargo dependency graphs
+  third-party-notices.ts   THIRD_PARTY_NOTICES.txt from the npm and Cargo dependency graphs
   release.ps1           (npm run release) Version bump + CHANGELOG stamp + commit + annotated tag (does not push)
   release-notes.ps1     A version's CHANGELOG section (release notes); fails if it is missing or empty
   package-portable.ps1  Portable ZIP with LICENSE and notices

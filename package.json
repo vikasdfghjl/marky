@@ -7,9 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run test && node scripts/check-shortcuts.mjs && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
+    "check": "npm run typecheck && npm run test && tsx scripts/check-shortcuts.ts && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
     "release": "pwsh -NoProfile -File scripts/release.ps1",
     "tauri": "tauri"
   },
@@ -39,6 +39,8 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.5",
+    "@types/node": "^24.19.2",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
     "vitest": "^3.2.7"
