@@ -4,7 +4,9 @@ A fast, lightweight Markdown editor for Windows, built with [Tauri 2](https://v2
 
 Marky opens a `.md` file, lets you edit it with syntax highlighting and a live side-by-side preview, and saves it. It uses the WebView2 runtime that already ships with Windows, so no browser engine is bundled.
 
-> **Status:** early development (M3 release readiness). See [PRD.md](PRD.md) for the full plan.
+The UI and tooling are **TypeScript** (Vite); file I/O, security and the window chrome are **Rust** (Tauri 2). Harness scripts under `scripts/` are TypeScript too and run with [`tsx`](https://github.com/privatenumber/tsx); PowerShell wrappers (`.ps1`) drive benchmarks and end-to-end tests on Windows.
+
+> **Status:** beta (0.3.x), working toward M3 (signing, winget, accessibility sign-off). See [PRD.md](PRD.md) for scope and performance budgets.
 
 ## Benchmarks
 
@@ -73,7 +75,7 @@ Download the latest installer (`Marky_<version>_x64-setup.exe`) or the portable 
 
 Beta builds are **unsigned**, so Windows SmartScreen shows _Windows protected your PC_ on first run. Choose **More info**, then **Run anyway**. The installer is per-user and needs no admin rights. A portable ZIP (just `marky.exe`) is also built; it needs the WebView2 runtime, which Windows 11 and current Windows 10 already have.
 
-**Reporting a problem.** Marky keeps a small log of crashes and internal errors at `%LOCALAPPDATA%\dev.marky.editor\marky.log` (it never leaves your machine). Attach it to a bug report; it holds error messages (which can include file paths) and timestamps, not the text of your documents. Files over 128 MB are refused rather than risking running out of memory.
+**Reporting a problem.** Marky keeps a small log of crashes and internal errors at `%LOCALAPPDATA%\dev.marky.editor\marky.log` (it never leaves your machine). Attach it to a bug report; it holds error messages (which can include file paths) and timestamps, not the text of your documents. Files over 128 MB are refused rather than risking running out of memory. Settings live in `%APPDATA%\dev.marky.editor\`; crash-recovery snapshots and `marky.log` live under `%LOCALAPPDATA%\dev.marky.editor\`.
 
 ## Features
 
@@ -190,24 +192,34 @@ npm install
 npm run tauri dev
 ```
 
-| Command                                           | What it does                                                                                                                                              |
-| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run dev`                                     | Frontend only, in a browser at http://localhost:1420, against an in-memory stand-in for the Rust core (sample file; save and recent files work in memory) |
-| `npm run tauri dev`                               | Full native app with hot reload                                                                                                                           |
-| `npm run tauri build`                             | Release build and NSIS installer in `src-tauri/target/release/bundle/`                                                                                    |
-| `npm run typecheck`                               | TypeScript type-check                                                                                                                                     |
-| `npm run check`                                   | Typecheck, clippy and Rust tests: the checks every change must pass                                                                                       |
-| `npm run release -- -Version X.Y.Z`               | Version bump, CHANGELOG stamp, commit and tag (does not push)                                                                                             |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust tests: encoding, atomic save, kill-mid-save, recent/recovery                                                                                         |
-| `./scripts/e2e.ps1`                               | End-to-end smoke test of the release build (needs `npx tauri build --no-bundle` first)                                                                    |
-| `./scripts/check-size.ps1`                        | Fail if the exe or installer exceeds the PRD hard limits (needs a full `npx tauri build`)                                                                 |
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Frontend only at http://localhost:1420, against an in-memory Rust stand-in (`browser-api.ts`; sample file; save and recent files work in memory) |
+| `npm run tauri dev` | Full native app with hot reload |
+| `npm run tauri build` | Release build and NSIS installer in `src-tauri/target/release/bundle/` |
+| `npm run typecheck` | TypeScript for `src/` and `scripts/` (`tsconfig.json` + `tsconfig.scripts.json`) |
+| `npm run test` | Vitest unit tests (`src/**/*.test.ts`) |
+| `npm run check` | `typecheck`, `test`, shortcut consistency (`tsx scripts/check-shortcuts.ts`), Clippy and Rust tests — run before every PR |
+| `npm run release -- -Version X.Y.Z` | Version bump, CHANGELOG stamp, commit and tag (does not push) |
+| `npx tsx scripts/third-party-notices.ts` | Regenerate `THIRD_PARTY_NOTICES.txt` after any npm or Cargo dependency change (CI fails if it is stale) |
+| `npx tsx scripts/contrast.ts` | WCAG contrast audit of theme tokens (also runs in CI) |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust tests: encoding, atomic save, kill-mid-save, store/recovery |
+| `./scripts/e2e.ps1` | End-to-end smoke test of a release build (`npx tauri build --no-bundle` first) |
+| `./scripts/check-size.ps1` | Fail if the exe or installer exceeds PRD hard limits (after `npx tauri build`) |
+| `./scripts/bench.ps1` | Cold start, idle RAM and sizes on `scripts/fixtures/typical.md` (release build) |
+| `npx knip` | Optional unused-code scan (`knip.json`; harness scripts are entry points) |
 
 The status bar shows two development metrics: `start` (process start to first editable frame) and `preview` (last keystroke to preview paint). Set `MARKY_PERF_LOG=<file>` to have the app append its startup timeline to that file.
+
+**Dependabot.** Weekly grouped npm and Cargo PRs are configured in `.github/dependabot.yml`. After merging a Cargo bump, run `npx tsx scripts/third-party-notices.ts` and commit `THIRD_PARTY_NOTICES.txt`. Do not take major `windows-core` bumps outside the 0.62 line Tauri uses — they break the WebView2 memory hook in `memory.rs`.
 
 ## Project structure
 
 ```
 index.html              App shell: editor pane, preview pane, status bar
+vitest.config.ts        Vitest config (`src/**/*.test.ts`)
+tsconfig.scripts.json   TypeScript project for `scripts/*.ts`
+knip.json               Optional unused-code scan (`npx knip`; harness scripts are entry points)
 src/
   main.ts               App wiring: tabs, save/open, external changes, recovery, the command table
   styles.css            Theme variables (light/dark), layout, picker and preview typography
@@ -250,17 +262,18 @@ src-tauri/
   src/allowlist.rs      Which files the webview may touch, and which links it may follow
   src/files.rs          Read/write with BOM and line-ending handling, atomic save
   src/watcher.rs        External change detection (watches the file's folder)
-  src/store.rs          Recent-files list and crash-recovery snapshots (JSON in app folders)
+  src/store.rs          Settings, recent files, window bounds (`window.json`), crash-recovery snapshots
   src/menu.rs           Native menu bar
   src/window.rs         Creates the main window with the theme's background colour (no launch flash)
   src/memory.rs         Asks WebView2 to trim memory while the window is minimised or the user is idle
   src/diagnostics.rs    marky.log: panics and reported errors, kept on the machine
   tauri.conf.json       Window, CSP, asset protocol, bundle and file-association config
   capabilities/         Webview permissions (least privilege)
-scripts/
+scripts/                TypeScript harnesses (run with `npx tsx scripts/<name>.ts` unless a `.ps1` wrapper is listed)
   fixtures/typical.md   The benchmark document: 5 KB, frontmatter, code fences, a table (about the median real file)
   bench.ps1             Release-build benchmark on scripts/fixtures/typical.md: cold start, WebView2 ready, idle RAM in use and after the idle trim, sizes
-  bench-large.ps1, .ts  Large-document benchmark: cold start, RAM, typing latency, preview update, stalls
+  bench-large.ps1       Large-document benchmark (calls `bench-large.ts` over CDP): cold start, RAM, typing, preview stalls
+  bench-large.ts
   bench-flash.ps1       Times the white flash at launch (pixel probe; needs a desktop)
   lib.ps1               Shared script helpers (process-tree walk and stop, Wait-Until)
   cdp.ts                Minimal DevTools-protocol client shared by e2e.ts and bench-large.ts
@@ -268,7 +281,6 @@ scripts/
   check-size.ps1        Size budgets (release-blocking)
   contrast.ts           WCAG AA contrast audit of the theme tokens
   check-shortcuts.ts    Fails when menu hints, tooltips or this README disagree with the app's shortcuts
-  knip.json             Optional unused-code scan: `npx knip` (scripts/*.ts are harness entry points)
   sign.ps1              Signing hook (route-agnostic, driven by MARKY_SIGN_COMMAND)
   build-signed.ps1      Signed release build plus signature verification
   winget-manifest.ps1   winget manifests for a published release
@@ -285,7 +297,7 @@ scripts/
 
 ## Architecture
 
-Rust owns the disk; the webview owns the text. The document lives in CodeMirror state and crosses IPC only on open, save, external change and the 30-second recovery snapshot, never per keystroke. Preview parsing runs in a Web Worker at most once per 150 ms of idle typing.
+Rust owns the disk; the webview owns the text. The document lives in CodeMirror state and crosses IPC only on open, save, external change and the 30-second recovery snapshot, never per keystroke. Preview parsing runs in a Web Worker after a typing pause (about 30–150 ms, scaled to the last parse time).
 
 ## Security
 
@@ -304,8 +316,8 @@ Every Markdown file is treated as untrusted input:
 | M0 Spike  | Scaffold, editor + preview worker, measure RAM and cold start                                                |
 | M1 MVP    | Open, edit, save, preview, unsaved-changes guard, theme, find                                                |
 | M2 Beta   | External change detection, recent files, synced scroll, status bar, local images, crash recovery, installers |
-| M3 v1.0   | Code signing, winget, accessibility and IME pass                                                             |
-| M4 v1.x   | Tabs, HTML/PDF export, Mermaid and KaTeX, outline, auto-update                                               |
+| M3 v1.0   | Code signing, winget, accessibility and IME pass (in progress)                                              |
+| M4 v1.x   | HTML/PDF export, auto-update (tabs, Mermaid, KaTeX and outline shipped in 0.2.x–0.3.x)                       |
 
 Details are in [PRD.md](PRD.md).
 
