@@ -44,7 +44,7 @@ Revised 29 Sep 2026. The first version of this table was written from assumption
 | Window visible in the theme's colour (no white flash) | ≤ 300 ms | 500 ms | `scripts/bench-flash.ps1`, pixel probe; white time must be 0 ms |
 | Cold start to editable, typical document | ≤ 900 ms | 1,000 ms | `scripts/bench.ps1`: process start to first CodeMirror paint |
 | Open 1 MB file | ≤ 150 ms | 300 ms | `scripts/bench-large.ps1`: IPC ready to file loaded |
-| Typing latency, input event to next painted frame (p50) | ≤ 20 ms | 33 ms | `scripts/bench-large.mjs measure`; includes one 60 Hz frame, so 16 ms is the floor, not a target |
+| Typing latency, input event to next painted frame (p50) | ≤ 20 ms | 33 ms | `scripts/bench-large.ts measure`; includes one 60 Hz frame, so 16 ms is the floor, not a target |
 | Preview update after typing stops | ≤ 200 ms | 400 ms | Same harness; includes the typing pause (30–150 ms, scaled to parse time) |
 | Idle RAM in use, typical document | ≤ 105 MB | 120 MB | `scripts/bench.ps1`: app + WebView2 child processes, 10 s after launch |
 | Idle RAM in use, 95th-percentile document (30 KB) | ≤ 120 MB | 135 MB | Same, on a real 30 KB file |

@@ -1,10 +1,8 @@
-// Large-document benchmark, driven over the WebView2 DevTools protocol (see cdp.mjs).
-//   node bench-large.mjs gen <kb> <out.md>      writes a docs-like Markdown file of about <kb> KB
-//   node bench-large.mjs measure <label>        measures the running app (start it with --remote-debugging-port=9222)
-// Measures typing latency (input event to the next painted frame), the preview update after typing
-// stops, and main-thread stalls. See scripts/bench-large.ps1, which launches the app per file size.
+// Large-document benchmark, driven over the WebView2 DevTools protocol (see cdp.ts).
+//   tsx bench-large.ts gen <kb> <out.md>   writes a docs-like Markdown file of about <kb> KB
+//   tsx bench-large.ts measure <label>     measures the running app (--remote-debugging-port=9222)
 import { writeFileSync } from 'node:fs';
-import { connectToPage, sleep } from './cdp.mjs';
+import { connectToPage, sleep } from './cdp';
 
 const [mode, arg1, arg2] = process.argv.slice(2);
 
@@ -18,19 +16,14 @@ if (mode === 'gen') {
   throw new Error('usage: gen <kb> <out.md> | wake | measure <label>');
 }
 
-/**
- * Touches the page once (forcing layout). An untouched app's working set is partly trimmed by
- * Windows, and any use pages it back in, so RAM is reported both before and after this.
- */
 async function wake() {
   const { evaluate, close } = await connectToPage();
   await evaluate('document.body.offsetHeight');
   close();
 }
 
-/** API-reference style content: headings, prose, lists, tables, and fenced code in four languages. */
-function generateDocument(targetBytes) {
-  const code = {
+function generateDocument(targetBytes: number) {
+  const code: Record<string, string> = {
     js: 'export async function load(id) {\n  const res = await fetch(`/api/items/${id}`);\n  if (!res.ok) throw new Error(res.statusText);\n  return res.json();\n}',
     rust: 'pub fn parse(input: &str) -> Result<Config, Error> {\n    let value: toml::Value = input.parse()?;\n    Config::try_from(value)\n}',
     json: '{\n  "name": "service",\n  "retries": 3,\n  "hosts": ["a.example.com", "b.example.com"]\n}',
@@ -68,16 +61,16 @@ ${code[lang]}
   return parts.join('');
 }
 
-async function measure(label) {
+async function measure(label: string) {
   const { send, evaluate, close } = await connectToPage();
 
-  // MARKY_BENCH_CSS="#preview{...}" tries a style change on the running app without a rebuild.
   if (process.env.MARKY_BENCH_CSS) {
-    await evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(process.env.MARKY_BENCH_CSS)}; document.head.append(s); })()`);
+    await evaluate(
+      `(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(process.env.MARKY_BENCH_CSS)}; document.head.append(s); })()`,
+    );
     await sleep(500);
   }
 
-  // In the page: input -> next painted frame latency, and main-thread stalls over 50 ms.
   await evaluate(`(() => {
     window.__latency = [];
     window.__stalls = [];
@@ -90,39 +83,35 @@ async function measure(label) {
     }, true);
   })()`);
 
-  const key = (type, k, code, vk, modifiers = 0) =>
+  const key = (type: string, k: string, code: string, vk: number, modifiers = 0) =>
     send('Input.dispatchKeyEvent', { type, modifiers, key: k, code, windowsVirtualKeyCode: vk });
-  const percentile = (values, p) => {
+  const percentile = (values: number[], p: number) => {
     const sorted = [...values].sort((a, b) => a - b);
     return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
   };
-  const round = (n) => Math.round(n * 10) / 10;
+  const round = (n: number) => Math.round(n * 10) / 10;
 
   await evaluate(`document.querySelector('.cm-content').focus()`);
-  await key('keyDown', 'Home', 'Home', 36, 2); // Ctrl+Home: type at the top of the document
+  await key('keyDown', 'Home', 'Home', 36, 2);
   await key('keyUp', 'Home', 'Home', 36, 2);
-  await sleep(1500); // let the initial preview render and highlighting settle
+  await sleep(1500);
 
-  // Burst: keys 70 ms apart. A large document's typing pause is longer, so this is editing without preview
-  // work; a small one re-renders between keys (its pause is down to 30 ms), and that cost is included.
   await evaluate('window.__latency.length = 0; window.__stalls.length = 0');
   for (let i = 0; i < 30; i++) {
     await send('Input.insertText', { text: 'a' });
     await sleep(70);
   }
   await sleep(1500);
-  const burst = await evaluate('window.__latency.slice()');
-  const burstStalls = await evaluate('window.__stalls.slice()');
+  const burst = (await evaluate('window.__latency.slice()')) as number[];
+  const burstStalls = (await evaluate('window.__stalls.slice()')) as number[];
 
-  // Paced: a pause after each key lets the preview re-render every time.
   await evaluate('window.__latency.length = 0; window.__stalls.length = 0');
-  const previewMs = [];
-  const parseMs = [];
-  const readStatus = () => evaluate(`document.getElementById('st-render').textContent`);
+  const previewMs: number[] = [];
+  const parseMs: number[] = [];
+  const readStatus = () => evaluate(`document.getElementById('st-render').textContent`) as Promise<string | undefined>;
   for (let i = 0; i < 12; i++) {
     const before = await readStatus();
     await send('Input.insertText', { text: 'b' });
-    // Wait for this edit's render to report (parsing a large file can take over a second), not a fixed time.
     for (let waited = 0; waited < 10_000 && (await readStatus()) === before; waited += 100) await sleep(100);
     await sleep(300);
     const status = await readStatus();
@@ -132,9 +121,9 @@ async function measure(label) {
       parseMs.push(Number(match[2]));
     }
   }
-  const paced = await evaluate('window.__latency.slice()');
-  const pacedStalls = await evaluate('window.__stalls.slice()');
-  const docKb = Math.round((await evaluate(`document.querySelector('.cm-content').innerText.length`)) / 1024);
+  const paced = (await evaluate('window.__latency.slice()')) as number[];
+  const pacedStalls = (await evaluate('window.__stalls.slice()')) as number[];
+  const docKb = Math.round(Number(await evaluate(`document.querySelector('.cm-content').innerText.length`)) / 1024);
 
   console.log(
     JSON.stringify({

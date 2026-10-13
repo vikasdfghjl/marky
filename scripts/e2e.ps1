@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  End-to-end smoke test of the release app. e2e.mjs drives the page over the WebView2 DevTools
+  End-to-end smoke test of the release app. e2e.ts drives the page over the WebView2 DevTools
   protocol; this script adds what only Windows can see: the native menu, the close guard and
   crash recovery across relaunches. Native dialogs block automation, so their flows are not covered.
 .EXAMPLE
@@ -44,7 +44,7 @@ try {
   # Parenthesised: Invoke-RestMethod emits a JSON array as one object, and the filter needs its items.
   $devTools = Wait-Until { try { (Invoke-RestMethod 'http://127.0.0.1:9222/json' -TimeoutSec 2) | Where-Object type -eq 'page' } catch { $null } }
   if (-not $devTools) { throw 'Marky did not open its DevTools endpoint on port 9222 within 60 s.' }
-  node (Join-Path $PSScriptRoot 'e2e.mjs') $fixture $exe (Join-Path $dir 'second.md')
+  npx tsx (Join-Path $PSScriptRoot 'e2e.ts') $fixture $exe (Join-Path $dir 'second.md')
   if ($LASTEXITCODE -ne 0) { $script:failures++ }
 
   Add-Type -Namespace Win32 -Name Menu -MemberDefinition @'
@@ -81,7 +81,7 @@ public static void Close(IntPtr window) { PostMessage(window, 0x0010, IntPtr.Zer
   $bar = [Win32.Menu]::GetMenu($window)
   $menuCount = [Win32.Menu]::GetMenuItemCount($bar)
   Write-Check 'native menu bar has File, Edit, View, Help' ($menuCount -eq 4) "$menuCount top-level menus"
-  # e2e.mjs ends with editor and preview on, outline and auto-save off, and word wrap turned off by Alt+Z.
+  # e2e.ts ends with editor and preview on, outline and auto-save off, and word wrap turned off by Alt+Z.
   $ticks = @{
     editor   = [Win32.Menu]::IsChecked($bar, 2, 0)
     preview  = [Win32.Menu]::IsChecked($bar, 2, 1)

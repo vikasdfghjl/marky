@@ -8,34 +8,48 @@ const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const HEX = '(#[0-9a-f]{6})';
 const themedTokens = [...css.matchAll(new RegExp(`--([\\w-]+):\\s*light-dark\\(${HEX},\\s*${HEX}\\)`, 'gi'))];
 const plainTokens = [...css.matchAll(new RegExp(`--([\\w-]+):\\s*${HEX};`, 'gi'))];
-const light = Object.fromEntries([...plainTokens.map((m) => [m[1], m[2]]), ...themedTokens.map((m) => [m[1], m[2]])]);
-const dark = Object.fromEntries([...plainTokens.map((m) => [m[1], m[2]]), ...themedTokens.map((m) => [m[1], m[3]])]);
+const light: Record<string, string> = Object.fromEntries([
+  ...plainTokens.map((m) => [m[1], m[2]]),
+  ...themedTokens.map((m) => [m[1], m[2]]),
+]);
+const dark: Record<string, string> = Object.fromEntries([
+  ...plainTokens.map((m) => [m[1], m[2]]),
+  ...themedTokens.map((m) => [m[1], m[3]]),
+]);
 
-function luminance(hex) {
+function luminance(hex: string) {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
-  const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
-function ratio(a, b) {
+function ratio(a: string, b: string) {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
 }
 
 // [text token, background token] pairs as they are actually drawn.
 const syntax = ['hl-heading', 'hl-link', 'hl-code', 'hl-quote', 'hl-muted', 'hl-keyword', 'hl-string', 'hl-number', 'hl-comment', 'hl-fn', 'hl-type', 'hl-prop'];
-const pairs = [
-  ['fg', 'bg'], ['fg', 'active-line'], ['fg', 'selection'], ['fg', 'panel'], ['fg', 'code-bg'],
-  ['muted', 'bg'], ['muted', 'panel'], ['link', 'bg'],
-  ...syntax.flatMap((t) => [[t, 'bg'], [t, 'active-line']]),
-  // Preview code blocks sit on --code-bg; math errors are drawn in --error on --bg.
-  ...syntax.map((t) => [t, 'code-bg']),
+const pairs: [string, string][] = [
+  ['fg', 'bg'],
+  ['fg', 'active-line'],
+  ['fg', 'selection'],
+  ['fg', 'panel'],
+  ['fg', 'code-bg'],
+  ['muted', 'bg'],
+  ['muted', 'panel'],
+  ['link', 'bg'],
+  ...syntax.flatMap((t) => [[t, 'bg'], [t, 'active-line']] as [string, string][]),
+  ...syntax.map((t) => [t, 'code-bg'] as [string, string]),
   ['error', 'bg'],
-  // ==marked== text keeps its colour: body text, a blockquote, a link or a heading.
-  ['fg', 'mark'], ['muted', 'mark'], ['link', 'mark'], ['hl-heading', 'mark'], ['hl-link', 'mark'],
+  ['fg', 'mark'],
+  ['muted', 'mark'],
+  ['link', 'mark'],
+  ['hl-heading', 'mark'],
+  ['hl-link', 'mark'],
 ];
 
 let failures = 0;
-for (const [name, theme] of [['light', light], ['dark', dark]]) {
+for (const [name, theme] of [['light', light], ['dark', dark]] as const) {
   for (const [text, bg] of pairs) {
     const r = ratio(theme[text], theme[bg]);
     if (r >= 4.5) continue;

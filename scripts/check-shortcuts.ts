@@ -3,18 +3,18 @@
 // README table. This fails when the others disagree with SHORTCUTS. Exits 1 on any mismatch.
 import { readFileSync } from 'node:fs';
 
-const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 // Keys CodeMirror's own keymap handles; the menu only mirrors them (see SHORTCUTS in main.ts).
-const EDITOR_KEYS = { undo: 'Ctrl+Z', redo: 'Ctrl+Y', find: 'Ctrl+F' };
+const EDITOR_KEYS: Record<string, string> = { undo: 'Ctrl+Z', redo: 'Ctrl+Y', find: 'Ctrl+F' };
 
 const shortcutsBlock = read('src/main.ts').match(/const SHORTCUTS[^{]*\{([^}]*)\}/)?.[1];
 if (!shortcutsBlock) throw new Error('SHORTCUTS not found in src/main.ts');
-const keyOf = { ...EDITOR_KEYS };
+const keyOf: Record<string, string> = { ...EDITOR_KEYS };
 for (const [, key, command] of shortcutsBlock.matchAll(/'([^']+)': '([a-z-]+)'/g)) keyOf[command] = key;
 
-const problems = [];
-const expect = (where, command, shown) => {
+const problems: string[] = [];
+const expect = (where: string, command: string, shown: string) => {
   const key = keyOf[command];
   if (!key) problems.push(`${where}: shows ${shown} for "${command}", which has no shortcut`);
   else if (shown !== key) problems.push(`${where}: shows ${shown} for "${command}", but the shortcut is ${key}`);

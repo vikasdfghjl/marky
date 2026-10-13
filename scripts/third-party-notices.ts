@@ -2,23 +2,26 @@
 //   JS:   production npm packages (bundled into the frontend); dev tooling is excluded.
 //   Rust: crates linked into the Windows exe (normal edges, no proc-macros or build deps).
 // Identical license texts are printed once with every package that uses them.
-// Usage: node scripts/third-party-notices.mjs
+// Usage: tsx scripts/third-party-notices.ts
 import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+interface PackageRow {
+  id: string;
+  license: string;
+  folder?: string;
+}
+
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const LICENSE_FILE = /^(licen[cs]e|copying|notice)/i;
-const EXEC_OPTIONS = { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
-// npm is a .cmd shim on Windows, so it runs through the shell as one fixed string.
-const npm = (command) => execSync(`npm ${command}`, EXEC_OPTIONS);
-// cargo runs without a shell: its --format string contains '|'.
-const cargo = (args) => execFileSync('cargo', args, EXEC_OPTIONS);
+const EXEC_OPTIONS = { cwd: root, encoding: 'utf8' as const, maxBuffer: 64 * 1024 * 1024 };
+const npm = (command: string) => execSync(`npm ${command}`, EXEC_OPTIONS);
+const cargo = (args: string[]) => execFileSync('cargo', args, EXEC_OPTIONS);
 
-// Standard texts for crates that declare a license but ship no file; the copyright line comes from their authors.
-const TEMPLATES = {
+const TEMPLATES: Record<string, (holder: string) => string> = {
   MIT: (holder) => `MIT License
 
 Copyright (c) ${holder}
@@ -70,21 +73,19 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.`,
 };
 
-/** Copyright holder from a crate's Cargo.toml `authors`, else "the <name> authors". */
-function copyrightHolder(pkg) {
+function copyrightHolder(pkg: PackageRow) {
   const manifest = pkg.folder && existsSync(join(pkg.folder, 'Cargo.toml')) ? readFileSync(join(pkg.folder, 'Cargo.toml'), 'utf8') : '';
   const authors = manifest.match(/^authors\s*=\s*\[([^\]]*)\]/m)?.[1];
   const names = authors ? [...authors.matchAll(/"([^"<]+?)\s*(?:<[^>]*>)?"/g)].map((m) => m[1].trim()) : [];
   return names.length ? names.join(', ') : `the ${pkg.id.split(' ')[0]} authors`;
 }
 
-function templateText(pkg) {
+function templateText(pkg: PackageRow) {
   const spdx = Object.keys(TEMPLATES).find((id) => new RegExp(`\\b${id}\\b`).test(pkg.license));
   return spdx ? TEMPLATES[spdx](copyrightHolder(pkg)) : null;
 }
 
-/** License files in a package folder. Prefers the MIT text when the package offers MIT among alternatives. */
-function licenseTexts(folder, spdx) {
+function licenseTexts(folder: string, spdx: string) {
   if (!existsSync(folder)) return [];
   const files = readdirSync(folder).filter((f) => LICENSE_FILE.test(f)).sort();
   const mitFile = files.find((f) => /mit/i.test(f));
@@ -92,22 +93,32 @@ function licenseTexts(folder, spdx) {
   return chosen.map((f) => readFileSync(join(folder, f), 'utf8').replace(/\r\n/g, '\n').trim());
 }
 
-function npmPackages() {
-  const nodes = JSON.parse(npm('query .prod'));
+function npmPackages(): PackageRow[] {
+  const nodes = JSON.parse(npm('query .prod')) as { path?: string; name?: string; version?: string; license?: string }[];
   return nodes
     .filter((n) => n.path && n.path !== root && n.name)
     .map((n) => ({ id: `${n.name} ${n.version} (npm)`, license: n.license ?? 'UNKNOWN', folder: n.path }));
 }
 
-function cratePackages() {
+function cratePackages(): PackageRow[] {
   const registry = join(homedir(), '.cargo', 'registry', 'src');
   const indexes = existsSync(registry) ? readdirSync(registry).map((d) => join(registry, d)) : [];
   const lines = cargo([
-    'tree', '--manifest-path', 'src-tauri/Cargo.toml', '--target', 'x86_64-pc-windows-msvc',
-    '-e', 'normal,no-proc-macro', '--prefix', 'none', '--no-dedupe', '--format', '{p}|{l}',
+    'tree',
+    '--manifest-path',
+    'src-tauri/Cargo.toml',
+    '--target',
+    'x86_64-pc-windows-msvc',
+    '-e',
+    'normal,no-proc-macro',
+    '--prefix',
+    'none',
+    '--no-dedupe',
+    '--format',
+    '{p}|{l}',
   ]).split('\n');
 
-  const seen = new Map();
+  const seen = new Map<string, PackageRow>();
   for (const line of lines) {
     const [pkg, license] = line.trim().split('|');
     const match = pkg?.match(/^(\S+) v(\S+)/);
@@ -121,9 +132,8 @@ function cratePackages() {
 
 const packages = [...npmPackages(), ...cratePackages()].sort((a, b) => a.id.localeCompare(b.id));
 
-// Group packages by identical license text.
-const groups = new Map();
-const withoutFile = [];
+const groups = new Map<string, PackageRow[]>();
+const withoutFile: PackageRow[] = [];
 for (const pkg of packages) {
   const shipped = licenseTexts(pkg.folder ?? '', pkg.license);
   const fallback = shipped.length ? null : templateText(pkg);
@@ -134,7 +144,7 @@ for (const pkg of packages) {
   }
   const text = texts.join('\n\n---\n\n');
   if (!groups.has(text)) groups.set(text, []);
-  groups.get(text).push(pkg);
+  groups.get(text)!.push(pkg);
 }
 
 const rule = '='.repeat(80);
@@ -143,7 +153,7 @@ let out = `THIRD-PARTY NOTICES
 Marky (MIT, see LICENSE) includes the third-party software listed below.
 Source code for every package is available from its registry page:
 https://crates.io/crates/<name>/<version> for crates and https://www.npmjs.com/package/<name> for npm packages.
-${packages.length} packages. Generated by scripts/third-party-notices.mjs; do not edit by hand.
+${packages.length} packages. Generated by scripts/third-party-notices.ts; do not edit by hand.
 `;
 for (const [text, pkgs] of groups) {
   out += `\n${rule}\n${pkgs.map((p) => `${p.id}: ${p.license}`).join('\n')}\n${rule}\n\n${text}\n`;
@@ -154,4 +164,6 @@ if (withoutFile.length) {
 }
 
 writeFileSync(join(root, 'THIRD_PARTY_NOTICES.txt'), out);
-console.log(`THIRD_PARTY_NOTICES.txt: ${packages.length} packages, ${groups.size} distinct license texts, ${withoutFile.length} without a license file, ${(out.length / 1024).toFixed(0)} KB`);
+console.log(
+  `THIRD_PARTY_NOTICES.txt: ${packages.length} packages, ${groups.size} distinct license texts, ${withoutFile.length} without a license file, ${(out.length / 1024).toFixed(0)} KB`,
+);
