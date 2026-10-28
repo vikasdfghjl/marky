@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-29
+
 ### Added
 
 - The main window remembers its size, position and maximized state between sessions (`window.json` in the app's config folder).
@@ -12,12 +14,17 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ### Changed
 
+- The editor tabs, preview toggle, and open-file control are easier to discover and use with the keyboard; editor text defaults to 15 px.
+- Centralized `main.ts` timing, size, tab, toggle, and keyboard shortcut constants in `constants.ts`.
 - Harness scripts under `scripts/` are TypeScript (`tsx`, checked via `tsconfig.scripts.json`) instead of JavaScript.
 - Failed file watches (for example on some network shares) are recorded in `marky.log` instead of failing silently.
 - Removed TypeScript exports that were only used inside their own modules; added `knip.json` for optional dead-code scans (`npx knip`).
 
 ### Fixed
 
+- App-owned settings, recent-file, and window JSON files are size-limited when read, so unexpectedly large files cannot consume unbounded startup memory.
+- Opening paths whose names differ only by case now opens distinct tabs, including in case-sensitive Windows directories.
+- Crash-recovery snapshots that exceed the 8 MB limit no longer replace a previously recoverable snapshot; Marky reports when it cannot save recovery data.
 - Crash-recovery files larger than 8 MB are ignored at launch so a leftover snapshot cannot slow startup or use extra memory. A line is written to `marky.log` when that happens.
 
 ## [0.3.0] - 2026-10-09

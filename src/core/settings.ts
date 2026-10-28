@@ -19,7 +19,7 @@ export interface Settings {
 
 const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
-  fontSize: 14,
+  fontSize: 15,
   wordWrap: true,
   typographer: true,
   autoSave: false,
@@ -29,7 +29,7 @@ const DEFAULT_SETTINGS: Settings = {
   showOutline: false,
 };
 
-export const FONT_SIZES = [12, 13, 14, 15, 16, 18, 20] as const;
+export const FONT_SIZES = [13, 14, 15, 16, 18, 20] as const;
 
 /**
  * Reads saved settings defensively: the file may be missing, from an older version,

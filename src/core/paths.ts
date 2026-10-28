@@ -5,6 +5,11 @@ export const UNTITLED = 'Untitled';
 /** `scheme:` at the start of a link or image source (http:, file:, javascript:, …). */
 export const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 
+/** Exact spelling identifies paths because Windows directories may be case-sensitive. */
+export function samePathSpelling(a: string, b: string): boolean {
+  return a === b;
+}
+
 /** Last path segment, or "Untitled" for documents that were never saved. */
 export function fileName(path: string | null): string {
   if (!path) return UNTITLED;

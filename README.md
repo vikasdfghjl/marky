@@ -64,7 +64,7 @@ Not built: taskbar jump-list recent files.
 
 ## Accessibility
 
-WCAG 2.2 AA contrast (`tsx scripts/contrast.ts`, CI). Full keyboard use; preview focusable for scroll. CodeMirror exposes the editor to AT; status bar is not a live region. IME covered in e2e.
+WCAG 2.2 AA contrast (`tsx scripts/contrast.ts`, CI). Full keyboard use; preview focusable for scroll. Tabs support arrow keys, Home/End, Delete, and Ctrl+Tab; closing controls remain keyboard-accessible. CodeMirror exposes the editor to AT; status bar is not a live region. IME covered in e2e.
 
 ## Development
 

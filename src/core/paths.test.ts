@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fileName, folderOf, joinWindowsPath, UNTITLED } from './paths';
+import { fileName, folderOf, joinWindowsPath, samePathSpelling, UNTITLED } from './paths';
 
 describe('joinWindowsPath', () => {
   it('joins under a drive folder', () => {
@@ -16,6 +16,13 @@ describe('joinWindowsPath', () => {
   it('joins under a UNC share', () => {
     expect(joinWindowsPath('\\\\server\\share\\docs', 'a.md')).toBe('\\\\server\\share\\docs\\a.md');
     expect(joinWindowsPath('\\\\server\\share\\docs', '..\\a.md')).toBe('\\\\server\\share\\a.md');
+  });
+});
+
+describe('samePathSpelling', () => {
+  it('distinguishes paths that differ only by letter case', () => {
+    expect(samePathSpelling('C:\\docs\\a.md', 'C:\\docs\\A.md')).toBe(false);
+    expect(samePathSpelling('C:\\docs\\a.md', 'C:\\docs\\a.md')).toBe(true);
   });
 });
 
