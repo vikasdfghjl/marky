@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-29
+
 ### Added
 
 - The main window remembers its size, position and maximized state between sessions (`window.json` in the app's config folder).
