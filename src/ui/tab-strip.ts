@@ -82,6 +82,7 @@ export function createTabStrip(el: HTMLElement, handlers: TabStripHandlers) {
         ...tabs.map((tab) => {
           const item = document.createElement('div');
           item.className = 'tab-item';
+          item.classList.toggle('active', tab.id === activeId);
           item.setAttribute('role', 'presentation');
 
           const select = document.createElement('button');

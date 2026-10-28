@@ -344,7 +344,6 @@ body {
   align-items: center;
   max-width: 240px;
   min-width: 0;
-  border-right: 1px solid var(--border);
 }
 
 #tabs [role='tab'] {
@@ -363,10 +362,14 @@ body {
   white-space: nowrap;
 }
 
-#tabs [role='tab'][aria-selected='true'] {
+#tabs .tab-item.active {
   background: var(--bg);
   color: var(--fg);
   box-shadow: inset 0 2px 0 var(--link);
+}
+
+#tabs .tab-item.active [role='tab'] {
+  color: var(--fg);
 }
 
 #tabs [role='tab']:focus-visible,
@@ -387,7 +390,7 @@ body {
   padding: 0;
   border: 0;
   border-radius: 4px;
-  background: none;
+  background: transparent;
   color: inherit;
   font: inherit;
   line-height: 20px;
@@ -395,6 +398,7 @@ body {
   visibility: hidden;
 }
 
+.tab-item.active .tab-close,
 .tab-item:hover .tab-close,
 .tab-item:focus-within .tab-close,
 .tab-close.dirty {
@@ -402,7 +406,7 @@ body {
 }
 
 .tab-close:hover {
-  background: var(--active-line);
+  background: transparent;
 }
 
 /* The unsaved dot turns into × on hover or keyboard focus so the tab can still be closed. */
