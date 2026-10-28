@@ -18,6 +18,9 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ### Fixed
 
+- App-owned settings, recent-file, and window JSON files are size-limited when read, so unexpectedly large files cannot consume unbounded startup memory.
+- Opening paths whose names differ only by case now opens distinct tabs, including in case-sensitive Windows directories.
+- Crash-recovery snapshots that exceed the 8 MB limit no longer replace a previously recoverable snapshot; Marky reports when it cannot save recovery data.
 - Crash-recovery files larger than 8 MB are ignored at launch so a leftover snapshot cannot slow startup or use extra memory. A line is written to `marky.log` when that happens.
 
 ## [0.3.0] - 2026-10-09

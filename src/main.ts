@@ -13,7 +13,7 @@ import { listenForShortcuts } from './ui/shortcuts';
 import { createSettingsStore, readSettings, type Settings } from './core/settings';
 import { createSettingsPanel } from './ui/settings-panel';
 import { applyTheme } from './core/theme';
-import { URL_SCHEME, UNTITLED, fileName, folderOf } from './core/paths';
+import { URL_SCHEME, UNTITLED, fileName, folderOf, samePathSpelling } from './core/paths';
 import { api, type FileMeta, type OpenedFile, type Snapshot } from './platform/ipc';
 import { byId } from './ui/dom';
 import { createSerialQueue } from './core/serial-queue';
@@ -89,6 +89,7 @@ let pendingAnchor: string | null = null;
 const opens = createSerialQueue((err) => logError('open', err));
 /** In order, so an older snapshot never lands after a newer one or after the clear on save. */
 const snapshotWrites = createSerialQueue((err) => logError('recovery snapshot', err));
+let snapshotFailureNotified = false;
 /** In order, so an older settings save never overwrites a newer one. */
 const settingsWrites = createSerialQueue((err) => logError('settings save', err));
 const fileChangeTimers = new Map<number, number>();
@@ -139,9 +140,8 @@ function tabById(id: number): Tab {
   return tab;
 }
 
-/** Windows paths are case-insensitive. */
 function tabByPath(path: string): Tab | undefined {
-  return tabs.find((t) => t.path?.toLowerCase() === path.toLowerCase());
+  return tabs.find((tab) => tab.path !== null && samePathSpelling(tab.path, path));
 }
 
 function tabDoc(tab: Tab): Text {
@@ -615,12 +615,19 @@ function snapshotDirtyTabs() {
 /** Queues a recovery-file write. A failed write forgets the file's content, so the next snapshot retries. */
 function writeSnapshots(snapshots: Snapshot[], key: unknown[]) {
   snapshotKey = key;
-  snapshotWrites.push(() =>
-    api.snapshotBuffers(snapshots).catch((err) => {
+  snapshotWrites.push(async () => {
+    try {
+      await api.snapshotBuffers(snapshots);
+      snapshotFailureNotified = false;
+    } catch (err) {
       if (snapshotKey === key) snapshotKey = null;
+      if (!snapshotFailureNotified) {
+        snapshotFailureNotified = true;
+        await api.showError(`Could not save crash-recovery data. Your current changes may not be recoverable if Marky closes unexpectedly.\n\n${err}`);
+      }
       throw err; // the queue logs it
-    }),
-  );
+    }
+  });
 }
 
 function sameItems(a: unknown[], b: unknown[]): boolean {
