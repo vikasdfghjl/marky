@@ -47,6 +47,13 @@
   box-sizing: border-box;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: -2px;
+}
+
 html,
 body {
   height: 100%;
@@ -89,6 +96,10 @@ body {
 
 #editor {
   overflow: hidden;
+}
+
+#editor .cm-editor.cm-focused {
+  box-shadow: inset 0 0 0 2px var(--link);
 }
 
 #editor[hidden] {
@@ -203,14 +214,31 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.toolbar-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .toolbar-button {
   flex: 0 0 auto;
-  width: 34px;
+  width: 36px;
+  min-height: 36px;
   border: 0;
   background: none;
   color: var(--muted);
+  font: inherit;
   font-size: 17px;
   cursor: pointer;
+}
+
+.toolbar-label-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  padding: 0 10px;
+  font-size: 13px;
 }
 
 .toolbar-button:hover,
@@ -223,15 +251,24 @@ body {
   font-size: 20px;
 }
 
-/* Pushes the pane toggle and the gear to the right edge; + stays after the last tab, as in browsers. */
-#editor-toggle {
-  display: grid;
-  place-items: center;
-  margin-left: auto;
+#open-button {
   border-left: 1px solid var(--border);
 }
 
-#editor-toggle[aria-pressed='false'] .editor-pane {
+/* Pushes the pane toggles and gear right; + and Open stay beside the tabs. */
+#preview-toggle {
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+}
+
+#editor-toggle {
+  display: grid;
+  place-items: center;
+}
+
+#editor-toggle[aria-pressed='false'] .editor-pane,
+#preview-toggle[aria-pressed='false'] .preview-pane {
   opacity: 0;
 }
 
@@ -302,15 +339,27 @@ body {
   user-select: none;
 }
 
+#tabs .tab-item {
+  display: flex;
+  align-items: center;
+  max-width: 240px;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+
 #tabs [role='tab'] {
   display: flex;
   align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  padding: 5px 6px 5px 12px;
-  border-right: 1px solid var(--border);
+  min-width: 0;
+  min-height: 36px;
+  flex: 1;
+  padding: 4px 0 4px 12px;
+  border: 0;
+  background: none;
   color: var(--muted);
-  cursor: default;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   white-space: nowrap;
 }
 
@@ -320,14 +369,21 @@ body {
   box-shadow: inset 0 2px 0 var(--link);
 }
 
+#tabs [role='tab']:focus-visible,
+.tab-close:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: -2px;
+}
+
 .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .tab-close {
-  width: 20px;
-  height: 20px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   padding: 0;
   border: 0;
   border-radius: 4px;
@@ -339,8 +395,8 @@ body {
   visibility: hidden;
 }
 
-#tabs [role='tab']:hover .tab-close,
-#tabs [role='tab'][aria-selected='true'] .tab-close,
+.tab-item:hover .tab-close,
+.tab-item:focus-within .tab-close,
 .tab-close.dirty {
   visibility: visible;
 }
@@ -349,12 +405,14 @@ body {
   background: var(--active-line);
 }
 
-/* The unsaved dot turns into × on hover so the tab can still be closed. */
-.tab-close.dirty:hover {
+/* The unsaved dot turns into × on hover or keyboard focus so the tab can still be closed. */
+.tab-close.dirty:hover,
+.tab-close.dirty:focus-visible {
   font-size: 0;
 }
 
-.tab-close.dirty:hover::after {
+.tab-close.dirty:hover::after,
+.tab-close.dirty:focus-visible::after {
   content: '×';
   font-size: 13px;
 }

@@ -100,6 +100,7 @@ for (const button of document.querySelectorAll<HTMLElement>('[data-command]')) {
   button.addEventListener('click', () => runCommand(button.dataset.command ?? ''));
 }
 const editorToggle = byId('editor-toggle');
+const previewToggle = byId('preview-toggle') as HTMLButtonElement;
 
 const tabs: Tab[] = [];
 let active: Tab = createTab({ ...NEW_DOCUMENT }, editor.view.state);
@@ -301,6 +302,11 @@ function applyPaneVisibility() {
   const { showEditor, showPreview } = settings.get();
   const previewVisible = (showPreview || !showEditor) && editor.view.state.doc.length <= PREVIEW_AUTO_OFF_BYTES;
   const editorVisible = showEditor || !previewVisible;
+  previewToggle.setAttribute('aria-pressed', String(previewVisible));
+  previewToggle.setAttribute('aria-label', previewVisible ? 'Hide preview' : 'Show preview');
+  previewToggle.disabled = !editorVisible;
+  editorToggle.setAttribute('aria-pressed', String(editorVisible));
+  editorToggle.setAttribute('aria-label', editorVisible ? 'Hide editor' : 'Show editor');
   setEditorVisible(editorVisible);
   if (previewVisible === preview.visible) return;
   preview.setVisible(previewVisible);
@@ -310,6 +316,9 @@ function applyPaneVisibility() {
 function setEditorVisible(visible: boolean) {
   const pane = byId('editor');
   editorToggle.setAttribute('aria-pressed', String(visible));
+  editorToggle.setAttribute('aria-label', visible ? 'Hide editor' : 'Show editor');
+  previewToggle.setAttribute('aria-pressed', String(!visible));
+  previewToggle.setAttribute('aria-label', visible ? 'Show preview' : 'Hide preview');
   if (pane.hidden === !visible) return;
   const hadFocus = pane.contains(document.activeElement);
   pane.hidden = !visible;

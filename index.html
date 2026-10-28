@@ -10,7 +10,18 @@
     <header id="toolbar">
       <nav id="tabs"></nav>
       <button id="new-tab-button" class="toolbar-button" type="button" data-command="new" aria-label="New tab" title="New tab (Ctrl+N)">+</button>
-      <button id="editor-toggle" class="toolbar-button" type="button" data-command="toggle-editor" aria-label="Show editor" aria-pressed="true" title="Show or hide the editor (Ctrl+Shift+E)">
+      <button id="open-button" class="toolbar-button toolbar-label-button" type="button" data-command="open" title="Open a Markdown file (Ctrl+O)">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1.5 4.5h5l1.5 1.5h6.5v7h-13z" fill="none" stroke="currentColor" stroke-linejoin="round"/><path d="M1.5 4.5v-2h4l1.5 2" fill="none" stroke="currentColor" stroke-linejoin="round"/></svg>
+        <span>Open</span>
+      </button>
+      <button id="preview-toggle" class="toolbar-button" type="button" data-command="toggle-preview" aria-label="Hide preview" aria-pressed="true" title="Show or hide the preview (Ctrl+Shift+V)">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" />
+          <path class="preview-pane" d="M8 3h6v10H8z" fill="currentColor" />
+          <path d="M8 3v10" stroke="currentColor" />
+        </svg>
+      </button>
+      <button id="editor-toggle" class="toolbar-button" type="button" data-command="toggle-editor" aria-label="Hide editor" aria-pressed="true" title="Show or hide the editor (Ctrl+Shift+E)">
         <!-- A window with its left (editor) pane filled while the editor shows. -->
         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
           <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" />
@@ -22,7 +33,7 @@
     </header>
     <main id="app">
       <nav id="outline" aria-label="Outline" hidden></nav>
-      <section id="editor" aria-label="Editor"></section>
+      <section id="editor" role="tabpanel" aria-label="Editor" aria-labelledby="tab-1" tabindex="-1"></section>
       <!-- Focusable so keyboard users can scroll it with arrow keys / Page Up / Page Down. -->
       <article id="preview" class="markdown-body" aria-label="Preview" tabindex="0"></article>
     </main>

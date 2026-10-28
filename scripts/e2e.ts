@@ -139,6 +139,31 @@ check(
   'new tab is active and shows its file',
   !!(await waitFor(async () => (await activeTabIs('second.md')) && (await editorText()).includes('Second file'))),
 );
+check(
+  'toolbar pane toggles expose correct state',
+  (await evaluate(`document.querySelector('#editor-toggle').getAttribute('aria-pressed')`)) === 'true' &&
+    (await evaluate(`document.querySelector('#preview-toggle').getAttribute('aria-pressed')`)) === 'true',
+);
+const arrowResult = (await evaluate(`(() => {
+  const tab = document.querySelector('[role="tab"][aria-selected="true"]');
+  tab.focus();
+  const event = new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true });
+  tab.dispatchEvent(event);
+  return { selected: document.querySelector('[role="tab"][aria-selected="true"] .tab-title')?.textContent, prevented: event.defaultPrevented };
+})()`)) as { selected: string; prevented: boolean };
+check(
+  'arrow keys switch tabs and preserve text',
+  arrowResult.selected === 'fixture.md' && arrowResult.prevented && (await activeTab()) === 'fixture.md' && (await editorText()).includes('日本語'),
+  JSON.stringify(arrowResult),
+);
+const endResult = (await evaluate(`(() => {
+  const tab = document.querySelector('[role="tab"][aria-selected="true"]');
+  tab.focus();
+  const event = new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true });
+  tab.dispatchEvent(event);
+  return { selected: document.querySelector('[role="tab"][aria-selected="true"] .tab-title')?.textContent, prevented: event.defaultPrevented };
+})()`)) as { selected: string; prevented: boolean };
+check('End moves tab focus to the last tab', endResult.selected === 'second.md' && endResult.prevented, JSON.stringify(endResult));
 await pressCtrl('Tab', 'Tab', 9);
 check(
   'Ctrl+Tab switches back with the text intact',
