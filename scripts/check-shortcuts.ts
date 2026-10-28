@@ -1,15 +1,15 @@
-// Shortcuts are shown in four places that nothing ties together: SHORTCUTS in src/main.ts (the
-// behaviour), the native menu's hints in menu.rs, toolbar tooltips in index.html and the
-// README table. This fails when the others disagree with SHORTCUTS. Exits 1 on any mismatch.
+// Shortcuts are shown in four places: SHORTCUTS in src/core/constants.ts, the native menu's
+// hints in menu.rs, toolbar tooltips in index.html and the README table. This fails when they
+// disagree. Exits 1 on any mismatch.
 import { readFileSync } from 'node:fs';
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-// Keys CodeMirror's own keymap handles; the menu only mirrors them (see SHORTCUTS in main.ts).
+// Keys CodeMirror's own keymap handles; the menu only mirrors them (see constants.ts).
 const EDITOR_KEYS: Record<string, string> = { undo: 'Ctrl+Z', redo: 'Ctrl+Y', find: 'Ctrl+F' };
 
-const shortcutsBlock = read('src/main.ts').match(/const SHORTCUTS[^{]*\{([^}]*)\}/)?.[1];
-if (!shortcutsBlock) throw new Error('SHORTCUTS not found in src/main.ts');
+const shortcutsBlock = read('src/core/constants.ts').match(/export const SHORTCUTS[^{]*\{([^}]*)\}/)?.[1];
+if (!shortcutsBlock) throw new Error('SHORTCUTS not found in src/core/constants.ts');
 const keyOf: Record<string, string> = { ...EDITOR_KEYS };
 for (const [, key, command] of shortcutsBlock.matchAll(/'([^']+)': '([a-z-]+)'/g)) keyOf[command] = key;
 

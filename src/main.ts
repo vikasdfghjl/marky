@@ -1,6 +1,18 @@
 import type { EditorState, Text } from '@codemirror/state';
 import type { ViewUpdate } from '@codemirror/view';
 import { trimMemoryWhenIdle } from './core/idle';
+import {
+  AUTO_SAVE_DELAY_MS,
+  FILE_CHANGE_SETTLE_MS,
+  MAX_TABS,
+  MAX_TYPING_PAUSE_MS,
+  MENU_TOGGLES,
+  MIN_TYPING_PAUSE_MS,
+  NEW_DOCUMENT,
+  PREVIEW_AUTO_OFF_BYTES,
+  SHORTCUTS,
+  SNAPSHOT_INTERVAL_MS,
+} from './core/constants';
 import { measureColdStart } from './core/perf';
 import { createEditor } from './editor/editor';
 import { createPreview } from './preview/preview';
@@ -21,23 +33,6 @@ import { logError, logUncaughtErrors } from './core/error-log';
 
 logUncaughtErrors();
 
-/**
- * The preview waits for a pause in typing, scaled to how long the last parse took: a typical
- * document parses in a few milliseconds and keeps up almost at once, while a large one gets the
- * full pause, so its parsing never competes with typing.
- */
-const MAX_TYPING_PAUSE_MS = 150;
-const MIN_TYPING_PAUSE_MS = 30;
-/** Bursts of watcher events (a save is several events) collapse into one check. */
-const FILE_CHANGE_SETTLE_MS = 100;
-const SNAPSHOT_INTERVAL_MS = 30_000;
-/** PRD: files over 5 MB open with the preview off. */
-const PREVIEW_AUTO_OFF_BYTES = 5 * 1024 * 1024;
-/** Longer than the typing pause, so disk writes and watcher events stay rare. */
-const AUTO_SAVE_DELAY_MS = 1000;
-/** PRD F14. */
-const MAX_TABS = 20;
-
 /** What a tab shows: a file from disk, or a new untitled document (path null). */
 type EditorDocument = Pick<OpenedFile, 'text' | 'meta' | 'readOnly'> & {
   path: string | null;
@@ -56,14 +51,6 @@ interface Tab {
   state: EditorState;
   scrollTop: number;
 }
-
-const NEW_DOCUMENT: EditorDocument = {
-  path: null,
-  text: '',
-  meta: { bom: false, lineEnding: 'crlf' },
-  readOnly: false,
-  mtimeMs: null,
-};
 
 let typingPauseTimer: number | undefined;
 let autoSaveTimer: number | undefined;
@@ -356,15 +343,6 @@ function applySettings(current: Settings, changed: Partial<Settings>) {
   // autoSave and newFileLineEnding are read when they are used.
   syncMenuChecks(current, changed);
 }
-
-/** Native menu check items (ids in menu.rs) and the boolean setting each one toggles. */
-const MENU_TOGGLES = {
-  'toggle-editor': 'showEditor',
-  'toggle-preview': 'showPreview',
-  'toggle-outline': 'showOutline',
-  'toggle-word-wrap': 'wordWrap',
-  'toggle-auto-save': 'autoSave',
-} as const satisfies Record<string, keyof Settings>;
 
 function syncMenuChecks(current: Settings, changed: Partial<Settings>) {
   const checks = Object.entries(MENU_TOGGLES).filter(([, setting]) => setting in changed);
@@ -692,24 +670,6 @@ function runCommand(id: string) {
   noteActivity(); // native menu clicks are not DOM input
   void commands[id as CommandId]();
 }
-
-/** Undo, redo and find are left to CodeMirror's own keymap; the menu only mirrors them. */
-const SHORTCUTS: Record<string, CommandId> = {
-  'Ctrl+N': 'new',
-  'Ctrl+O': 'open',
-  'Ctrl+R': 'open-recent',
-  'Ctrl+S': 'save',
-  'Ctrl+Shift+S': 'save-as',
-  'Ctrl+W': 'close',
-  'Ctrl+H': 'replace',
-  'Ctrl+Shift+E': 'toggle-editor',
-  'Ctrl+Shift+V': 'toggle-preview',
-  'Ctrl+Shift+O': 'toggle-outline',
-  'Alt+Z': 'toggle-word-wrap',
-  'Ctrl+,': 'settings',
-  'Ctrl+Tab': 'next-tab',
-  'Ctrl+Shift+Tab': 'previous-tab',
-};
 
 listenForShortcuts(SHORTCUTS, runCommand);
 

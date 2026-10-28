@@ -12,6 +12,7 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ### Changed
 
+- Centralized `main.ts` timing, size, tab, toggle, and keyboard shortcut constants in `constants.ts`.
 - Harness scripts under `scripts/` are TypeScript (`tsx`, checked via `tsconfig.scripts.json`) instead of JavaScript.
 - Failed file watches (for example on some network shares) are recorded in `marky.log` instead of failing silently.
 - Removed TypeScript exports that were only used inside their own modules; added `knip.json` for optional dead-code scans (`npx knip`).
