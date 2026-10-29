@@ -315,10 +315,6 @@ function applyPaneVisibility() {
 
 function setEditorVisible(visible: boolean) {
   const pane = byId('editor');
-  editorToggle.setAttribute('aria-pressed', String(visible));
-  editorToggle.setAttribute('aria-label', visible ? 'Hide editor' : 'Show editor');
-  previewToggle.setAttribute('aria-pressed', String(!visible));
-  previewToggle.setAttribute('aria-label', visible ? 'Show preview' : 'Hide preview');
   if (pane.hidden === !visible) return;
   const hadFocus = pane.contains(document.activeElement);
   pane.hidden = !visible;

@@ -4,6 +4,10 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Fixed
+
+- The end-to-end smoke test now passes WebView2 debugging arguments through to its test window, and pane-toggle accessibility state stays correct when switching tabs.
+
 ## [0.3.2] - 2026-10-29
 
 ### Security
