@@ -5,7 +5,7 @@ use crate::diagnostics;
 use crate::files::{self, FileMeta};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 const RECENT_FILE: &str = "recent.json";
@@ -13,6 +13,9 @@ const RECENT_LIMIT: usize = 10;
 const SNAPSHOT_FILE: &str = "recovery.json";
 const SETTINGS_FILE: &str = "settings.json";
 const WINDOW_FILE: &str = "window.json";
+const RECENT_MAX_BYTES: u64 = 64 * 1024;
+const SETTINGS_MAX_BYTES: u64 = 16 * 1024;
+const WINDOW_MAX_BYTES: u64 = 1024;
 /// Refuse to load larger recovery files: parsing and IPC would dominate startup (see AGENTS.md).
 const RECOVERY_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -50,9 +53,41 @@ pub struct Snapshot {
     pub meta: FileMeta,
 }
 
+struct LimitedBuffer {
+    bytes: Vec<u8>,
+    max_bytes: usize,
+}
+
+impl LimitedBuffer {
+    fn new(max_bytes: usize) -> Self {
+        Self { bytes: Vec::new(), max_bytes }
+    }
+
+    fn into_inner(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl io::Write for LimitedBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let Some(size) = self.bytes.len().checked_add(bytes.len()) else {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "recovery snapshots exceed the 8 MB limit"));
+        };
+        if size > self.max_bytes {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "recovery snapshots exceed the 8 MB limit"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Most recent first. A missing or corrupt list reads as empty rather than failing startup.
 pub fn load_recent(config_dir: &Path) -> Vec<PathBuf> {
-    read_json(&config_dir.join(RECENT_FILE)).unwrap_or_default()
+    read_json(&config_dir.join(RECENT_FILE), RECENT_MAX_BYTES).unwrap_or_default()
 }
 
 pub fn push_recent(config_dir: &Path, path: &Path) -> io::Result<()> {
@@ -66,7 +101,7 @@ pub fn push_recent(config_dir: &Path, path: &Path) -> io::Result<()> {
 /// The user's settings as the frontend wrote them (it owns the schema and fills defaults).
 /// Missing or corrupt reads as `Null`, which means "all defaults".
 pub fn load_settings(config_dir: &Path) -> serde_json::Value {
-    read_json(&config_dir.join(SETTINGS_FILE)).unwrap_or(serde_json::Value::Null)
+    read_json(&config_dir.join(SETTINGS_FILE), SETTINGS_MAX_BYTES).unwrap_or(serde_json::Value::Null)
 }
 
 pub fn save_settings(config_dir: &Path, settings: &serde_json::Value) -> io::Result<()> {
@@ -74,7 +109,7 @@ pub fn save_settings(config_dir: &Path, settings: &serde_json::Value) -> io::Res
 }
 
 pub fn load_window_geometry(config_dir: &Path) -> Option<WindowGeometry> {
-    read_json(&config_dir.join(WINDOW_FILE)).filter(WindowGeometry::is_usable)
+    read_json(&config_dir.join(WINDOW_FILE), WINDOW_MAX_BYTES).filter(WindowGeometry::is_usable)
 }
 
 pub fn save_window_geometry(config_dir: &Path, geometry: &WindowGeometry) -> io::Result<()> {
@@ -85,7 +120,15 @@ pub fn save_window_geometry(config_dir: &Path, geometry: &WindowGeometry) -> io:
 }
 
 pub fn save_snapshots(data_dir: &Path, snapshots: &[Snapshot]) -> io::Result<()> {
-    write_json(&data_dir.join(SNAPSHOT_FILE), snapshots)
+    let mut buffer = LimitedBuffer::new(RECOVERY_MAX_BYTES as usize);
+    serde_json::to_writer(&mut buffer, snapshots).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("could not serialize recovery snapshots within the 8 MB limit: {e}; the existing recovery file was kept"),
+        )
+    })?;
+    fs::create_dir_all(data_dir)?;
+    files::write_atomically(&data_dir.join(SNAPSHOT_FILE), &buffer.into_inner())
 }
 
 /// Empty when there is nothing to recover. Also reads the single-snapshot format written before tabs.
@@ -100,10 +143,10 @@ pub fn read_snapshots(data_dir: &Path) -> Vec<Snapshot> {
             return vec![];
         }
     }
-    if let Some(snapshots) = read_json::<Vec<Snapshot>>(&path) {
+    if let Some(snapshots) = read_json::<Vec<Snapshot>>(&path, RECOVERY_MAX_BYTES) {
         return snapshots;
     }
-    read_json::<Snapshot>(&path).into_iter().collect()
+    read_json::<Snapshot>(&path, RECOVERY_MAX_BYTES).into_iter().collect()
 }
 
 pub fn clear_snapshots(data_dir: &Path) -> io::Result<()> {
@@ -113,8 +156,13 @@ pub fn clear_snapshots(data_dir: &Path) -> io::Result<()> {
     }
 }
 
-fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    let bytes = fs::read(path).ok()?;
+fn read_json<T: DeserializeOwned>(path: &Path, max_bytes: u64) -> Option<T> {
+    let file = fs::File::open(path).ok()?;
+    let mut bytes = Vec::with_capacity((max_bytes + 1).min(RECOVERY_MAX_BYTES) as usize);
+    file.take(max_bytes + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > max_bytes {
+        return None;
+    }
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -177,12 +225,46 @@ mod tests {
     }
 
     #[test]
+    fn oversized_snapshots_do_not_replace_the_existing_recovery_file() {
+        let dir = temp_dir("oversized-snapshots");
+        let existing = Snapshot {
+            path: Some("C:\\docs\\a.md".into()),
+            text: "recoverable\n".into(),
+            meta: FileMeta { bom: false, line_ending: LineEnding::Lf },
+        };
+        save_snapshots(&dir, &[existing]).unwrap();
+
+        let oversized = Snapshot {
+            path: None,
+            text: "x".repeat(RECOVERY_MAX_BYTES as usize),
+            meta: FileMeta { bom: false, line_ending: LineEnding::Lf },
+        };
+        let error = save_snapshots(&dir, &[oversized]).unwrap_err();
+
+        assert!(error.to_string().contains("exceed the 8 MB limit"));
+        assert_eq!(read_snapshots(&dir)[0].text, "recoverable\n");
+    }
+
+    #[test]
     fn settings_round_trip_and_default_to_null() {
         let dir = temp_dir("settings");
         assert_eq!(load_settings(&dir), serde_json::Value::Null);
         let settings = serde_json::json!({ "theme": "dark", "fontSize": 15 });
         save_settings(&dir, &settings).unwrap();
         assert_eq!(load_settings(&dir), settings);
+    }
+
+    #[test]
+    fn oversized_app_json_files_fall_back_to_defaults() {
+        let dir = temp_dir("oversized-app-json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(RECENT_FILE), vec![b' '; RECENT_MAX_BYTES as usize + 1]).unwrap();
+        fs::write(dir.join(SETTINGS_FILE), vec![b' '; SETTINGS_MAX_BYTES as usize + 1]).unwrap();
+        fs::write(dir.join(WINDOW_FILE), vec![b' '; WINDOW_MAX_BYTES as usize + 1]).unwrap();
+
+        assert!(load_recent(&dir).is_empty());
+        assert_eq!(load_settings(&dir), serde_json::Value::Null);
+        assert!(load_window_geometry(&dir).is_none());
     }
 
     #[test]

@@ -23,12 +23,21 @@ $fixture = Join-Path $dir 'fixture.md'
 # Settings persist between launches and are shared with an installed Marky: every run
 # starts from defaults, and the user's own settings come back afterwards.
 $settingsFile = Join-Path $env:APPDATA 'dev.marky.editor\settings.json'
-$settingsBackup = Join-Path $dir 'settings.backup.json'
-if (Test-Path $settingsFile) { Move-Item $settingsFile $settingsBackup }
-
-$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
+$recoveryFile = Join-Path $env:LOCALAPPDATA 'dev.marky.editor\recovery.json'
+$backupDir = Join-Path $env:TEMP "marky-e2e-backup-$([guid]::NewGuid())"
+$settingsBackup = Join-Path $backupDir 'settings.json'
+$recoveryBackup = Join-Path $backupDir 'recovery.json'
+$script:launchedApps = [Collections.Generic.List[System.Diagnostics.Process]]::new()
+$script:profileBackedUp = $false
+$previousBrowserArgs = [Environment]::GetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', 'Process')
 
 . (Join-Path $PSScriptRoot 'lib.ps1')
+
+function Start-Marky([string]$Document) {
+  $process = Start-Process $exe -ArgumentList "`"$Document`"" -PassThru
+  $script:launchedApps.Add($process)
+  $process
+}
 
 $script:failures = 0
 
@@ -39,12 +48,19 @@ function Write-Check($name, [bool]$ok, $detail = '') {
 }
 
 try {
+  New-Item -ItemType Directory -Force $backupDir | Out-Null
+  if (Test-Path $settingsFile) { Copy-Item $settingsFile $settingsBackup }
+  if (Test-Path $recoveryFile) { Copy-Item $recoveryFile $recoveryBackup }
+  $script:profileBackedUp = $true
+  Remove-Item $settingsFile, $recoveryFile -ErrorAction SilentlyContinue
+  $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
+
   # Run A: everything scriptable, ending with unsaved changes for the close guard.
-  $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
+  $app = Start-Marky $fixture
   # Parenthesised: Invoke-RestMethod emits a JSON array as one object, and the filter needs its items.
   $devTools = Wait-Until { try { (Invoke-RestMethod 'http://127.0.0.1:9222/json' -TimeoutSec 2) | Where-Object type -eq 'page' } catch { $null } }
   if (-not $devTools) { throw 'Marky did not open its DevTools endpoint on port 9222 within 60 s.' }
-  npx tsx (Join-Path $PSScriptRoot 'e2e.ts') $fixture $exe (Join-Path $dir 'second.md')
+  npx.cmd tsx (Join-Path $PSScriptRoot 'e2e.ts') $fixture $exe (Join-Path $dir 'second.md')
   if ($LASTEXITCODE -ne 0) { $script:failures++ }
 
   Add-Type -Namespace Win32 -Name Menu -MemberDefinition @'
@@ -115,9 +131,8 @@ public static IntPtr VisibleDialog(uint processId) {
   return found;
 }
 '@
-  $recoveryFile = Join-Path $env:LOCALAPPDATA 'dev.marky.editor\recovery.json'
   $recoveryDialog = { $dialog = [Win32.Dialogs]::VisibleDialog([uint32]$app.Id); if ($dialog -ne [IntPtr]::Zero) { $dialog } }
-  $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
+  $app = Start-Marky $fixture
   $dialog = Wait-Until $recoveryDialog
   Write-Check 'relaunch after a crash offers recovery' ([bool]$dialog)
 
@@ -130,13 +145,13 @@ public static IntPtr VisibleDialog(uint processId) {
   Write-Check 'closing the recovery prompt keeps the unsaved work' $kept
   if (-not $app.HasExited) { Stop-ProcessTree $app.Id }
 
-  $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
+  $app = Start-Marky $fixture
   Write-Check 'postponed recovery is offered again at the next launch' ([bool](Wait-Until $recoveryDialog))
   Stop-ProcessTree $app.Id
   Remove-Item $recoveryFile -ErrorAction SilentlyContinue
 
   # Run C: a clean window closes immediately.
-  $app = Start-Process $exe -ArgumentList "`"$fixture`"" -PassThru
+  $app = Start-Marky $fixture
   # Wait until the file is showing, so this closes a fully loaded window.
   $window = Wait-Until {
     $handle = [Win32.Menu]::MainWindow([uint32]$app.Id)
@@ -147,8 +162,47 @@ public static IntPtr VisibleDialog(uint processId) {
   if (-not $app.HasExited) { Stop-ProcessTree $app.Id }
 }
 finally {
-  Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
-  Remove-Item $settingsFile -ErrorAction SilentlyContinue
-  if (Test-Path $settingsBackup) { Move-Item $settingsBackup $settingsFile }
+  $cleanupFailed = $false
+  foreach ($process in $script:launchedApps) {
+    try {
+      if (-not $process.HasExited) { Stop-ProcessTree $process.Id }
+    } catch {
+      Write-Warning "Could not stop E2E process $($process.Id): $_"
+      $cleanupFailed = $true
+    }
+  }
+  try {
+    if ($null -eq $previousBrowserArgs) {
+      Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+    } else {
+      $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $previousBrowserArgs
+    }
+  } catch {
+    Write-Warning "Could not restore WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: $_"
+    $cleanupFailed = $true
+  }
+  if ($script:profileBackedUp -and -not $cleanupFailed) {
+    foreach ($item in @(
+      @{ Path = $settingsFile; Backup = $settingsBackup },
+      @{ Path = $recoveryFile; Backup = $recoveryBackup }
+    )) {
+      try {
+        Remove-Item $item.Path -ErrorAction SilentlyContinue
+        if (Test-Path $item.Backup) { Copy-Item $item.Backup $item.Path -Force }
+      } catch {
+        Write-Warning "Could not restore $($item.Path); backup remains at $($item.Backup): $_"
+        $cleanupFailed = $true
+      }
+    }
+  }
+  if ($cleanupFailed) {
+    Write-Warning "E2E cleanup was incomplete; preserve backup directory: $backupDir"
+  } else {
+    try {
+      Remove-Item $backupDir -Recurse -Force -ErrorAction Stop
+    } catch {
+      Write-Warning "Could not remove E2E backup directory $backupDir`: $_"
+    }
+  }
 }
 exit $script:failures

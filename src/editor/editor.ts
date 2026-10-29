@@ -46,7 +46,7 @@ const theme = EditorView.theme({
   '&': { height: '100%', color: 'var(--fg)', backgroundColor: 'var(--bg)' },
   '&.cm-focused': { outline: 'none' },
   // Font size is a CSS variable (settings), so it applies to every tab's state at once.
-  '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: 'var(--editor-font-size, 14px)', lineHeight: '1.6', padding: '16px 0' },
+  '.cm-scroller': { fontFamily: 'var(--font-mono)', fontSize: 'var(--editor-font-size, 15px)', lineHeight: '1.6', padding: '16px 0' },
   '.cm-content': { caretColor: 'var(--fg)', padding: '0 24px', maxWidth: '100ch' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--fg)' },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground':

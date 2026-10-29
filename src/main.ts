@@ -1,6 +1,18 @@
 import type { EditorState, Text } from '@codemirror/state';
 import type { ViewUpdate } from '@codemirror/view';
 import { trimMemoryWhenIdle } from './core/idle';
+import {
+  AUTO_SAVE_DELAY_MS,
+  FILE_CHANGE_SETTLE_MS,
+  MAX_TABS,
+  MAX_TYPING_PAUSE_MS,
+  MENU_TOGGLES,
+  MIN_TYPING_PAUSE_MS,
+  NEW_DOCUMENT,
+  PREVIEW_AUTO_OFF_BYTES,
+  SHORTCUTS,
+  SNAPSHOT_INTERVAL_MS,
+} from './core/constants';
 import { measureColdStart } from './core/perf';
 import { createEditor } from './editor/editor';
 import { createPreview } from './preview/preview';
@@ -13,30 +25,13 @@ import { listenForShortcuts } from './ui/shortcuts';
 import { createSettingsStore, readSettings, type Settings } from './core/settings';
 import { createSettingsPanel } from './ui/settings-panel';
 import { applyTheme } from './core/theme';
-import { URL_SCHEME, UNTITLED, fileName, folderOf } from './core/paths';
+import { URL_SCHEME, UNTITLED, fileName, folderOf, samePathSpelling } from './core/paths';
 import { api, type FileMeta, type OpenedFile, type Snapshot } from './platform/ipc';
 import { byId } from './ui/dom';
 import { createSerialQueue } from './core/serial-queue';
 import { logError, logUncaughtErrors } from './core/error-log';
 
 logUncaughtErrors();
-
-/**
- * The preview waits for a pause in typing, scaled to how long the last parse took: a typical
- * document parses in a few milliseconds and keeps up almost at once, while a large one gets the
- * full pause, so its parsing never competes with typing.
- */
-const MAX_TYPING_PAUSE_MS = 150;
-const MIN_TYPING_PAUSE_MS = 30;
-/** Bursts of watcher events (a save is several events) collapse into one check. */
-const FILE_CHANGE_SETTLE_MS = 100;
-const SNAPSHOT_INTERVAL_MS = 30_000;
-/** PRD: files over 5 MB open with the preview off. */
-const PREVIEW_AUTO_OFF_BYTES = 5 * 1024 * 1024;
-/** Longer than the typing pause, so disk writes and watcher events stay rare. */
-const AUTO_SAVE_DELAY_MS = 1000;
-/** PRD F14. */
-const MAX_TABS = 20;
 
 /** What a tab shows: a file from disk, or a new untitled document (path null). */
 type EditorDocument = Pick<OpenedFile, 'text' | 'meta' | 'readOnly'> & {
@@ -56,14 +51,6 @@ interface Tab {
   state: EditorState;
   scrollTop: number;
 }
-
-const NEW_DOCUMENT: EditorDocument = {
-  path: null,
-  text: '',
-  meta: { bom: false, lineEnding: 'crlf' },
-  readOnly: false,
-  mtimeMs: null,
-};
 
 let typingPauseTimer: number | undefined;
 let autoSaveTimer: number | undefined;
@@ -89,6 +76,7 @@ let pendingAnchor: string | null = null;
 const opens = createSerialQueue((err) => logError('open', err));
 /** In order, so an older snapshot never lands after a newer one or after the clear on save. */
 const snapshotWrites = createSerialQueue((err) => logError('recovery snapshot', err));
+let snapshotFailureNotified = false;
 /** In order, so an older settings save never overwrites a newer one. */
 const settingsWrites = createSerialQueue((err) => logError('settings save', err));
 const fileChangeTimers = new Map<number, number>();
@@ -112,6 +100,7 @@ for (const button of document.querySelectorAll<HTMLElement>('[data-command]')) {
   button.addEventListener('click', () => runCommand(button.dataset.command ?? ''));
 }
 const editorToggle = byId('editor-toggle');
+const previewToggle = byId('preview-toggle') as HTMLButtonElement;
 
 const tabs: Tab[] = [];
 let active: Tab = createTab({ ...NEW_DOCUMENT }, editor.view.state);
@@ -139,9 +128,8 @@ function tabById(id: number): Tab {
   return tab;
 }
 
-/** Windows paths are case-insensitive. */
 function tabByPath(path: string): Tab | undefined {
-  return tabs.find((t) => t.path?.toLowerCase() === path.toLowerCase());
+  return tabs.find((tab) => tab.path !== null && samePathSpelling(tab.path, path));
 }
 
 function tabDoc(tab: Tab): Text {
@@ -314,6 +302,11 @@ function applyPaneVisibility() {
   const { showEditor, showPreview } = settings.get();
   const previewVisible = (showPreview || !showEditor) && editor.view.state.doc.length <= PREVIEW_AUTO_OFF_BYTES;
   const editorVisible = showEditor || !previewVisible;
+  previewToggle.setAttribute('aria-pressed', String(previewVisible));
+  previewToggle.setAttribute('aria-label', previewVisible ? 'Hide preview' : 'Show preview');
+  previewToggle.disabled = !editorVisible;
+  editorToggle.setAttribute('aria-pressed', String(editorVisible));
+  editorToggle.setAttribute('aria-label', editorVisible ? 'Hide editor' : 'Show editor');
   setEditorVisible(editorVisible);
   if (previewVisible === preview.visible) return;
   preview.setVisible(previewVisible);
@@ -323,6 +316,9 @@ function applyPaneVisibility() {
 function setEditorVisible(visible: boolean) {
   const pane = byId('editor');
   editorToggle.setAttribute('aria-pressed', String(visible));
+  editorToggle.setAttribute('aria-label', visible ? 'Hide editor' : 'Show editor');
+  previewToggle.setAttribute('aria-pressed', String(!visible));
+  previewToggle.setAttribute('aria-label', visible ? 'Show preview' : 'Hide preview');
   if (pane.hidden === !visible) return;
   const hadFocus = pane.contains(document.activeElement);
   pane.hidden = !visible;
@@ -356,15 +352,6 @@ function applySettings(current: Settings, changed: Partial<Settings>) {
   // autoSave and newFileLineEnding are read when they are used.
   syncMenuChecks(current, changed);
 }
-
-/** Native menu check items (ids in menu.rs) and the boolean setting each one toggles. */
-const MENU_TOGGLES = {
-  'toggle-editor': 'showEditor',
-  'toggle-preview': 'showPreview',
-  'toggle-outline': 'showOutline',
-  'toggle-word-wrap': 'wordWrap',
-  'toggle-auto-save': 'autoSave',
-} as const satisfies Record<string, keyof Settings>;
 
 function syncMenuChecks(current: Settings, changed: Partial<Settings>) {
   const checks = Object.entries(MENU_TOGGLES).filter(([, setting]) => setting in changed);
@@ -615,12 +602,19 @@ function snapshotDirtyTabs() {
 /** Queues a recovery-file write. A failed write forgets the file's content, so the next snapshot retries. */
 function writeSnapshots(snapshots: Snapshot[], key: unknown[]) {
   snapshotKey = key;
-  snapshotWrites.push(() =>
-    api.snapshotBuffers(snapshots).catch((err) => {
+  snapshotWrites.push(async () => {
+    try {
+      await api.snapshotBuffers(snapshots);
+      snapshotFailureNotified = false;
+    } catch (err) {
       if (snapshotKey === key) snapshotKey = null;
+      if (!snapshotFailureNotified) {
+        snapshotFailureNotified = true;
+        await api.showError(`Could not save crash-recovery data. Your current changes may not be recoverable if Marky closes unexpectedly.\n\n${err}`);
+      }
       throw err; // the queue logs it
-    }),
-  );
+    }
+  });
 }
 
 function sameItems(a: unknown[], b: unknown[]): boolean {
@@ -685,24 +679,6 @@ function runCommand(id: string) {
   noteActivity(); // native menu clicks are not DOM input
   void commands[id as CommandId]();
 }
-
-/** Undo, redo and find are left to CodeMirror's own keymap; the menu only mirrors them. */
-const SHORTCUTS: Record<string, CommandId> = {
-  'Ctrl+N': 'new',
-  'Ctrl+O': 'open',
-  'Ctrl+R': 'open-recent',
-  'Ctrl+S': 'save',
-  'Ctrl+Shift+S': 'save-as',
-  'Ctrl+W': 'close',
-  'Ctrl+H': 'replace',
-  'Ctrl+Shift+E': 'toggle-editor',
-  'Ctrl+Shift+V': 'toggle-preview',
-  'Ctrl+Shift+O': 'toggle-outline',
-  'Alt+Z': 'toggle-word-wrap',
-  'Ctrl+,': 'settings',
-  'Ctrl+Tab': 'next-tab',
-  'Ctrl+Shift+Tab': 'previous-tab',
-};
 
 listenForShortcuts(SHORTCUTS, runCommand);
 
