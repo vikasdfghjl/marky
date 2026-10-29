@@ -4,6 +4,18 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-29
+
+### Fixed
+
+- The end-to-end smoke test now passes WebView2 debugging arguments through to its test window, and pane-toggle accessibility state stays correct when switching tabs.
+
+## [0.3.2] - 2026-10-29
+
+### Security
+
+- Update DOMPurify and markdown-it to patched releases to resolve npm audit advisories.
+
 ## [0.3.1] - 2026-10-29
 
 ### Added
