@@ -58,12 +58,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
-@chevrotain/cst-dts-gen 11.1.2 (npm): Apache-2.0
-@chevrotain/gast 11.1.2 (npm): Apache-2.0
-@chevrotain/regexp-to-ast 11.1.2 (npm): Apache-2.0
-@chevrotain/types 11.1.2 (npm): Apache-2.0
-@chevrotain/utils 11.1.2 (npm): Apache-2.0
-chevrotain 11.1.2 (npm): Apache-2.0
+@chevrotain/cst-dts-gen 13.2.0 (npm): Apache-2.0
+@chevrotain/gast 13.2.0 (npm): Apache-2.0
+@chevrotain/regexp-to-ast 13.2.0 (npm): Apache-2.0
+@chevrotain/types 13.2.0 (npm): Apache-2.0
+@chevrotain/utils 13.2.0 (npm): Apache-2.0
+chevrotain 13.2.0 (npm): Apache-2.0
 ================================================================================
 
 Apache License
@@ -594,7 +594,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ================================================================================
-@mermaid-js/parser 2.0.0 (npm): MIT
+@mermaid-js/parser 2.0.1 (npm): MIT
 ================================================================================
 
 The MIT License (MIT)
@@ -4064,7 +4064,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
 
 ================================================================================
-mermaid 12.0.0 (npm): MIT
+mermaid 12.2.0 (npm): MIT
 ================================================================================
 
 The MIT License (MIT)
