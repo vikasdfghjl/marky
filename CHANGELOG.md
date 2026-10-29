@@ -4,6 +4,10 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Security
+
+- Update DOMPurify and markdown-it to patched releases to resolve npm audit advisories.
+
 ## [0.3.1] - 2026-10-29
 
 ### Added
