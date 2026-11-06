@@ -10,7 +10,7 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use gpui::{FontStyle, FontWeight, HighlightStyle, StrikethroughStyle, px, rgb};
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
 use tree_sitter::Language;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
@@ -31,6 +31,8 @@ pub enum Token {
     Function,
     Type,
     Property,
+    /// `==marked==`: the app's `--mark` background.
+    Mark,
 }
 
 impl Token {
@@ -53,6 +55,7 @@ impl Token {
             Token::Function => color(0x8250df, 0xd2a8ff),
             Token::Type => color(0x953800, 0xffa657),
             Token::Property => color(0x0550ae, 0x79c0ff),
+            Token::Mark => HighlightStyle { background_color: Some(rgb(if dark { 0x4b3218 } else { 0xffeed8 }).into()), ..HighlightStyle::default() },
         }
     }
 }
@@ -332,9 +335,9 @@ pub fn source_spans(text: &str) -> Vec<Vec<Span>> {
         }
     };
 
-    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
+    // The preview's options, so both panes agree on what is markup.
     let mut fence: Option<(String, Range<usize>, Option<Range<usize>>)> = None;
-    for (event, range) in Parser::new_ext(text, options).into_offset_iter() {
+    for (event, range) in Parser::new_ext(text, crate::preview::options()).into_offset_iter() {
         match event {
             Event::Start(Tag::Heading { .. }) => add(range, Token::Heading),
             Event::Start(Tag::Emphasis) => add(range, Token::Emphasis),
@@ -363,6 +366,15 @@ pub fn source_spans(text: &str) -> Vec<Vec<Span>> {
                     });
                 }
             }
+            // `==marked==` with the same rule as the preview, found in the source text itself.
+            Event::Text(_) => {
+                let mut from = range.start;
+                while let Some((open, close)) = crate::preview::find_mark(&text[from..range.end]) {
+                    add(from + open..from + close + 2, Token::Mark);
+                    from += close + 2;
+                }
+            }
+            Event::FootnoteReference(_) => add(range, Token::Link),
             Event::End(pulldown_cmark::TagEnd::CodeBlock) => {
                 let Some((info, block, content)) = fence.take() else { continue };
                 let content = content.unwrap_or(block.end..block.end);

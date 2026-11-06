@@ -1,25 +1,49 @@
-//! Headings, paragraphs, quotes, lists, emphasis, code, display math, and Mermaid fences.
+//! The preview's blocks from a pulldown-cmark parse: headings, paragraphs, quotes, lists and task
+//! lists, code, tables, footnotes, definition lists, images, display math and Mermaid fences, with
+//! inline emphasis, strikethrough, code, links, `~sub~`, `^sup^` and `==mark==`.
 //! Math is the TeX source: there is no DOM for KaTeX.
 //! A diagram is the Mermaid source: this window does not run Mermaid.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 use crate::syntax::{self, Span};
 
+/// The syntax the app renders that pulldown-cmark knows: CommonMark, GFM tables, task lists and
+/// strikethrough, footnotes, definition lists, `~sub~` and `^sup^` (one tilde is subscript, two are
+/// strikethrough, as in the app), and frontmatter, which is metadata rather than a rule and a heading.
+pub fn options() -> Options {
+    Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TABLES
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_SUPERSCRIPT
+        | Options::ENABLE_SUBSCRIPT
+        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Heading(u8),
     Paragraph,
     Quote,
-    /// `ordered` is the item number. `None` is a bullet.
-    Item { ordered: Option<u64> },
+    /// `ordered` is the item number (`None` is a bullet); `checked` marks a task list item.
+    Item { ordered: Option<u64>, checked: Option<bool> },
     Code,
     Math,
     Diagram,
     /// The cells are in `Block::table`.
     Table,
+    /// A footnote's text; the number is the one its references show.
+    Footnote(u32),
+    /// A definition list's term, and one of its definitions.
+    Term,
+    Definition,
+    /// A paragraph that is only an image. The path or URL is in `Block::src`, the alt text in `text`.
+    Image,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,12 +60,17 @@ pub struct Table {
     pub rows: Vec<Vec<Vec<Run>>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct RunStyle {
     pub bold: bool,
     pub italic: bool,
     pub strike: bool,
     pub code: bool,
+    pub sub: bool,
+    pub sup: bool,
+    pub mark: bool,
+    /// The link's destination, as written: a URL, a relative path, or `#fn:N` for a footnote reference.
+    pub link: Option<Arc<str>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,17 +90,28 @@ pub struct Block {
     pub table: Option<Table>,
     /// tree-sitter colours for a code block in a known language, relative to `text`.
     pub code: Option<Arc<Vec<Span>>>,
+    /// An image block's path or URL, as written.
+    pub src: Option<String>,
 }
 
 #[derive(Clone, Copy)]
 enum Open {
     Heading(u8),
     Paragraph,
-    Item { ordered: Option<u64> },
+    Item { ordered: Option<u64>, checked: Option<bool> },
     Code,
     Math,
     Diagram,
     Table,
+    Term,
+    Definition,
+}
+
+impl Open {
+    /// Containers whose paragraphs are part of the block itself (a tight list item, a definition).
+    fn holds_paragraphs(self) -> bool {
+        matches!(self, Open::Item { .. } | Open::Definition)
+    }
 }
 
 struct Parse {
@@ -85,6 +125,12 @@ struct Parse {
     table: Option<Table>,
     /// The open code block's info string (```rust → "rust").
     code_info: String,
+    /// Footnote numbers by label, in order of first use, reference or definition.
+    footnotes: HashMap<String, u32>,
+    /// The footnote definition being read; its paragraphs are footnote blocks.
+    footnote: Option<u32>,
+    /// The image being read: its destination, and where its alt text starts in `runs`.
+    image: Option<(String, usize)>,
 }
 
 /// Line numbers for block starts. Blocks start in document order, so each lookup counts only the
@@ -120,14 +166,15 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
         lines: LineCounter::default(),
         table: None,
         code_info: String::new(),
+        footnotes: HashMap::new(),
+        footnote: None,
+        image: None,
     };
-    // Frontmatter is metadata, as in the app's preview; without the option it parses as a rule and a heading.
-    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
 
-    for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
+    for (event, range) in Parser::new_ext(markdown, options()).into_offset_iter() {
         match event {
             Event::Start(Tag::Heading { level, .. }) => parse.begin(Open::Heading(level as u8), markdown, range.start, &mut out),
-            Event::Start(Tag::Paragraph) if !matches!(parse.open, Some(Open::Item { .. })) => {
+            Event::Start(Tag::Paragraph) if !parse.open.is_some_and(Open::holds_paragraphs) => {
                 parse.begin(Open::Paragraph, markdown, range.start, &mut out);
             }
             Event::Start(Tag::BlockQuote(_)) => parse.quote += 1,
@@ -142,7 +189,12 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
                     *next = Some(number + 1);
                     Some(number)
                 });
-                parse.begin(Open::Item { ordered }, markdown, range.start, &mut out);
+                parse.begin(Open::Item { ordered, checked: None }, markdown, range.start, &mut out);
+            }
+            Event::TaskListMarker(done) => {
+                if let Some(Open::Item { checked, .. }) = parse.open.as_mut() {
+                    *checked = Some(done);
+                }
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 let info = match &kind {
@@ -163,6 +215,30 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
             Event::End(TagEnd::Strong) => parse.style.bold = false,
             Event::Start(Tag::Strikethrough) => parse.style.strike = true,
             Event::End(TagEnd::Strikethrough) => parse.style.strike = false,
+            Event::Start(Tag::Subscript) => parse.style.sub = true,
+            Event::End(TagEnd::Subscript) => parse.style.sub = false,
+            Event::Start(Tag::Superscript) => parse.style.sup = true,
+            Event::End(TagEnd::Superscript) => parse.style.sup = false,
+            Event::Start(Tag::Link { dest_url, .. }) => parse.style.link = Some(Arc::from(dest_url.as_ref())),
+            Event::End(TagEnd::Link) => parse.style.link = None,
+            Event::Start(Tag::Image { dest_url, .. }) => parse.image = Some((dest_url.to_string(), parse.runs.len())),
+            Event::End(TagEnd::Image) => parse.end_image(),
+            Event::FootnoteReference(label) if parse.open.is_some() => {
+                let number = parse.footnote_number(&label);
+                let style = RunStyle { sup: true, link: Some(Arc::from(format!("#fn:{number}"))), ..RunStyle::default() };
+                parse.runs.push(Run { text: format!("[{number}]"), style });
+            }
+            Event::Start(Tag::FootnoteDefinition(label)) => {
+                parse.finish(&mut out);
+                parse.footnote = Some(parse.footnote_number(&label));
+            }
+            Event::End(TagEnd::FootnoteDefinition) => {
+                parse.finish(&mut out);
+                parse.footnote = None;
+            }
+            Event::Start(Tag::DefinitionListTitle) => parse.begin(Open::Term, markdown, range.start, &mut out),
+            Event::Start(Tag::DefinitionListDefinition) => parse.begin(Open::Definition, markdown, range.start, &mut out),
+            Event::End(TagEnd::DefinitionListTitle) | Event::End(TagEnd::DefinitionListDefinition) => parse.finish(&mut out),
             Event::Start(Tag::Table(align)) => {
                 parse.begin(Open::Table, markdown, range.start, &mut out);
                 parse.table = Some(Table { align: align.iter().map(align_of).collect(), rows: Vec::new() });
@@ -174,7 +250,7 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
             }
             Event::Start(Tag::TableCell) => parse.runs.clear(),
             Event::End(TagEnd::TableCell) => {
-                let cell = std::mem::take(&mut parse.runs);
+                let cell = inline_extensions(std::mem::take(&mut parse.runs));
                 if let Some(row) = parse.table.as_mut().and_then(|table| table.rows.last_mut()) {
                     row.push(cell);
                 }
@@ -187,12 +263,12 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
                     parse.runs = vec![Run { text: math, style: RunStyle::default() }];
                     parse.open = Some(Open::Math);
                 }
-                if !matches!(parse.open, Some(Open::Item { .. })) {
+                if !parse.open.is_some_and(Open::holds_paragraphs) {
                     parse.finish(&mut out);
                 }
             }
             Event::End(TagEnd::Item) => parse.finish(&mut out),
-            Event::Text(fragment) if parse.open.is_some() => parse.push(&fragment, false),
+            Event::Text(fragment) if parse.open.is_some() => parse.push_text(&fragment),
             Event::Code(fragment) if parse.open.is_some() => parse.push(&fragment, true),
             Event::SoftBreak | Event::HardBreak if matches!(parse.open, Some(Open::Code | Open::Math | Open::Diagram)) => parse.push("\n", false),
             Event::SoftBreak | Event::HardBreak if parse.open.is_some() => parse.push(" ", false),
@@ -212,11 +288,20 @@ impl Parse {
         self.line = self.lines.line_at(markdown, byte);
     }
 
+    fn footnote_number(&mut self, label: &str) -> u32 {
+        let next = self.footnotes.len() as u32 + 1;
+        *self.footnotes.entry(label.to_string()).or_insert(next)
+    }
+
+    fn push_text(&mut self, text: &str) {
+        self.push(text, false);
+    }
+
     fn push(&mut self, text: &str, code: bool) {
         if text.is_empty() {
             return;
         }
-        let mut style = self.style;
+        let mut style = self.style.clone();
         style.code = code;
         if let Some(last) = self.runs.last_mut() {
             if last.style == style {
@@ -225,6 +310,16 @@ impl Parse {
             }
         }
         self.runs.push(Run { text: text.to_string(), style });
+    }
+
+    /// An image's alt text was pushed as runs; they become one italic run carrying the destination,
+    /// so a paragraph that is only an image can become an image block.
+    fn end_image(&mut self) {
+        let Some((src, start)) = self.image.take() else { return };
+        let alt = plain_text(&self.runs[start.min(self.runs.len())..]);
+        self.runs.truncate(start);
+        let style = RunStyle { italic: true, link: Some(Arc::from(format!("image:{src}"))), ..RunStyle::default() };
+        self.runs.push(Run { text: alt, style });
     }
 
     fn plain(&self) -> String {
@@ -238,13 +333,24 @@ impl Parse {
             return;
         }
         let mut runs = std::mem::take(&mut self.runs);
+        if !matches!(open, Open::Code | Open::Math | Open::Diagram) {
+            runs = inline_extensions(runs);
+        }
+        // A paragraph that is only an image is drawn as the image.
+        if let (Open::Paragraph, [run]) = (open, runs.as_slice()) {
+            if let Some(src) = run.style.link.as_deref().and_then(|link| link.strip_prefix("image:")) {
+                let src = Some(src.to_string());
+                out.push(Block { kind: Kind::Image, text: run.text.clone(), runs: Vec::new(), line: self.line, table: None, code: None, src });
+                return;
+            }
+        }
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         // Code keeps its first line's indentation; only the newline before the closing fence goes.
         let text = match open {
             Open::Code | Open::Diagram => text.trim_end_matches('\n').to_string(),
             _ => text.trim().to_string(),
         };
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && !matches!(open, Open::Item { checked: Some(_), .. }) {
             return;
         }
         if runs.len() == 1 {
@@ -252,12 +358,15 @@ impl Parse {
         }
         let kind = match open {
             Open::Heading(level) => Kind::Heading(level),
+            Open::Paragraph if self.footnote.is_some() => Kind::Footnote(self.footnote.unwrap_or(0)),
             Open::Paragraph if self.quote > 0 => Kind::Quote,
             Open::Paragraph => Kind::Paragraph,
-            Open::Item { ordered } => Kind::Item { ordered },
+            Open::Item { ordered, checked } => Kind::Item { ordered, checked },
             Open::Code => Kind::Code,
             Open::Math => Kind::Math,
             Open::Diagram => Kind::Diagram,
+            Open::Term => Kind::Term,
+            Open::Definition => Kind::Definition,
             Open::Table => unreachable!("tables finish in finish_table"),
         };
         // The same tree-sitter result (and cache entry) the editor uses for this fence's code.
@@ -265,7 +374,7 @@ impl Parse {
             Kind::Code => syntax::highlight_code(&std::mem::take(&mut self.code_info), &text),
             _ => None,
         };
-        out.push(Block { kind, text, runs, line: self.line, table: None, code });
+        out.push(Block { kind, text, runs, line: self.line, table: None, code, src: None });
     }
 
     /// `text` is the cells joined by ` | ` per row, for tests; the outline lists headings only.
@@ -281,8 +390,114 @@ impl Parse {
             .map(|row| row.iter().map(|cell| plain_text(cell)).collect::<Vec<_>>().join(" | "))
             .collect::<Vec<_>>()
             .join("\n");
-        out.push(Block { kind: Kind::Table, text, runs: Vec::new(), line: self.line, table: Some(table), code: None });
+        out.push(Block { kind: Kind::Table, text, runs: Vec::new(), line: self.line, table: Some(table), code: None, src: None });
     }
+}
+
+/// `~sub~`, `^sup^` and `==mark==` in a block's plain text runs, with the app's markdown-it rules.
+/// pulldown-cmark parses a single `~` or `^` like `_`, never inside a word, so `H~2~O` and `19^th^`
+/// (the app's own examples) stay text there; this finds them. Code runs are left alone.
+fn inline_extensions(runs: Vec<Run>) -> Vec<Run> {
+    let mut out: Vec<Run> = Vec::with_capacity(runs.len());
+    for run in runs {
+        if run.style.code {
+            out.push(run);
+            continue;
+        }
+        let mut rest = run.text.as_str();
+        while let Some((open, close, kind)) = next_extension(rest) {
+            push_run(&mut out, &rest[..open], run.style.clone());
+            let mut style = run.style.clone();
+            let marker = match kind {
+                Extension::Sub => {
+                    style.sub = true;
+                    1
+                }
+                Extension::Sup => {
+                    style.sup = true;
+                    1
+                }
+                Extension::Mark => {
+                    style.mark = true;
+                    2
+                }
+            };
+            push_run(&mut out, &rest[open + marker..close], style);
+            rest = &rest[close + marker..];
+        }
+        push_run(&mut out, rest, run.style);
+    }
+    out
+}
+
+fn push_run(out: &mut Vec<Run>, text: &str, style: RunStyle) {
+    if text.is_empty() {
+        return;
+    }
+    match out.last_mut() {
+        Some(last) if last.style == style => last.text.push_str(text),
+        _ => out.push(Run { text: text.to_string(), style }),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Extension {
+    Sub,
+    Sup,
+    Mark,
+}
+
+/// The earliest `~x~`, `^x^` or `==x==` in `text`: (opening offset, closing offset, kind).
+fn next_extension(text: &str) -> Option<(usize, usize, Extension)> {
+    [
+        find_mark(text).map(|(open, close)| (open, close, Extension::Mark)),
+        find_script(text, '~').map(|(open, close)| (open, close, Extension::Sub)),
+        find_script(text, '^').map(|(open, close)| (open, close, Extension::Sup)),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|(open, _, _)| *open)
+}
+
+/// markdown-it-sub and -sup: a single `delim`, then text with no spaces, then `delim` again.
+pub fn find_script(text: &str, delim: char) -> Option<(usize, usize)> {
+    let mut from = 0;
+    while let Some(found) = text[from..].find(delim) {
+        let open = from + found;
+        let after = &text[open + 1..];
+        let doubled = after.starts_with(delim) || text[..open].ends_with(delim);
+        if let Some(length) = after.find(delim) {
+            let inner = &after[..length];
+            if !doubled && !inner.is_empty() && !inner.contains(char::is_whitespace) {
+                return Some((open, open + 1 + length));
+            }
+        }
+        from = open + 1;
+    }
+    None
+}
+
+/// Byte offsets of the next `==` pair that marks text, if any.
+pub fn find_mark(text: &str) -> Option<(usize, usize)> {
+    let mut from = 0;
+    while let Some(found) = text[from..].find("==") {
+        let open = from + found;
+        let inner = &text[open + 2..];
+        if inner.starts_with(|c: char| c.is_whitespace() || c == '=') || inner.is_empty() {
+            from = open + 2;
+            continue;
+        }
+        let mut search = 0;
+        while let Some(found) = inner[search..].find("==") {
+            let close = search + found;
+            if close > 0 && !inner[..close].ends_with(char::is_whitespace) {
+                return Some((open, open + 2 + close));
+            }
+            search = close + 2;
+        }
+        return None;
+    }
+    None
 }
 
 pub fn plain_text(runs: &[Run]) -> String {
@@ -328,7 +543,12 @@ mod tests {
             line,
             table: None,
             code: None,
+            src: None,
         }
+    }
+
+    fn bullet() -> Kind {
+        Kind::Item { ordered: None, checked: None }
     }
 
     #[test]
@@ -367,7 +587,7 @@ mod tests {
                 plain(Kind::Heading(1), "Title", 1),
                 plain(Kind::Paragraph, "Hello there.", 3),
                 plain(Kind::Heading(2), "Next", 5),
-                plain(Kind::Item { ordered: None }, "skipped", 7),
+                plain(bullet(), "skipped", 7),
                 plain(Kind::Paragraph, "After the list.", 9),
             ]
         );
@@ -380,6 +600,62 @@ mod tests {
         assert!(blocks[0].runs[0].style.bold);
         assert!(blocks[0].runs[2].style.italic);
         assert!(blocks[0].runs[4].style.strike);
+    }
+
+    #[test]
+    fn subscript_superscript_and_marked_text_are_styled_runs() {
+        let blocks = blocks("H~2~O, 19^th^ and ==look here== but a == b, 2^ 3 and ~~gone~~.\n");
+        let styled = |text: &str| blocks[0].runs.iter().find(|run| run.text == text).map(|run| run.style.clone()).unwrap();
+        assert!(styled("2").sub);
+        assert!(styled("th").sup);
+        assert!(styled("look here").mark);
+        assert!(styled("gone").strike);
+        assert_eq!(blocks[0].text, "H2O, 19th and look here but a == b, 2^ 3 and gone.");
+    }
+
+    #[test]
+    fn task_list_items_carry_their_state() {
+        let blocks = blocks("- [ ] write\n- [x] test\n- plain\n");
+        let kinds: Vec<Kind> = blocks.iter().map(|block| block.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                Kind::Item { ordered: None, checked: Some(false) },
+                Kind::Item { ordered: None, checked: Some(true) },
+                bullet(),
+            ]
+        );
+        assert_eq!(blocks[0].text, "write");
+    }
+
+    #[test]
+    fn footnote_references_link_to_numbered_footnotes() {
+        let blocks = blocks("Text[^note] and more[^b].\n\n[^b]: Second.\n[^note]: First.\n");
+        let reference = blocks[0].runs.iter().find(|run| run.text == "[1]").unwrap();
+        assert!(reference.style.sup);
+        assert_eq!(reference.style.link.as_deref(), Some("#fn:1"));
+        assert!(blocks.iter().any(|block| block.kind == Kind::Footnote(1) && block.text == "First."));
+        assert!(blocks.iter().any(|block| block.kind == Kind::Footnote(2) && block.text == "Second."));
+    }
+
+    #[test]
+    fn definition_lists_have_terms_and_definitions() {
+        let blocks = blocks("Rope\n: A tree of strings.\n");
+        assert_eq!(blocks[0].kind, Kind::Term);
+        assert_eq!(blocks[0].text, "Rope");
+        assert_eq!(blocks[1].kind, Kind::Definition);
+        assert_eq!(blocks[1].text, "A tree of strings.");
+    }
+
+    #[test]
+    fn links_keep_their_destination_and_a_lone_image_is_an_image_block() {
+        let blocks = blocks("See [the docs](docs/a.md).\n\n![Diagram](img/flow.png)\n\nInline ![x](y.png) image.\n");
+        let link = blocks[0].runs.iter().find(|run| run.text == "the docs").unwrap();
+        assert_eq!(link.style.link.as_deref(), Some("docs/a.md"));
+        assert_eq!(blocks[1].kind, Kind::Image);
+        assert_eq!(blocks[1].src.as_deref(), Some("img/flow.png"));
+        assert_eq!(blocks[1].text, "Diagram");
+        assert_eq!(blocks[2].kind, Kind::Paragraph);
     }
 
     #[test]

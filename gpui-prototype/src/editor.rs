@@ -676,12 +676,18 @@ impl Prototype {
         let Some(path) = rfd::FileDialog::new().add_filter("Markdown", files::MARKDOWN_EXTS).pick_file() else {
             return;
         };
-        if let Some(index) = self.documents.iter().position(|doc| files::same_path(Path::new(&doc.path), &path)) {
+        self.open_path(&path, cx);
+    }
+
+    /// Opens `path` as a tab, or switches to the tab that already has it.
+    fn open_path(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if let Some(index) = self.documents.iter().position(|doc| files::same_path(Path::new(&doc.path), path)) {
             self.activate_tab(index, cx);
             return;
         }
-        match files::read(&path) {
+        match files::read(path) {
             Ok(opened) => {
+                self.status = None;
                 let id = self.next_document_id;
                 self.next_document_id += 1;
                 let document = Document::open(opened, id, cx);
@@ -690,6 +696,44 @@ impl Prototype {
                 self.activate_tab(self.documents.len() - 1, cx);
             }
             Err(err) => self.report(format!("Could not open {}: {err}", path.display())),
+        }
+    }
+
+    /// A click on a link in the preview, with the app's rules (`followLink`): web and mail links open
+    /// in the default program; a footnote reference scrolls the preview to its footnote; a relative
+    /// link opens a .md, .markdown or .txt file next to this one as a tab. The preview never navigates.
+    pub fn follow_link(&mut self, link: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        if link.starts_with("http://") || link.starts_with("https://") || link.starts_with("mailto:") {
+            cx.open_url(link);
+            return;
+        }
+        if let Some(number) = link.strip_prefix("#fn:").and_then(|number| number.parse::<u32>().ok()) {
+            let doc = self.doc();
+            if let Some(index) = doc.blocks.iter().position(|block| block.kind == Kind::Footnote(number)) {
+                doc.block_list.scroll_to(ListOffset { item_ix: index, offset_in_item: px(0.) });
+                cx.notify();
+            }
+            return;
+        }
+        // The app gives headings no ids, so other #anchors go nowhere, as there.
+        if link.starts_with('#') {
+            return;
+        }
+        let target = link.split('#').next().unwrap_or_default().replace("%20", " ");
+        let path = Path::new(&self.doc().path).parent().map(|folder| folder.join(&target));
+        let opens = path.as_ref().filter(|path| {
+            let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or_default();
+            path.is_file() && files::MARKDOWN_EXTS.iter().any(|allowed| allowed.eq_ignore_ascii_case(extension))
+        });
+        match opens {
+            Some(path) => {
+                let path = path.clone();
+                self.open_path(&path, cx);
+            }
+            None => {
+                self.report(format!("Not opened: {link} (links open only .md, .markdown and .txt files)"));
+                cx.notify();
+            }
         }
     }
 
@@ -1222,10 +1266,11 @@ impl Prototype {
             .child(
                 list(
                     blocks,
-                    cx.processor(|this, ix, _window, _cx| {
-                        let look = Look { font_size: this.settings.font_size, dark: this.dark, mono: this.mono.clone() };
+                    cx.processor(|this, ix, _window, cx| {
+                        let folder = Path::new(&this.doc().path).parent().map(Path::to_path_buf);
+                        let look = Look { font_size: this.settings.font_size, dark: this.dark, mono: this.mono.clone(), folder };
                         match this.doc().blocks.get(ix) {
-                            Some(block) => preview_view::preview_item(block, ix, &look),
+                            Some(block) => preview_view::preview_item(block, ix, &look, cx),
                             None => div().into_any_element(),
                         }
                     }),
