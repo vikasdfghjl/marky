@@ -20,7 +20,8 @@ Set-Content $configFile $signingConfig
 
 Push-Location $root
 try {
-  npx tauri build --config $configFile
+  # npx.cmd, not npx: npm's npx.ps1 re-runs the calling line in its own scope, where $configFile is empty.
+  npx.cmd tauri build --config $configFile
   if ($LASTEXITCODE -ne 0) { throw "tauri build failed ($LASTEXITCODE)" }
 }
 finally { Pop-Location }

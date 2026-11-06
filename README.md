@@ -20,19 +20,19 @@ Marky keeps its log at `%LOCALAPPDATA%\dev.marky.editor\marky.log` and settings 
 
 ## Benchmarks
 
-Release-build measurements on an i5-9300H with 16 GB RAM, using a 5 KB sample (`scripts/fixtures/typical.md`). Values are medians of 5–7 runs. Size, startup, idle memory, and preview are from **9 Oct 2026**; the other rows are from **29 Sep 2026**. Budgets and measurement notes are in the [contributor guide](AGENTS.md).
+Release-build measurements on an i5-9300H with 16 GB RAM, using a 5 KB sample (`scripts/fixtures/typical.md`). Values are medians of 5–7 runs. Program size, startup, and memory are from **6 Nov 2026**; the installer and preview are from **9 Oct 2026**; the other rows are from **29 Sep 2026**. Budgets and measurement notes are in the [contributor guide](AGENTS.md).
 
 | Metric | Measured | Target | Hard limit |
 | --- | ---: | ---: | ---: |
 | Installer | 4.46 MB | ≤ 6 MB | 10 MB |
-| Program | 6.71 MB | ≤ 8 MB | 12 MB |
+| Program | 6.74 MB | ≤ 8 MB | 12 MB |
 | Window visible in the theme colour | 187 ms | ≤ 300 ms | 500 ms |
 | Dark-mode white flash | 0 ms | 0 ms | 0 ms |
-| Startup, ready to edit | 815 ms | ≤ 900 ms | 1,000 ms |
+| Startup, ready to edit | 863 ms | ≤ 900 ms | 1,000 ms |
 | Typing | 11 ms | ≤ 20 ms | 33 ms |
 | Preview after typing stops | 42 ms | ≤ 200 ms | 400 ms |
-| Memory while in use | 99.6 MB | ≤ 105 MB | 120 MB |
-| Memory after 30 seconds idle | 75.3 MB | ≤ 85 MB | 100 MB |
+| Memory while in use | 103.7 MB | ≤ 105 MB | 120 MB |
+| Memory after 30 seconds idle | 82.2 MB | ≤ 85 MB | 100 MB |
 | First keystroke after idle | 35–38 ms | ≤ 60 ms | 100 ms |
 | Idle CPU | 0.25% | ≈ 0% | < 0.5% |
 

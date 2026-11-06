@@ -1,0 +1,29 @@
+[package]
+name = "gpui-prototype"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Throwaway GPUI window for the Marky migration gate. Not the app."
+
+[[bin]]
+name = "gpui-prototype"
+path = "src/main.rs"
+
+[dependencies]
+# Exactly the published 0.2.2: a bare "0.2.2" would accept any later 0.2.x. Windows draws with
+# DirectX 11 and needs no Linux features. This crate has no AccessKit; Zed's main branch does.
+gpui = { version = "=0.2.2", default-features = false, features = ["windows-manifest"] }
+pulldown-cmark = "0.13"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-segmentation = "1"
+
+# The app's release profile (src-tauri/Cargo.toml), so the executable size is compared like for like.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
