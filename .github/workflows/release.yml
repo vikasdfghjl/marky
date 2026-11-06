@@ -2,7 +2,7 @@ name: Release
 
 # Pushing a tag vX.Y.Z (see scripts/release.ps1) publishes a GitHub Release, but only after the
 # full CI workflow (audits, tests, size budgets, end-to-end) passes on that tag. The release
-# assets are the ones CI built and tested, not a second build. 0.x versions are marked pre-release (beta).
+# assets are the ones CI built and tested, not a second build.
 on:
   push:
     tags: ['v*.*.*']
@@ -74,7 +74,7 @@ jobs:
 
           Windows x64. Download ``Marky_${env:VERSION}_x64-setup.exe`` (per-user install, no admin prompt) or the portable ZIP.
 
-          Beta builds are unsigned: if SmartScreen says *Windows protected your PC*, choose **More info**, then **Run anyway**. Verify downloads against ``SHA256SUMS.txt``.
+          The build is unsigned: if SmartScreen says *Windows protected your PC*, choose **More info**, then **Run anyway**. Verify downloads against ``SHA256SUMS.txt``.
           "@
           "$notes`n`n$install" | Set-Content release-notes.md
 
@@ -84,5 +84,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          $prerelease = if ($env:VERSION.StartsWith('0.')) { '--prerelease' } else { $null }
-          gh release create $env:RELEASE_TAG (Get-ChildItem assets).FullName --title "Marky $env:VERSION" --notes-file release-notes.md $prerelease
+          gh release create $env:RELEASE_TAG (Get-ChildItem assets).FullName --title "Marky $env:VERSION" --notes-file release-notes.md
