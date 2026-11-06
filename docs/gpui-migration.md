@@ -58,7 +58,9 @@ The rules in [AGENTS.md](../AGENTS.md) still hold: one writer for dirty state, r
 
 ## Prototype
 
-`gpui-prototype/` is a throwaway binary beside the app, not inside the Tauri shell. One window. It opens files through `files::read` (File → Open, or the path on the command line) and keeps each one as a tab. It edits the active tab and paints headings, paragraphs, emphasis, quotes, lists, code, tables, display math, and Mermaid fences from a Rust CommonMark parse (pulldown-cmark). Frontmatter is skipped, as in the app. Tables follow the app's look: borders, a bold header row, shaded even rows and column alignment; columns are sized in proportion to their longest cell. The editor and all code use the app's monospace font (the first installed of Cascadia Code, Cascadia Mono, Consolas). Math is the TeX source and a diagram is the Mermaid source: this window does not run KaTeX or Mermaid. There is no syntax colouring.
+`gpui-prototype/` is a throwaway binary beside the app, not inside the Tauri shell. One window. It opens files through `files::read` (File → Open, or the path on the command line) and keeps each one as a tab. It edits the active tab and paints headings, paragraphs, emphasis, quotes, lists, code, tables, display math, and Mermaid fences from a Rust CommonMark parse (pulldown-cmark). Frontmatter is skipped, as in the app. Tables follow the app's look: borders, a bold header row, shaded even rows and column alignment; columns are sized in proportion to their longest cell. The editor and all code use the app's monospace font (the first installed of Cascadia Code, Cascadia Mono, Consolas). Math is the TeX source and a diagram is the Mermaid source: this window does not run KaTeX or Mermaid.
+
+Syntax is coloured in the app's `--hl-*` palette. The editor colours Markdown (headings, emphasis, code spans, links, quotes, list markers, fences) from the same pulldown-cmark parse as the preview, and code in fences is highlighted with tree-sitter in both panes from one cached result, so the panes agree. The default build has nine grammars (Bash, CSS, Go, HTML, JavaScript, JSON, Python, TOML, YAML); TypeScript fences use the JavaScript grammar, and C and Rust stay plain. Each grammar is a Cargo feature (`--features lang-rust`); the reasons and sizes are in [DECISION.md](../DECISION.md).
 
 The text lives in a rope (`ropey`, MIT) with undo and redo: typing and deleting group into one step until a pause, a new line or a caret move; an IME composition is one step; undoing back to the saved state makes the tab clean again. Ctrl+F opens a find bar and Ctrl+H adds replace: matches are found without regard to ASCII case and highlighted, Enter or F3 steps forward, Shift+Enter or Shift+F3 back, and Replace all is a single undo step.
 
@@ -151,6 +153,8 @@ Start · memory 10 s after launch · typing p50 · preview after typing stops. T
 
 Before the rework the prototype laid out every line and re-parsed on every keystroke; virtualised lists and the background parse made start-up and typing independent of file size. The first measurement of the rework found the preview 3.4 s behind at 1 MB: block line numbers were counted from the start of the document for every block, so parsing was quadratic, and a parse cancelled by the next keystroke kept running on its thread, so they piled up. Counting from the previous block fixed both. Memory still grows with the file (the text, the parsed blocks and the line index), at about 13 MB per MB against Marky's 300.
 
+Syntax highlighting, added afterwards, leaves start-up and typing unchanged and costs the large files in the background parse and in memory: at 4 MB, 83.4 MB and 324 ms to update the preview (parse 159 ms), against 68.4 MB and 251 ms without it. The program grew from 4.49 MB to 8.42 MB, 0.42 MB over the README's 8 MB target. That increase was accepted on 6 Nov 2026, as gate criterion 4 requires; the reasons are in [DECISION.md](../DECISION.md).
+
 ## After the gate
 
 Do these in order. Each one keeps the app shippable; do not delete WebView2 until the GPUI window covers the same tasks.
@@ -175,6 +179,8 @@ Official GPUI material (Apache-2.0):
 Reference implementations to read but not copy (GPL-3.0-or-later): Zed's `crates/editor`, `crates/rope`, `crates/markdown` and `crates/mermaid_render`.
 
 Permissive libraries:
+
+- [tree-sitter](https://tree-sitter.github.io/tree-sitter/) and `tree-sitter-highlight` (MIT), with the grammar crates `tree-sitter-<language>` (MIT). In `tree-sitter-highlight` 0.27 the later of several patterns on one node wins; older grammar queries assume the opposite (see DECISION.md).
 
 - [pulldown-cmark](https://docs.rs/pulldown-cmark/0.13/pulldown_cmark/struct.Options.html) (MIT). Its options cover frontmatter, footnotes, task lists, definition lists, `^sup^`/`~sub~` and math, but not abbreviations or `==mark==`. Leave `ENABLE_GFM` off: it adds GitHub alerts, which Marky does not render.
 - [gpui-kit / gpui-component](https://github.com/longbridge/gpui-kit) (Apache-2.0, not from Zed): a multi-line editor, virtual lists and a Markdown view built on GPUI.

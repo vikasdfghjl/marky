@@ -22,6 +22,7 @@ use crate::perf;
 use crate::preview::{self, Block, Kind};
 use crate::preview_view::{self, Look, tone};
 use crate::settings::{self, ViewSettings};
+use crate::syntax::{self, Span};
 use crate::text_field::{FieldEvent, InputLayer, TextField};
 
 actions!(
@@ -95,6 +96,8 @@ struct Document {
     selection_reversed: bool,
     marked: Option<Range<usize>>,
     blocks: Vec<Block>,
+    /// Syntax colours per source line, from the last background parse.
+    spans: Vec<Vec<Span>>,
     parse_task: Option<Task<()>>,
     last_parse_ms: f64,
     /// The last edit the preview has not caught up with; logged as `preview_ms` when it does.
@@ -123,6 +126,7 @@ impl Document {
             selection_reversed: false,
             marked: None,
             blocks: Vec::new(),
+            spans: Vec::new(),
             parse_task: None,
             last_parse_ms: 0.,
             edited_at: None,
@@ -137,8 +141,18 @@ impl Document {
         if self.selection_reversed { self.selected.start } else { self.selected.end }
     }
 
-    fn splice_lines(&self, splice: LineSplice) {
+    /// Keeps the line list and the syntax colours in step with an edit. The edited lines keep their
+    /// old colours until the next parse (at most 150 ms after typing stops), so a heading being typed
+    /// does not flicker plain; lines the edit added start plain.
+    fn splice_lines(&mut self, splice: LineSplice) {
         self.lines.splice(splice.first..splice.first + splice.old, splice.new);
+        if splice.first >= self.spans.len() {
+            return;
+        }
+        let kept = splice.old.min(splice.new);
+        let old_end = (splice.first + splice.old).min(self.spans.len());
+        let replace = (splice.first + kept).min(old_end)..old_end;
+        self.spans.splice(replace, std::iter::repeat_with(Vec::new).take(splice.new - kept));
     }
 }
 
@@ -259,14 +273,22 @@ impl Prototype {
                 cx.background_executor().timer(pause).await;
             }
             let started = Instant::now();
-            let blocks = cx.background_executor().spawn(async move { preview::blocks(&rope.to_string()) }).await;
+            // Both panes from one snapshot: the preview's blocks and the editor's colours. Code in
+            // fences is highlighted once; the second call finds it in the tree-sitter cache.
+            let (blocks, spans) = cx
+                .background_executor()
+                .spawn(async move {
+                    let text = rope.to_string();
+                    (preview::blocks(&text), syntax::source_spans(&text))
+                })
+                .await;
             let parse_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let _ = this.update(cx, |this, cx| this.apply_parse(id, version, blocks, parse_ms, cx));
+            let _ = this.update(cx, |this, cx| this.apply_parse(id, version, blocks, spans, parse_ms, cx));
         }));
     }
 
     /// Replaces only the blocks that changed, so the preview keeps its measured heights and scroll position.
-    fn apply_parse(&mut self, id: u64, version: u64, blocks: Vec<Block>, parse_ms: f64, cx: &mut Context<Self>) {
+    fn apply_parse(&mut self, id: u64, version: u64, blocks: Vec<Block>, spans: Vec<Vec<Span>>, parse_ms: f64, cx: &mut Context<Self>) {
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else { return };
         if doc.buffer.version() != version {
             return;
@@ -279,6 +301,7 @@ impl Prototype {
         let (changed, count) = preview_view::changed_blocks(&doc.blocks, &blocks);
         doc.block_list.splice(changed, count);
         doc.blocks = blocks;
+        doc.spans = spans;
         doc.synced_source_line = None;
         cx.notify();
     }
@@ -1088,8 +1111,9 @@ impl Prototype {
         )
     }
 
-    /// One source line, laid out only when the list needs it. Find matches and the selection are
-    /// highlights on the line's own `StyledText`, whose layout also maps clicks and places the caret.
+    /// One source line, laid out only when the list needs it. Syntax colours, find matches and the
+    /// selection are layered highlights on the line's own `StyledText`, whose layout also maps clicks
+    /// and places the caret.
     fn render_line(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let dark = self.dark;
         let doc = &self.documents[self.active];
@@ -1101,6 +1125,14 @@ impl Prototype {
 
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
         if !text.is_empty() {
+            // Colours from the last parse. Right after an edit they can be a few characters off, or
+            // past the end of the line, until the next parse; clamp them to character boundaries.
+            for (range, token) in doc.spans.get(ix).map(Vec::as_slice).unwrap_or(&[]) {
+                let span = floor_boundary(&text, range.start)..floor_boundary(&text, range.end);
+                if !span.is_empty() {
+                    highlights.push((span, token.style(dark)));
+                }
+            }
             let found_style = HighlightStyle { background_color: Some(tone(dark, 0x713f12, 0xfef08a).into()), ..HighlightStyle::default() };
             let matches = self.matches();
             let first = matches.partition_point(|found| found.end <= line.start);
@@ -1115,9 +1147,8 @@ impl Prototype {
                 let selection_style = HighlightStyle { background_color: Some(tone(dark, 0x1e3a8a, 0xbfdbfe).into()), ..HighlightStyle::default() };
                 highlights.push((overlap.start - start..overlap.end - start, selection_style));
             }
-            highlights.sort_by_key(|(range, _)| range.start);
         }
-        let styled = StyledText::new(if text.is_empty() { " ".to_string() } else { text }).with_highlights(highlights);
+        let styled = StyledText::new(if text.is_empty() { " ".to_string() } else { text }).with_highlights(syntax::merge(&highlights));
         let layout = styled.layout().clone();
         let click_layout = layout.clone();
         let row = div()
@@ -1422,6 +1453,15 @@ fn command(label: &str, shortcut: &str, dark: bool) -> gpui::Div {
         .text_color(tone(dark, 0xfafafa, 0x18181b))
         .child(label.to_string())
         .child(div().text_color(tone(dark, 0xa1a1aa, 0x71717a)).child(shortcut.to_string()))
+}
+
+/// The nearest char boundary at or before `offset`, within `text`.
+fn floor_boundary(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
 }
 
 fn utf16_to_byte(text: &str, utf16_offset: usize) -> usize {

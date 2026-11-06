@@ -1,9 +1,10 @@
 //! Draws the preview's blocks. Each block is one item of a virtualised GPUI list, so only the
 //! blocks near the viewport are laid out, at any document size.
 
-use gpui::{FontWeight, IntoElement, Pixels, SharedString, div, prelude::*, px, rgb};
+use gpui::{FontWeight, IntoElement, Pixels, SharedString, StyledText, div, prelude::*, px, rgb};
 
 use crate::preview::{self, Align, Block, Kind, Run, Table};
+use crate::syntax::Span;
 
 /// What every preview block is drawn with.
 pub struct Look {
@@ -45,6 +46,9 @@ fn preview_block(block: &Block, look: &Look) -> gpui::Div {
     if let (Kind::Table, Some(table)) = (block.kind, &block.table) {
         return table_block(table, look);
     }
+    if let (Kind::Code, Some(spans)) = (block.kind, &block.code) {
+        return code_block(&block.text, spans, look);
+    }
     let body = styled_runs(&block.runs, size, look);
     match block.kind {
         Kind::Quote => div().mb_3().pl_3().border_l_2().border_color(tone(dark, 0x71717a, 0xa1a1aa)).child(body),
@@ -82,6 +86,19 @@ fn preview_block(block: &Block, look: &Look) -> gpui::Div {
         Kind::Paragraph => div().mb_3().child(body),
         Kind::Table => div(),
     }
+}
+
+/// A fenced block in a language tree-sitter knows, in the editor's colours (the app's `tok-*` → `--hl-*`).
+fn code_block(text: &str, spans: &[Span], look: &Look) -> gpui::Div {
+    let highlights = spans.iter().map(|(range, token)| (range.clone(), token.style(look.dark)));
+    div()
+        .mb_3()
+        .px_3()
+        .py_2()
+        .font_family(look.mono.clone())
+        .text_size(look.code_size())
+        .bg(tone(look.dark, 0x27272a, 0xf4f4f5))
+        .child(StyledText::new(text.to_string()).with_highlights(highlights))
 }
 
 /// The app's table: 1px borders, 6px 12px cell padding, a bold header row and shaded even body rows.
@@ -155,7 +172,7 @@ fn styled_runs(runs: &[Run], size: Pixels, look: &Look) -> gpui::Div {
 /// The range of blocks a re-parse changed, found like the app's preview-blocks.ts: the common prefix and
 /// suffix are kept. Blocks compare without their line, so a line added above only renumbers kept blocks.
 pub fn changed_blocks(old: &[Block], new: &[Block]) -> (std::ops::Range<usize>, usize) {
-    let same = |a: &Block, b: &Block| a.kind == b.kind && a.text == b.text && a.runs == b.runs && a.table == b.table;
+    let same = |a: &Block, b: &Block| a.kind == b.kind && a.text == b.text && a.runs == b.runs && a.table == b.table && a.code == b.code;
     let prefix = old.iter().zip(new).take_while(|(a, b)| same(a, b)).count();
     let suffix = old[prefix..].iter().rev().zip(new[prefix..].iter().rev()).take_while(|(a, b)| same(a, b)).count();
     (prefix..old.len() - suffix, new.len() - prefix - suffix)

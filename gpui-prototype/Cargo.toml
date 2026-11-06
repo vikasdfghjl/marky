@@ -21,6 +21,43 @@ serde_json = "1"
 unicode-segmentation = "1"
 # The editor buffer. MIT.
 ropey = "1.6"
+# Code highlighting in fences, as Zed does it. All MIT. Each grammar is compiled C that adds to the
+# program, so each is a feature (below) and the default set fits the 8 MB budget.
+tree-sitter = "0.27"
+tree-sitter-highlight = "0.27"
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-c = { version = "0.24", optional = true }
+tree-sitter-css = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-html = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-toml-ng = { version = "0.7", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-yaml = { version = "0.7", optional = true }
+
+# One feature per highlighted language. Measured 6 Nov 2026: all twelve make the program 12.8 MB,
+# over the 12 MB hard limit. The compiled grammars cost about half their library size: TypeScript
+# and TSX ~2.9 MB, Bash ~1.4, Rust ~1.1, C ~0.7, Python ~0.5, the rest under 0.5 each. The default
+# leaves out TypeScript (its fences use the JavaScript grammar), C and Rust. Add one back with,
+# for example, `--features lang-rust`.
+[features]
+default = ["lang-bash", "lang-css", "lang-go", "lang-html", "lang-javascript", "lang-json", "lang-python", "lang-toml", "lang-yaml"]
+lang-bash = ["dep:tree-sitter-bash"]
+lang-c = ["dep:tree-sitter-c"]
+lang-css = ["dep:tree-sitter-css"]
+lang-go = ["dep:tree-sitter-go"]
+lang-html = ["dep:tree-sitter-html"]
+lang-javascript = ["dep:tree-sitter-javascript"]
+lang-json = ["dep:tree-sitter-json"]
+lang-python = ["dep:tree-sitter-python"]
+lang-rust = ["dep:tree-sitter-rust"]
+lang-toml = ["dep:tree-sitter-toml-ng"]
+# TypeScript's highlight query extends JavaScript's.
+lang-typescript = ["dep:tree-sitter-typescript", "lang-javascript"]
+lang-yaml = ["dep:tree-sitter-yaml"]
 
 # The app's release profile (src-tauri/Cargo.toml), so the executable size is compared like for like.
 [profile.release]

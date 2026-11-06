@@ -2,7 +2,11 @@
 //! Math is the TeX source: there is no DOM for KaTeX.
 //! A diagram is the Mermaid source: this window does not run Mermaid.
 
+use std::sync::Arc;
+
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+
+use crate::syntax::{self, Span};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -55,6 +59,8 @@ pub struct Block {
     /// 1-based line of the block's start in the LF document `files::read` returns.
     pub line: usize,
     pub table: Option<Table>,
+    /// tree-sitter colours for a code block in a known language, relative to `text`.
+    pub code: Option<Arc<Vec<Span>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -77,6 +83,8 @@ struct Parse {
     line: usize,
     lines: LineCounter,
     table: Option<Table>,
+    /// The open code block's info string (```rust → "rust").
+    code_info: String,
 }
 
 /// Line numbers for block starts. Blocks start in document order, so each lookup counts only the
@@ -111,6 +119,7 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
         line: 1,
         lines: LineCounter::default(),
         table: None,
+        code_info: String::new(),
     };
     // Frontmatter is metadata, as in the app's preview; without the option it parses as a rule and a heading.
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
@@ -136,12 +145,17 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
                 parse.begin(Open::Item { ordered }, markdown, range.start, &mut out);
             }
             Event::Start(Tag::CodeBlock(kind)) => {
-                let open = match kind {
-                    CodeBlockKind::Fenced(lang) if lang.as_ref() == "math" => Open::Math,
-                    CodeBlockKind::Fenced(lang) if lang.as_ref() == "mermaid" => Open::Diagram,
+                let info = match &kind {
+                    CodeBlockKind::Fenced(info) => info.to_string(),
+                    CodeBlockKind::Indented => String::new(),
+                };
+                let open = match info.as_str() {
+                    "math" => Open::Math,
+                    "mermaid" => Open::Diagram,
                     _ => Open::Code,
                 };
                 parse.begin(open, markdown, range.start, &mut out);
+                parse.code_info = info;
             }
             Event::Start(Tag::Emphasis) => parse.style.italic = true,
             Event::End(TagEnd::Emphasis) => parse.style.italic = false,
@@ -225,8 +239,12 @@ impl Parse {
         }
         let mut runs = std::mem::take(&mut self.runs);
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
-        let text = text.trim().to_string();
-        if text.is_empty() {
+        // Code keeps its first line's indentation; only the newline before the closing fence goes.
+        let text = match open {
+            Open::Code | Open::Diagram => text.trim_end_matches('\n').to_string(),
+            _ => text.trim().to_string(),
+        };
+        if text.trim().is_empty() {
             return;
         }
         if runs.len() == 1 {
@@ -242,7 +260,12 @@ impl Parse {
             Open::Diagram => Kind::Diagram,
             Open::Table => unreachable!("tables finish in finish_table"),
         };
-        out.push(Block { kind, text, runs, line: self.line, table: None });
+        // The same tree-sitter result (and cache entry) the editor uses for this fence's code.
+        let code = match kind {
+            Kind::Code => syntax::highlight_code(&std::mem::take(&mut self.code_info), &text),
+            _ => None,
+        };
+        out.push(Block { kind, text, runs, line: self.line, table: None, code });
     }
 
     /// `text` is the cells joined by ` | ` per row, for tests; the outline lists headings only.
@@ -258,7 +281,7 @@ impl Parse {
             .map(|row| row.iter().map(|cell| plain_text(cell)).collect::<Vec<_>>().join(" | "))
             .collect::<Vec<_>>()
             .join("\n");
-        out.push(Block { kind: Kind::Table, text, runs: Vec::new(), line: self.line, table: Some(table) });
+        out.push(Block { kind: Kind::Table, text, runs: Vec::new(), line: self.line, table: Some(table), code: None });
     }
 }
 
@@ -304,7 +327,16 @@ mod tests {
             runs: vec![Run { text: text.into(), style: RunStyle::default() }],
             line,
             table: None,
+            code: None,
         }
+    }
+
+    #[test]
+    fn a_fenced_code_block_keeps_its_indentation_and_gets_colours() {
+        let blocks = blocks("```python\n    x = 1  # one\n```\n\n```\nplain\n```\n");
+        assert_eq!(blocks[0].text, "    x = 1  # one");
+        assert!(blocks[0].code.as_ref().is_some_and(|spans| !spans.is_empty()));
+        assert!(blocks[1].code.is_none());
     }
 
     #[test]

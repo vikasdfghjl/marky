@@ -14,6 +14,7 @@ mod perf;
 mod preview;
 mod preview_view;
 mod settings;
+mod syntax;
 mod text_field;
 
 use std::path::PathBuf;
