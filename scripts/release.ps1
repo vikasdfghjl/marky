@@ -5,8 +5,7 @@
   package.json is the version source (tauri.conf.json points at it); Cargo.toml is kept
   in sync. CHANGELOG.md's Unreleased section is stamped with the version and date and
   must not be empty. Pushing the tag triggers .github/workflows/release.yml, which runs the full
-  CI workflow on the tag and publishes the installer it tested as a GitHub Release. 0.x versions
-  are published as pre-releases (beta).
+  CI workflow on the tag and publishes the installer it tested as a GitHub Release.
 .EXAMPLE
   ./scripts/release.ps1 -Version 0.2.0
   git push origin HEAD --follow-tags
@@ -16,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 Push-Location $root
 try {
-  if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must be plain X.Y.Z (got '$Version'); pre-release status comes from 0.x." }
+  if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must be plain X.Y.Z (got '$Version')." }
   if (git status --porcelain) { throw 'Working tree is not clean; commit or stash first.' }
   $tag = "v$Version"
   if (git tag --list $tag) { throw "Tag $tag already exists." }

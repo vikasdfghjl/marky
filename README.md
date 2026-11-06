@@ -1,44 +1,42 @@
 # Marky
 
-Marky is a Markdown editor for Windows, built with [Tauri 2](https://v2.tauri.app/) and [CodeMirror 6](https://codemirror.net/). It pairs a fast text editor with a live preview and uses the Windows WebView2 runtime instead of bundling a browser. TypeScript runs the interface; Rust handles files, dialogs, and OS integration.
+Marky is a Markdown editor for Windows. It pairs a fast text editor with a live preview, and it uses the Windows WebView2 runtime instead of bundling a browser.
 
-**Beta · v0.3.3** · [Download a release](https://github.com/vikasdfghjl/marky/releases) · [Changelog](CHANGELOG.md) · [Contributor guide](AGENTS.md)
-
-Marky keeps up to 10 recent files in its Open Recent list. It does not add files to the Windows taskbar Jump List.
+**v0.3.3** · [Download a release](https://github.com/vikasdfghjl/marky/releases) · [Changelog](CHANGELOG.md) · [Contributor guide](AGENTS.md)
 
 ## Features
 
-- **Editing:** syntax highlighting, find and replace, word wrap, up to 20 tabs with separate undo histories, UTF-8 and BOM support, LF/CRLF preservation, drag-and-drop, command-line and Explorer file opening, recent files, and remembered window size and position.
-- **Preview:** synced scrolling and block updates; tables, task lists, strikethrough, autolinks, footnotes, definition lists, abbreviations, subscript, superscript, marked text, optional smart typography, Mermaid diagrams, and KaTeX math.
-- **File safety:** atomic saves, unsaved-change prompts, external-change reload or keep, automatic saving, and crash recovery every 30 seconds. Files over 128 MB cannot be opened.
-- **Privacy:** Markdown HTML stays disabled. Remote images do not load. Web and email links open outside the app; relative links are limited to user-opened Markdown and text files.
-- **Interface:** light, dark, or system theme; native menus; outline; reading view; and status bar with line, word, character, encoding, and line-ending details.
+- **Editing:** syntax highlighting, find and replace, word wrap, up to 20 tabs with separate undo histories, drag-and-drop, opening from Explorer or the command line, up to 10 recent files, and a remembered window size and position. Saves keep the file's encoding and line endings.
+- **Preview:** scrolling stays in step with the editor, and only the changed part is redrawn. Tables, task lists, strikethrough, autolinks, footnotes, definition lists, abbreviations, subscript, superscript, marked text, optional curly quotes and dashes, Mermaid diagrams, and KaTeX math.
+- **File safety:** a save does not leave a half-written file. Prompts before discarding unsaved changes, reload or keep when the file changes on disk, automatic saving, and crash recovery every 30 seconds. Files over 128 MB cannot be opened.
+- **Privacy:** Markdown HTML stays disabled. Remote images do not load. Web and email links open outside the app; relative links are limited to Markdown and text files you opened.
+- **Interface:** light, dark, or system theme; native menus; outline; reading view; and a status bar with line, word, character, encoding, and line-ending details.
 
 ## Install
 
-Download the Windows installer (`Marky_<version>_x64-setup.exe`) or portable ZIP from [Releases](https://github.com/vikasdfghjl/marky/releases). The installer runs per-user and does not need administrator access. Windows 10/11 requires the WebView2 Runtime; the installer can download its bootstrapper if needed. Releases are unsigned beta builds. If SmartScreen appears, choose **More info** → **Run anyway**.
+Download the Windows installer (`Marky_<version>_x64-setup.exe`) or portable ZIP from [Releases](https://github.com/vikasdfghjl/marky/releases). The installer runs per-user and does not need administrator access. Windows 10/11 requires the WebView2 Runtime; the installer can fetch it if needed. Releases are unsigned. If SmartScreen appears, choose **More info** → **Run anyway**.
 
 Marky keeps its log at `%LOCALAPPDATA%\dev.marky.editor\marky.log` and settings under `%APPDATA%\dev.marky.editor\`. The log stays on your machine and can include file paths from errors, but not document text.
 
 ## Benchmarks
 
-Release-build measurements on an i5-9300H with 16 GB RAM, using `scripts/fixtures/typical.md` (5 KB). Values are medians of 5–7 runs. Size, cold-start, idle-memory, and preview measurements are from **9 Oct 2026**; other measurements are from **29 Sep 2026**. See the contributor guide for budgets and benchmark caveats.
+Release-build measurements on an i5-9300H with 16 GB RAM, using a 5 KB sample (`scripts/fixtures/typical.md`). Values are medians of 5–7 runs. Size, startup, idle memory, and preview are from **9 Oct 2026**; the other rows are from **29 Sep 2026**. Budgets and measurement notes are in the [contributor guide](AGENTS.md).
 
 | Metric | Measured | Target | Hard limit |
 | --- | ---: | ---: | ---: |
-| NSIS installer | 4.46 MB | ≤ 6 MB | 10 MB |
-| App executable | 6.71 MB | ≤ 8 MB | 12 MB |
-| Window visible in theme colour | 187 ms | ≤ 300 ms | 500 ms |
+| Installer | 4.46 MB | ≤ 6 MB | 10 MB |
+| Program | 6.71 MB | ≤ 8 MB | 12 MB |
+| Window visible in the theme colour | 187 ms | ≤ 300 ms | 500 ms |
 | Dark-mode white flash | 0 ms | 0 ms | 0 ms |
-| Cold start to editable | 815 ms | ≤ 900 ms | 1,000 ms |
-| Typing latency (p50) | 11 ms | ≤ 20 ms | 33 ms |
+| Startup, ready to edit | 815 ms | ≤ 900 ms | 1,000 ms |
+| Typing | 11 ms | ≤ 20 ms | 33 ms |
 | Preview after typing stops | 42 ms | ≤ 200 ms | 400 ms |
-| Idle RAM, in use | 99.6 MB | ≤ 105 MB | 120 MB |
-| Idle RAM, after 30 seconds | 75.3 MB | ≤ 85 MB | 100 MB |
-| First keystroke after idle trim | 35–38 ms | ≤ 60 ms | 100 ms |
+| Memory while in use | 99.6 MB | ≤ 105 MB | 120 MB |
+| Memory after 30 seconds idle | 75.3 MB | ≤ 85 MB | 100 MB |
+| First keystroke after idle | 35–38 ms | ≤ 60 ms | 100 ms |
 | Idle CPU | 0.25% | ≈ 0% | < 0.5% |
 
-Reproduce on a release build: `npx tauri build --no-bundle`, then run `scripts/bench.ps1` in PowerShell. Add `-Details`, `-File`, or `-SkipTrimmedSample` for additional output and options. For large-file measurements, run `scripts/bench-large.ps1`; preview turns off automatically for files over 5 MB. Update this table, its date, and the measurement summary after every benchmark run.
+On a release build, run `npx tauri build --no-bundle`, then `scripts/bench.ps1`. For large files, run `scripts/bench-large.ps1`. Preview turns off automatically above 5 MB.
 
 ## Keyboard shortcuts
 
@@ -63,17 +61,19 @@ Reproduce on a release build: `npx tauri build --no-bundle`, then run `scripts/b
 
 ## Accessibility
 
-The interface supports keyboard use, including tab navigation, arrow keys, Home/End, and Delete. The preview can receive focus for scrolling, and the editor exposes its text to assistive technology. Contrast meets WCAG 2.2 AA; CI runs `npx tsx scripts/contrast.ts`. The status bar is not a live region.
+The app works from the keyboard, including Tab, arrow keys, Home, End, and Delete. The preview can be focused for scrolling, and the editor exposes its text to assistive technology. Text contrast meets WCAG 2.2 AA. The status bar is not announced as it changes.
 
 ## Development
 
 **Requirements:** Windows, Node.js 20+, Rust with the MSVC toolchain, C++ build tools, and WebView2.
 
+Built with [Tauri 2](https://v2.tauri.app/) and [CodeMirror 6](https://codemirror.net/). TypeScript runs the interface; Rust handles files, dialogs, and Windows integration.
+
 ```bash
 npm install
 npm run tauri dev    # Run the native app
-npm run dev          # Run in a browser with an in-memory stand-in at localhost:1420
-npm run check        # Run type checks, unit tests, shortcut checks, Clippy, and Rust tests
+npm run dev          # Run in a browser at localhost:1420
+npm run check        # Type checks, unit tests, shortcut checks, and Rust checks
 ```
 
 | Command | Purpose |
@@ -86,13 +86,7 @@ npm run check        # Run type checks, unit tests, shortcut checks, Clippy, and
 | `scripts/check-size.ps1` | Check executable and installer size budgets |
 | `scripts/bench.ps1` | Measure startup, typing, preview, and memory |
 
-The browser build uses an in-memory file-system stand-in; it does not support native dialogs, file watching, or the asset protocol.
-
-## Releases and contributions
-
-Create a release with `npm run release -- -Version X.Y.Z`, then push with `git push origin HEAD --follow-tags`. Add user-facing notes under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) before releasing. The release tag runs CI before publishing artifacts. To build a signed installer, configure `MARKY_SIGN_COMMAND` and run `scripts/build-signed.ps1`. Generate winget manifests with `scripts/winget-manifest.ps1`.
-
-After changing npm or Cargo dependencies, regenerate `THIRD_PARTY_NOTICES.txt`. Avoid `windows-core` major versions outside Tauri's 0.62 line. The app code lives in `src/`, Rust commands and file handling in `src-tauri/`, and test, benchmark, and release scripts in `scripts/`. Set `MARKY_PERF_LOG=<file>` to write startup phase timings to a local file.
+Browser mode keeps files in memory. Dialogs, file watching, and local images in the preview need the native app.
 
 ## License
 

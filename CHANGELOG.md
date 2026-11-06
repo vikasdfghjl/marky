@@ -4,6 +4,11 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Changed
+
+- Marky is a stable release, and new GitHub releases are published as stable.
+- The README describes the app in plain language.
+
 ## [0.3.3] - 2026-10-29
 
 ### Fixed
