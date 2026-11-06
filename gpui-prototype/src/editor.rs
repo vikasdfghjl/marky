@@ -800,6 +800,8 @@ impl Prototype {
                 div()
                     .id("source")
                     .flex_1()
+                    // The I-beam over the whole pane, including the space past the end of short lines.
+                    .cursor_text()
                     .overflow_scroll()
                     .track_scroll(&self.source_scroll)
                     .px_3()
