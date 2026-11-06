@@ -4,10 +4,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui::{Context, FontWeight, IntoElement, MouseButton, Pixels, SharedString, StyledText, div, img, prelude::*, px, rgb};
+use gpui::{Context, FontWeight, IntoElement, MouseButton, Pixels, SharedString, StyledText, SvgRenderer, div, img, prelude::*, px, rgb};
 
 use crate::editor::Prototype;
-use crate::math;
+use crate::{diagrams, math};
 use crate::preview::{self, Align, Block, Kind, Run, Table};
 use crate::syntax::Span;
 
@@ -18,6 +18,8 @@ pub struct Look {
     pub mono: SharedString,
     /// The open file's folder: relative images load from here, and only from inside it.
     pub folder: Option<PathBuf>,
+    /// GPUI's SVG renderer, which draws formulas into bitmaps the preview owns (see `bitmaps.rs`).
+    pub svg: SvgRenderer,
 }
 
 impl Look {
@@ -67,6 +69,9 @@ fn preview_block(block: &Block, look: &Look, cx: &mut Context<Prototype>) -> gpu
     if let Kind::Math = block.kind {
         return math_block(&block.text, look);
     }
+    if let Kind::Diagram = block.kind {
+        return diagram_block(&block.text, look, cx);
+    }
     let body = styled_runs(&block.runs, size, look, cx);
     match block.kind {
         Kind::Quote => div().mb_3().pl_3().border_l_2().border_color(tone(dark, 0x71717a, 0xa1a1aa)).child(body),
@@ -81,14 +86,6 @@ fn preview_block(block: &Block, look: &Look, cx: &mut Context<Prototype>) -> gpu
             div().mb_1().flex().flex_row().gap_2().child(marker).child(body)
         }
         Kind::Code => div().mb_3().px_3().py_2().font_family(look.mono.clone()).bg(tone(dark, 0x27272a, 0xf4f4f5)).child(body),
-        Kind::Diagram => div()
-            .mb_3()
-            .px_3()
-            .py_2()
-            .border_1()
-            .border_color(tone(dark, 0x52525b, 0xa1a1aa))
-            .child(div().text_size(px(12.)).text_color(look.muted()).child("Mermaid source"))
-            .child(div().font_family(look.mono.clone()).child(body)),
         // Like the app: headings are bold, and h1 and h2 are underlined by a rule.
         Kind::Heading(level) => div()
             .mt_2()
@@ -107,7 +104,7 @@ fn preview_block(block: &Block, look: &Look, cx: &mut Context<Prototype>) -> gpu
         Kind::Term => div().mt_1().font_weight(FontWeight::BOLD).child(body),
         Kind::Definition => div().mb_2().pl_6().child(body),
         Kind::Paragraph => div().mb_3().child(body),
-        Kind::Table | Kind::Image | Kind::Math => div(),
+        Kind::Table | Kind::Image | Kind::Math | Kind::Diagram => div(),
     }
 }
 
@@ -127,7 +124,7 @@ fn code_block(text: &str, spans: &[Span], look: &Look) -> gpui::Div {
 /// A display formula, centred like KaTeX's display mode. Broken TeX shows its source and the error,
 /// as the app does with KaTeX's `throwOnError: false`.
 fn math_block(tex: &str, look: &Look) -> gpui::Div {
-    match math::render(tex, true, look.font_size, look.dark) {
+    match math::render(tex, true, look.font_size, look.dark, &look.svg) {
         Ok(formula) => div().mb_3().flex().justify_center().child(formula_image(&formula)),
         Err(err) => div()
             .mb_3()
@@ -141,9 +138,38 @@ fn math_block(tex: &str, look: &Look) -> gpui::Div {
     }
 }
 
+/// A Mermaid diagram, centred and never wider than drawn, like the app's (`width="100%"` with a
+/// `max-width`): it shrinks with the pane and keeps its shape. While the helper draws it, its
+/// source shows in its place; a broken diagram shows the error as the app does (`.mermaid-error`).
+fn diagram_block(source: &str, look: &Look, cx: &mut Context<Prototype>) -> gpui::Div {
+    match diagrams::state(source, look.dark, cx) {
+        // The box keeps the shape: given only a relative width, GPUI's img takes the image's own
+        // height, so a shrunk diagram would float in a box as tall as the unshrunk one.
+        diagrams::State::Drawn(diagram) => div().mb_3().flex().justify_center().child(
+            div()
+                .w_full()
+                .max_w(px(diagram.width))
+                .aspect_ratio(diagram.width / diagram.height)
+                .child(img(diagram.image.clone()).size_full()),
+        ),
+        diagrams::State::Drawing => {
+            div().mb_3().px_3().py_2().font_family(look.mono.clone()).text_size(look.code_size()).text_color(look.muted()).child(source.to_string())
+        }
+        diagrams::State::Failed(err) => div()
+            .mb_3()
+            .px_3()
+            .py_2()
+            .border_l_4()
+            .border_color(error_color(look.dark))
+            .font_family(look.mono.clone())
+            .text_size(px(look.font_size * 0.85))
+            .child(format!("Mermaid: {err}")),
+    }
+}
+
 /// An inline formula in a paragraph; broken TeX stays as its `$…$` source in the error colour.
 fn inline_formula(run: &Run, look: &Look) -> gpui::Div {
-    match math::render(&run.text, run.style.display, look.font_size, look.dark) {
+    match math::render(&run.text, run.style.display, look.font_size, look.dark, &look.svg) {
         Ok(formula) => div().child(formula_image(&formula)),
         Err(_) => {
             let fence = if run.style.display { "$$" } else { "$" };

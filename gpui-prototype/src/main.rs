@@ -7,7 +7,9 @@
 #[path = "../../src-tauri/src/files.rs"]
 mod files;
 
+mod bitmaps;
 mod buffer;
+mod diagrams;
 mod editor;
 mod icons;
 mod math;

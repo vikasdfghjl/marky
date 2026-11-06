@@ -5,6 +5,7 @@
 //! virtualised GPUI lists, so only the lines and blocks near the viewport are laid out, and the
 //! preview is re-parsed on a background thread once typing pauses, as in the app.
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -17,6 +18,7 @@ use gpui::{
 };
 
 use crate::buffer::{self, Buffer, EditKind, LineSplice};
+use crate::{diagrams, math};
 use crate::files::{self, FileMeta, OpenedFile};
 use crate::perf;
 use crate::preview::{self, Block, Kind};
@@ -340,7 +342,33 @@ impl Prototype {
         doc.spans = spans;
         doc.longest_line = longest;
         doc.synced_source_line = None;
+        self.release_unused_images(cx);
         cx.notify();
+    }
+
+    /// Frees the bitmaps of formulas and diagrams that no open document shows any more at the
+    /// current font size and theme: every edit of one makes a new bitmap, and GPUI keeps each until
+    /// it is dropped.
+    fn release_unused_images(&self, cx: &mut App) {
+        let mut diagrams_in_use = HashSet::new();
+        let mut formulas_in_use = HashSet::new();
+        for block in self.documents.iter().flat_map(|doc| &doc.blocks) {
+            match block.kind {
+                Kind::Diagram => {
+                    diagrams_in_use.insert(block.text.as_str());
+                }
+                Kind::Math => {
+                    formulas_in_use.insert((block.text.as_str(), true));
+                }
+                _ => {}
+            }
+            let cells = block.table.iter().flat_map(|table| table.rows.iter().flatten());
+            for run in block.runs.iter().chain(cells.flatten()).filter(|run| run.style.math) {
+                formulas_in_use.insert((run.text.as_str(), run.style.display));
+            }
+        }
+        diagrams::release_unused(&diagrams_in_use, self.dark, cx);
+        math::release_unused(&formulas_in_use, self.settings.font_size, self.dark, cx);
     }
 
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
@@ -925,6 +953,7 @@ impl Prototype {
             self.active -= 1;
         }
         self.doc_mut().synced_source_line = None;
+        self.release_unused_images(cx);
         cx.notify();
     }
 
@@ -1016,6 +1045,8 @@ impl Prototype {
             return;
         }
         self.settings.font_size = settings::FONT_SIZES[next as usize];
+        // Formulas are laid out per font size, so the old size's bitmaps are no longer drawn.
+        self.release_unused_images(cx);
         self.keep_settings(cx);
     }
 
@@ -1469,7 +1500,7 @@ impl Prototype {
                     blocks,
                     cx.processor(|this, ix, _window, cx| {
                         let folder = Path::new(&this.doc().path).parent().map(Path::to_path_buf);
-                        let look = Look { font_size: this.settings.font_size, dark: this.dark, mono: this.mono.clone(), folder };
+                        let look = Look { font_size: this.settings.font_size, dark: this.dark, mono: this.mono.clone(), folder, svg: cx.svg_renderer() };
                         match this.doc().blocks.get(ix) {
                             Some(block) => preview_view::preview_item(block, ix, &look, cx),
                             None => div().into_any_element(),
@@ -1603,7 +1634,11 @@ impl Render for Prototype {
         if !self.logged_first_frame {
             perf::mark("render");
         }
-        self.dark = self.settings.is_dark(window.appearance());
+        let dark = self.settings.is_dark(window.appearance());
+        if dark != self.dark {
+            self.dark = dark;
+            self.release_unused_images(cx);
+        }
         self.caret_bounds = None;
         self.update_title(window);
         self.refresh_matches(cx);

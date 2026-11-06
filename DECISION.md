@@ -4,7 +4,7 @@ Decisions about Marky that are not obvious from the code, with the reasons and t
 
 ## 2026-11-07: Math is ported with RaTeX; Mermaid diagrams move to an on-demand helper with merman
 
-Context: step 3 of [docs/gpui-migration.md](docs/gpui-migration.md), whose "Step 3: math and diagrams without JavaScript" section has the full research. Math was built on 7 Nov 2026; the diagram helper is not built yet.
+Context: step 3 of [docs/gpui-migration.md](docs/gpui-migration.md), whose "Step 3: math and diagrams without JavaScript" section has the full research. Both were built on 7 Nov 2026.
 
 ### Decision
 
@@ -26,7 +26,9 @@ Spike, 7 Nov 2026: seven diagram types render in 0.1–2.6 ms each with merman 0
 ### Consequences
 
 - **Program size: 10.87 MB measured** with math built in (RaTeX added 1.99 MB, less than the 3.0 MB it adds to an empty program, because the prototype already links much of what it needs). Over the README's 8 MB target and under its 12 MB hard limit; choosing RaTeX accepted this, and it replaces the 8.88 MB accepted with the GPUI pin.
-- The helper is a second program to build, sign and ship, and a process to start (tens of milliseconds) when a document first shows a diagram. It should stay running while such documents are open and render all of a document's diagrams in one request.
+- The helper is a second program to build, sign and ship: **`marky-diagrams.exe`, 10.35 MB measured**, in `gpui-prototype/diagrams/`. The main program stays at 10.91 MB. Starting it and getting the first answer takes about 50 ms; it holds 2.9 MB while running.
+- One process serves every diagram, one JSON line per diagram, so a diagram that crashes it fails alone (the helper is restarted once). It exits after a minute without a request instead of staying for as long as a document with diagrams is open: diagrams are cached, so it is needed again only when one changes, and an idle prototype then holds no second process.
+- A diagram's bitmap costs more memory than the helper (three larger diagrams: 44.6 MB in all, against 16.4 MB without diagrams). GPUI keeps an SVG image's bitmap until it is dropped, so the prototype makes formula and diagram bitmaps itself and drops those no open document contains (`bitmaps.rs`); before that, editing one formula could leave over 100 MB behind. See the migration doc.
 - Diagram output differs slightly from Mermaid.js: edge-label backgrounds sit a little off and long class names can overflow their box.
 
 ## 2026-11-06: The GPUI prototype uses GPUI from Zed's repository, pinned at b77ec90
