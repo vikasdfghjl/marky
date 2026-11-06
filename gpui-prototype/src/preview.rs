@@ -2,7 +2,7 @@
 //! Math is the TeX source: there is no DOM for KaTeX.
 //! A diagram is the Mermaid source: this window does not run Mermaid.
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -14,6 +14,22 @@ pub enum Kind {
     Code,
     Math,
     Diagram,
+    /// The cells are in `Block::table`.
+    Table,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+/// A GFM table. The first row is the header; a row can have fewer cells than there are columns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Table {
+    pub align: Vec<Align>,
+    pub rows: Vec<Vec<Vec<Run>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -38,6 +54,7 @@ pub struct Block {
     pub runs: Vec<Run>,
     /// 1-based line of the block's start in the LF document `files::read` returns.
     pub line: usize,
+    pub table: Option<Table>,
 }
 
 #[derive(Clone, Copy)]
@@ -48,6 +65,7 @@ enum Open {
     Code,
     Math,
     Diagram,
+    Table,
 }
 
 struct Parse {
@@ -57,6 +75,7 @@ struct Parse {
     style: RunStyle,
     runs: Vec<Run>,
     line: usize,
+    table: Option<Table>,
 }
 
 pub fn blocks(markdown: &str) -> Vec<Block> {
@@ -68,6 +87,7 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
         style: RunStyle::default(),
         runs: Vec::new(),
         line: 1,
+        table: None,
     };
     // Frontmatter is metadata, as in the app's preview; without the option it parses as a rule and a heading.
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
@@ -106,9 +126,23 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
             Event::End(TagEnd::Strong) => parse.style.bold = false,
             Event::Start(Tag::Strikethrough) => parse.style.strike = true,
             Event::End(TagEnd::Strikethrough) => parse.style.strike = false,
-            Event::Start(Tag::TableRow) | Event::Start(Tag::TableHead) => parse.begin(Open::Paragraph, markdown, range.start, &mut out),
-            Event::Start(Tag::TableCell) if parse.open.is_some() && !parse.runs.is_empty() => parse.push(" | ", false),
-            Event::End(TagEnd::Heading(_)) | Event::End(TagEnd::CodeBlock) | Event::End(TagEnd::TableRow) | Event::End(TagEnd::TableHead) => {
+            Event::Start(Tag::Table(align)) => {
+                parse.begin(Open::Table, markdown, range.start, &mut out);
+                parse.table = Some(Table { align: align.iter().map(align_of).collect(), rows: Vec::new() });
+            }
+            Event::Start(Tag::TableHead) | Event::Start(Tag::TableRow) => {
+                if let Some(table) = &mut parse.table {
+                    table.rows.push(Vec::new());
+                }
+            }
+            Event::Start(Tag::TableCell) => parse.runs.clear(),
+            Event::End(TagEnd::TableCell) => {
+                let cell = std::mem::take(&mut parse.runs);
+                if let Some(row) = parse.table.as_mut().and_then(|table| table.rows.last_mut()) {
+                    row.push(cell);
+                }
+            }
+            Event::End(TagEnd::Heading(_)) | Event::End(TagEnd::CodeBlock) | Event::End(TagEnd::Table) => {
                 parse.finish(&mut out);
             }
             Event::End(TagEnd::Paragraph) => {
@@ -157,11 +191,15 @@ impl Parse {
     }
 
     fn plain(&self) -> String {
-        self.runs.iter().map(|run| run.text.as_str()).collect()
+        plain_text(&self.runs)
     }
 
     fn finish(&mut self, out: &mut Vec<Block>) {
         let Some(open) = self.open.take() else { return };
+        if let Open::Table = open {
+            self.finish_table(out);
+            return;
+        }
         let mut runs = std::mem::take(&mut self.runs);
         let text: String = runs.iter().map(|run| run.text.as_str()).collect();
         let text = text.trim().to_string();
@@ -179,8 +217,37 @@ impl Parse {
             Open::Code => Kind::Code,
             Open::Math => Kind::Math,
             Open::Diagram => Kind::Diagram,
+            Open::Table => unreachable!("tables finish in finish_table"),
         };
-        out.push(Block { kind, text, runs, line: self.line });
+        out.push(Block { kind, text, runs, line: self.line, table: None });
+    }
+
+    /// `text` is the cells joined by ` | ` per row, for tests; the outline lists headings only.
+    fn finish_table(&mut self, out: &mut Vec<Block>) {
+        self.runs.clear();
+        let Some(table) = self.table.take() else { return };
+        if table.rows.is_empty() {
+            return;
+        }
+        let text = table
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| plain_text(cell)).collect::<Vec<_>>().join(" | "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.push(Block { kind: Kind::Table, text, runs: Vec::new(), line: self.line, table: Some(table) });
+    }
+}
+
+pub fn plain_text(runs: &[Run]) -> String {
+    runs.iter().map(|run| run.text.as_str()).collect()
+}
+
+fn align_of(align: &Alignment) -> Align {
+    match align {
+        Alignment::Center => Align::Center,
+        Alignment::Right => Align::Right,
+        Alignment::None | Alignment::Left => Align::Left,
     }
 }
 
@@ -217,7 +284,26 @@ mod tests {
             text: text.into(),
             runs: vec![Run { text: text.into(), style: RunStyle::default() }],
             line,
+            table: None,
         }
+    }
+
+    #[test]
+    fn a_table_is_one_block_with_a_header_row_cells_and_alignment() {
+        let markdown = "Intro.\n\n| Env | Replicas |\n| :-- | --: |\n| staging | **2** |\n| canary |\n\nAfter.\n";
+        let blocks = blocks(markdown);
+        assert_eq!(blocks.len(), 3);
+        let table = &blocks[1];
+        assert_eq!(table.kind, Kind::Table);
+        assert_eq!(table.line, 3);
+        // GFM pads a short row with empty cells up to the header's column count.
+        assert_eq!(table.text, "Env | Replicas\nstaging | 2\ncanary | ");
+        let cells = table.table.as_ref().unwrap();
+        assert_eq!(cells.align, [Align::Left, Align::Right]);
+        assert_eq!(cells.rows.len(), 3);
+        assert!(cells.rows.iter().all(|row| row.len() == 2));
+        assert!(cells.rows[1][1][0].style.bold);
+        assert_eq!(blocks[2].text, "After.");
     }
 
     #[test]

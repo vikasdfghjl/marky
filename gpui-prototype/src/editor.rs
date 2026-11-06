@@ -10,7 +10,7 @@ use std::time::Instant;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
     FocusHandle, Focusable, FontWeight, GlobalElementId, HighlightStyle, InspectorElementId, IntoElement, LayoutId,
-    MouseButton, MouseDownEvent, Pixels, Point, Position, PromptLevel, ScrollHandle, Style, StyledText, Subscription,
+    MouseButton, MouseDownEvent, Pixels, Point, Position, PromptLevel, ScrollHandle, SharedString, Style, StyledText, Subscription,
     TextLayout, UTF16Selection, Window, actions, canvas, deferred, div, fill, point, prelude::*, px, relative, rgb,
     size, svg,
 };
@@ -18,7 +18,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::files::{self, FileMeta, OpenedFile};
 use crate::perf;
-use crate::preview::{self, Block, Kind};
+use crate::preview::{self, Align, Block, Kind, Run, Table};
 use crate::settings::{self, ViewSettings};
 
 actions!(
@@ -45,6 +45,16 @@ actions!(
 );
 
 const CARET: u32 = 0x2563eb;
+
+/// The app's `--font-mono` list, in its order. Windows 10 has only Consolas; Windows 11 adds Cascadia.
+const MONO_FONTS: [&str; 3] = ["Cascadia Code", "Cascadia Mono", "Consolas"];
+
+/// GPUI replaces a missing family with its UI font instead of trying the next one, so pick the first installed.
+fn mono_family(cx: &App) -> SharedString {
+    let installed = cx.text_system().all_font_names();
+    let family = MONO_FONTS.into_iter().find(|name| installed.iter().any(|font| font == name)).unwrap_or("Consolas");
+    family.into()
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OpenMenu {
@@ -99,6 +109,8 @@ pub struct Prototype {
     typed_at: Option<Instant>,
     settings: ViewSettings,
     dark: bool,
+    /// The editor's and the preview's code font.
+    mono: SharedString,
     config_dir: PathBuf,
     open_menu: Option<OpenMenu>,
     source_scroll: ScrollHandle,
@@ -132,6 +144,7 @@ impl Prototype {
             logged_first_frame: false,
             typed_at: None,
             dark: settings.is_dark(window.appearance()),
+            mono: mono_family(cx),
             settings,
             config_dir,
             open_menu: None,
@@ -481,7 +494,15 @@ impl Prototype {
             return;
         }
         self.doc_mut().synced_source_line = Some(top);
-        self.preview_scroll.scroll_to_top_of_item(preview::block_at_line(&self.doc().blocks, top + 1));
+        let block = preview::block_at_line(&self.doc().blocks, top + 1);
+        // The first block means the top of the document, padding included. GPUI 0.2.2 also resolves
+        // scroll_to_top_of_item before it knows the pane's position on the first frame, which scrolled
+        // the opening heading out of view (an offset of -76.8 px instead of 0).
+        if block == 0 {
+            self.preview_scroll.set_offset(point(px(0.), px(0.)));
+        } else {
+            self.preview_scroll.scroll_to_top_of_item(block);
+        }
     }
 
     fn open_file(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -802,6 +823,8 @@ impl Prototype {
                     .flex_1()
                     // The I-beam over the whole pane, including the space past the end of short lines.
                     .cursor_text()
+                    // Monospace, as in the app's editor, so padded table columns line up.
+                    .font_family(self.mono.clone())
                     .overflow_scroll()
                     .track_scroll(&self.source_scroll)
                     .px_3()
@@ -977,7 +1000,10 @@ impl Render for Prototype {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::close_menu))
             .when(show_outline, |row| row.child(self.outline_column(cx)))
             .when(show_editor, |row| row.child(self.editor_column(cx)))
-            .when(show_preview, |row| row.child(preview_column(&self.doc().blocks, &self.preview_scroll, font_size, dark)));
+            .when(show_preview, |row| {
+                let look = Look { font_size, dark, mono: self.mono.clone() };
+                row.child(preview_column(&self.doc().blocks, &self.preview_scroll, &look))
+            });
 
         div()
             .size_full()
@@ -1039,7 +1065,25 @@ fn command(label: &str, dark: bool) -> gpui::Div {
     div().px_3().py_1().w(px(180.)).text_color(tone(dark, 0xfafafa, 0x18181b)).child(label.to_string())
 }
 
-fn preview_column(blocks: &[Block], scroll: &ScrollHandle, font_size: f32, dark: bool) -> impl IntoElement {
+/// What every preview block is drawn with.
+struct Look {
+    font_size: f32,
+    dark: bool,
+    mono: SharedString,
+}
+
+impl Look {
+    /// The app's `.markdown-body code, pre { font-size: 0.88em }`.
+    fn code_size(&self) -> Pixels {
+        px(self.font_size * 0.88)
+    }
+
+    fn border(&self) -> gpui::Rgba {
+        tone(self.dark, 0x3f3f46, 0xd4d4d8)
+    }
+}
+
+fn preview_column(blocks: &[Block], scroll: &ScrollHandle, look: &Look) -> impl IntoElement {
     div()
         .id("preview")
         .flex_1()
@@ -1047,21 +1091,27 @@ fn preview_column(blocks: &[Block], scroll: &ScrollHandle, font_size: f32, dark:
         .h_full()
         .overflow_y_scroll()
         .track_scroll(scroll)
-        .bg(tone(dark, 0x09090b, 0xffffff))
-        .text_color(tone(dark, 0xfafafa, 0x18181b))
+        .bg(tone(look.dark, 0x09090b, 0xffffff))
+        .text_color(tone(look.dark, 0xfafafa, 0x18181b))
         .px_4()
         .py_3()
-        .children(blocks.iter().map(|block| preview_block(block, font_size, dark)))
+        .children(blocks.iter().map(|block| preview_block(block, look)))
 }
 
-fn preview_block(block: &Block, font_size: f32, dark: bool) -> gpui::Div {
+fn preview_block(block: &Block, look: &Look) -> gpui::Div {
+    let dark = look.dark;
+    let font_size = look.font_size;
     let size = match block.kind {
         Kind::Heading(1) => px(font_size + 8.),
         Kind::Heading(2) => px(font_size + 4.),
         Kind::Heading(_) => px(font_size + 2.),
+        Kind::Code | Kind::Math | Kind::Diagram => look.code_size(),
         _ => px(font_size),
     };
-    let body = styled_runs(block, size, dark);
+    if let (Kind::Table, Some(table)) = (block.kind, &block.table) {
+        return table_block(table, look);
+    }
+    let body = styled_runs(&block.runs, size, look);
     match block.kind {
         Kind::Quote => div().mb_3().pl_3().border_l_2().border_color(tone(dark, 0x71717a, 0xa1a1aa)).child(body),
         Kind::Item { ordered } => {
@@ -1071,8 +1121,15 @@ fn preview_block(block: &Block, font_size: f32, dark: bool) -> gpui::Div {
             };
             div().mb_1().flex().flex_row().gap_2().child(marker).child(body)
         }
-        Kind::Code => div().mb_3().px_3().py_2().bg(tone(dark, 0x27272a, 0xf4f4f5)).child(body),
-        Kind::Math => div().mb_3().px_3().py_2().bg(tone(dark, 0x1e1b4b, 0xeef2ff)).text_color(tone(dark, 0xe0e7ff, 0x312e81)).child(body),
+        Kind::Code => div().mb_3().px_3().py_2().font_family(look.mono.clone()).bg(tone(dark, 0x27272a, 0xf4f4f5)).child(body),
+        Kind::Math => div()
+            .mb_3()
+            .px_3()
+            .py_2()
+            .font_family(look.mono.clone())
+            .bg(tone(dark, 0x1e1b4b, 0xeef2ff))
+            .text_color(tone(dark, 0xe0e7ff, 0x312e81))
+            .child(body),
         Kind::Diagram => div()
             .mb_3()
             .px_3()
@@ -1080,13 +1137,66 @@ fn preview_block(block: &Block, font_size: f32, dark: bool) -> gpui::Div {
             .border_1()
             .border_color(tone(dark, 0x52525b, 0xa1a1aa))
             .child(div().text_size(px(12.)).text_color(tone(dark, 0xa1a1aa, 0x52525b)).child("Mermaid source"))
+            .child(div().font_family(look.mono.clone()).child(body)),
+        // Like the app: headings are bold, and h1 and h2 are underlined by a rule.
+        Kind::Heading(level) => div()
+            .mt_2()
+            .mb_3()
+            .font_weight(FontWeight::BOLD)
+            .when(level <= 2, |heading| heading.pb_1().border_b_1().border_color(look.border()))
             .child(body),
-        Kind::Heading(_) | Kind::Paragraph => div().mb_3().child(body),
+        Kind::Paragraph => div().mb_3().child(body),
+        Kind::Table => div(),
     }
 }
 
-fn styled_runs(block: &Block, size: Pixels, dark: bool) -> gpui::Div {
-    let runs = block.runs.iter().map(|run| {
+/// The app's table: 1px borders, 6px 12px cell padding, a bold header row and shaded even body rows.
+/// Columns get widths in proportion to their longest cell, so they line up across rows like an auto table.
+fn table_block(table: &Table, look: &Look) -> gpui::Div {
+    let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0).max(table.align.len());
+    let weights: Vec<f32> = (0..columns)
+        .map(|column| {
+            let longest = table.rows.iter().filter_map(|row| row.get(column)).map(|cell| preview::plain_text(cell).chars().count()).max();
+            longest.unwrap_or(0).max(3) as f32
+        })
+        .collect();
+    let size = px(look.font_size);
+    let shade = tone(look.dark, 0x18181b, 0xf4f4f5);
+    let rows = table.rows.iter().enumerate().map(|(index, row)| {
+        let cells = (0..columns).map(|column| {
+            let runs = row.get(column).map(Vec::as_slice).unwrap_or(&[]);
+            let mut cell = div()
+                .min_w(px(0.))
+                .flex_basis(px(0.))
+                .px_3()
+                .py(px(6.))
+                .border_r_1()
+                .border_b_1()
+                .border_color(look.border())
+                .child(styled_runs(runs, size, look));
+            cell.style().flex_grow = Some(weights[column]);
+            match table.align.get(column) {
+                Some(Align::Center) => cell.text_center(),
+                Some(Align::Right) => cell.text_right(),
+                _ => cell,
+            }
+        });
+        div()
+            .flex()
+            .flex_row()
+            .w_full()
+            .when(index == 0, |header| header.font_weight(FontWeight::BOLD))
+            // Body rows count from 1, as in the app's `tr:nth-child(even)`.
+            .when(index > 0 && index % 2 == 0, |row| row.bg(shade))
+            .children(cells)
+    });
+    div().mb_3().w_full().flex().flex_col().border_t_1().border_l_1().border_color(look.border()).children(rows)
+}
+
+fn styled_runs(runs: &[Run], size: Pixels, look: &Look) -> gpui::Div {
+    let dark = look.dark;
+    let count = runs.len();
+    let runs = runs.iter().map(|run| {
         let mut text = div().whitespace_normal().text_size(size).child(run.text.clone());
         if run.style.bold {
             text = text.font_weight(FontWeight::BOLD);
@@ -1098,11 +1208,11 @@ fn styled_runs(block: &Block, size: Pixels, dark: bool) -> gpui::Div {
             text = text.line_through();
         }
         if run.style.code {
-            text = text.bg(tone(dark, 0x3f3f46, 0xe4e4e7)).px_1();
+            text = text.font_family(look.mono.clone()).text_size(look.code_size()).bg(tone(dark, 0x3f3f46, 0xe4e4e7)).px_1();
         }
         text
     });
-    if block.runs.len() <= 1 {
+    if count <= 1 {
         return div().w_full().children(runs);
     }
     div().w_full().flex().flex_row().flex_wrap().children(runs)
