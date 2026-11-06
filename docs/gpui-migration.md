@@ -60,7 +60,9 @@ The rules in [AGENTS.md](../AGENTS.md) still hold: one writer for dirty state, r
 
 `gpui-prototype/` is a throwaway binary beside the app, not inside the Tauri shell. One window. It opens files through `files::read` (File → Open, or the path on the command line) and keeps each one as a tab. It edits the active tab and paints headings, paragraphs, emphasis, quotes, lists, code, tables, display math, and Mermaid fences from a Rust CommonMark parse (pulldown-cmark). Frontmatter is skipped, as in the app. Tables follow the app's look: borders, a bold header row, shaded even rows and column alignment; columns are sized in proportion to their longest cell. The editor and all code use the app's monospace font (the first installed of Cascadia Code, Cascadia Mono, Consolas). Math is the TeX source and a diagram is the Mermaid source: this window does not run KaTeX or Mermaid. There is no syntax colouring.
 
-Each source line is a GPUI `StyledText`, so clicks, the caret and the IME candidate window use GPUI's own text layout, at any text size and with word wrap. The source pane leads synced scrolling. An outline lists headings and jumps to the matching line. File, Edit, and View menus, plus a bar for Open, Save, and the editor, preview, and outline, are drawn in the window; the bar uses the app's folder, editor, and preview icons. Save goes through `files::write`, so the file's BOM and line ending come back. A dirty tab is marked in the tab and the title. Closing a dirty tab, quitting, or closing the window asks before discarding. Errors show in the path bar, because a release build has no console.
+The text lives in a rope (`ropey`, MIT) with undo and redo: typing and deleting group into one step until a pause, a new line or a caret move; an IME composition is one step; undoing back to the saved state makes the tab clean again. Ctrl+F opens a find bar and Ctrl+H adds replace: matches are found without regard to ASCII case and highlighted, Enter or F3 steps forward, Shift+Enter or Shift+F3 back, and Replace all is a single undo step.
+
+Both panes are virtualised GPUI lists: only the source lines and preview blocks near the viewport are laid out, so cost follows the screen, not the file. The preview is parsed on a background thread once typing pauses (twice the last parse, 30–150 ms, like the app's `typingPauseMs`), and only the blocks that changed are replaced, like the app's `preview-blocks.ts`. Each source line is a GPUI `StyledText`, so clicks, the caret and the IME candidate window use GPUI's own text layout, at any text size and with word wrap. The source pane leads synced scrolling. An outline lists headings and jumps to the matching line. File, Edit, and View menus, plus a bar for Open, Save, and the editor, preview, and outline, are drawn in the window; the bar uses the app's folder, editor, and preview icons. Save goes through `files::write`, so the file's BOM and line ending come back. A dirty tab is marked in the tab and the title. Closing a dirty tab, quitting, or closing the window asks before discarding. Errors show in the path bar, because a release build has no console.
 
 View covers the editor, the preview, the outline, word wrap, text size, and light, dark or system theme (system follows Windows while the window is open). The first run reads those choices from the app's `settings.json`; changes are written to the prototype's own `%APPDATA%\dev.marky.gpui-prototype\settings.json`, so the prototype never edits the app's settings. As in the app, hiding the editor shows the preview without changing `showPreview`.
 
@@ -69,7 +71,7 @@ cargo run --manifest-path gpui-prototype/Cargo.toml --release
 cargo run --manifest-path gpui-prototype/Cargo.toml --release -- path\to\file.md
 ```
 
-With no path it opens `scripts/fixtures/typical.md`. The release profile matches `src-tauri`'s (`opt-level = "s"`, LTO, one codegen unit, `panic = "abort"`, stripped), so the executable sizes compare. With `MARKY_PERF_LOG` set it writes `startup_ms` and `type_ms` lines there, in the format `scripts/bench.ps1` reads.
+With no path it opens `scripts/fixtures/typical.md`. The release profile matches `src-tauri`'s (`opt-level = "s"`, LTO, one codegen unit, `panic = "abort"`, stripped), so the executable sizes compare. With `MARKY_PERF_LOG` set it writes `startup_ms` (with the start-up phases), `type_ms` and `preview_ms` lines there, in the format `scripts/bench.ps1` reads. `-File` measures another document, such as the files `bench-large.ts gen` makes.
 
 ### Measuring
 
@@ -113,18 +115,47 @@ Record the results, the GPUI version or revision, and the date below. Do not put
 
 Result, 6 Nov 2026: **the gate passes**, on an i5-9300H, five runs each, medians. Read it with these limits:
 
-- Cold start passes with little margin: 25% against the 20% bar, and one of the five runs took 892 ms. A native window that needs about 650 ms is slower than expected without a browser process; profile where GPUI spends it (DirectX device, fonts, first layout) before step 1.
+- Cold start passes with little margin: 25% against the 20% bar, and one of the five runs took 892 ms. The start-up profile below shows where the time goes and how to recover about 185 ms.
 - The prototype does much less than Marky: no code highlighting, KaTeX, Mermaid, recovery, file watching or recent files. Memory and start time will grow as those arrive; the margin on memory is large enough to absorb that, the margin on start time is not.
 - Typing is measured differently. Marky's figure is a DevTools key event to after paint, on a generated 6 KB document; the prototype's is an OS keystroke (SendKeys) from arrival to the end of its paint, on `typical.md`. Treat it as "both well within budget", not as a 4× speed-up. The prototype logged 201 of 300 keystrokes, because the window lost focus during some runs.
-- Large documents are not covered (see below).
+- Large documents are measured separately, below.
 
-Not covered by the gate, and still to measure before step 1 below: large documents (`bench-large.ps1`). The prototype re-parses the whole document and lays out every line on each keystroke, which is fine at 5 KB and will not be at 1 MB.
+### Start-up profile
+
+Measured 6 Nov 2026 with phase marks on the `startup_ms` line and a temporary timing build of GPUI 0.2.2 (typical runs, `typical.md`):
+
+| Phase | Time |
+| --- | ---: |
+| `Application::new()`: OLE | 2 ms |
+| DXGI factory | 13 ms |
+| Choosing the adapter, which creates a Direct3D 11 device to test it and drops it | ~265 ms |
+| Creating the Direct3D 11 device again, to keep | ~185 ms |
+| DirectWrite text system | ~85 ms |
+| Message window, drag-drop helper, icon, Windows version | ~45 ms |
+| Window, first render and layout, first paint | ~75 ms |
+
+About 85–90% of the start is GPUI's platform set-up, before any window or document: the two Direct3D device creations alone are about 70%. The second one is waste, and Zed's `main` already removes it: `get_adapter` in `crates/gpui_windows/src/directx_devices.rs` keeps the device it tests. Moving to a reviewed Zed revision would bring start-up to roughly 465 ms and is also what step 4 needs for AccessKit. The document itself costs almost nothing at start: reading `typical.md` takes under 1 ms, parsing moved to the background, and the first frame lays out only visible lines.
+
+### Large documents
+
+Files from `bench-large.ts gen`, 6 Nov 2026, same session for both builds. Prototype: `gpui-prototype/bench.ps1 -File`, medians of 3 runs. Marky 0.3.3: `bench-large.ps1`, one start-up run per size. Typing is p50 per keystroke, with the measurement caveat above.
+
+| File | Prototype before the editor rework | Prototype now | Marky 0.3.3 |
+| --- | --- | --- | --- |
+| 5 KB (`typical.md`) | 651 ms · 18.9 MB · 4.1 ms | 643 ms · 16.4 MB · 1.3 ms · 31 ms | 863 ms · 103.7 MB · 15.9 ms |
+| 100 KB | 954 ms · 144 MB · 201 ms | 677 ms · 18.0 MB · 1.5 ms · 34 ms | 1,373 ms · 157 MB · 15.5 ms · 146 ms |
+| 1 MB | 7.1 s · 1.23 GB · 5.2 s | 682 ms · 29.4 MB · 1.7 ms · 100 ms | 997 ms · 482 MB · 15.8 ms · 475 ms |
+| 4 MB | did not open within 60 s | 723 ms · 68.4 MB · 1.5 ms · 251 ms | 974 ms · 1,352 MB · 15.6 ms · 1,426 ms |
+
+Start · memory 10 s after launch · typing p50 · preview after typing stops. Typing p95 stayed at or under 2.6 ms at every size. Parsing 4 MB takes 92 ms on the background thread, against 1,152 ms in Marky's worker.
+
+Before the rework the prototype laid out every line and re-parsed on every keystroke; virtualised lists and the background parse made start-up and typing independent of file size. The first measurement of the rework found the preview 3.4 s behind at 1 MB: block line numbers were counted from the start of the document for every block, so parsing was quadratic, and a parse cancelled by the next keystroke kept running on its thread, so they piled up. Counting from the previous block fixed both. Memory still grows with the file (the text, the parsed blocks and the line index), at about 13 MB per MB against Marky's 300.
 
 ## After the gate
 
 Do these in order. Each one keeps the app shippable; do not delete WebView2 until the GPUI window covers the same tasks.
 
-1. **Editor.** One document on a rope, undo, find and replace, word wrap, Windows text input, drawn with a virtualised list (`uniform_list`) so cost follows the screen, not the file. Tabs and separate undo histories come after a single buffer feels right.
+1. **Editor.** One document on a rope, undo, find and replace, word wrap, Windows text input, drawn with a virtualised list so cost follows the screen, not the file. Done in the prototype on 6 Nov 2026 (tabs with separate undo histories included). Still missing: selecting with the mouse or Shift+Up/Down, word and document-wide caret moves (Ctrl+arrows, Ctrl+Home/End), Home/End on wrapped rows, horizontal scrolling when word wrap is off (long lines are cut off), IME reconversion, and case folding beyond ASCII in find.
 2. **Plain preview.** The syntax Marky renders today that is text layout: tables, task lists, strikethrough, footnotes, definition lists, abbreviations, subscript, superscript, marked text. Keep a line map so scrolling can stay in step. Share one parser's idea of a token with the editor so the two panes do not disagree.
 3. **Math and diagrams.** Decide explicitly to port them or to drop them. Do not embed a JavaScript engine to keep KaTeX and Mermaid; that spends the browser cost again.
 4. **Chrome.** Menus, shortcuts, settings, outline, status bar, light and dark theme, keyboard access and an AccessKit tree that exposes the editor text. Contrast still has to meet WCAG 2.2 AA. This step needs a GPUI revision with AccessKit (see above).
@@ -137,7 +168,7 @@ Official GPUI material (Apache-2.0):
 
 - [GPUI README](https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md), [gpui.rs](https://gpui.rs/), and [docs.rs for 0.2.2](https://docs.rs/gpui/0.2.2).
 - `examples/input.rs`, also shipped in the 0.2.2 crate: the reference text input. It implements `EntityInputHandler` for Windows text input and IME, and maps clicks and the caret through text layout (`closest_index_for_x`, `x_for_index`, `bounds_for_range`).
-- `examples/uniform_list.rs` and the `list` element: virtualised rows, for an editor or preview that should not lay out the whole document.
+- `examples/uniform_list.rs` and the `list` element: virtualised rows, for an editor or preview that should not lay out the whole document. The prototype uses `list` for both panes, because wrapped lines and preview blocks have different heights; `ListState::splice` keeps measured heights when lines change.
 - `examples/set_menus.rs` and `examples/on_window_close_quit.rs`: menus, and quitting when the window closes.
 - `examples/a11y.rs` on `main` only, with [AccessKit](https://github.com/AccessKit/accesskit).
 

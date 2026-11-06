@@ -1,25 +1,28 @@
-//! One buffer. Characters arrive through GPUI's platform input handler, because that
-//! is how Windows text input reaches a view. Each source line is a `StyledText`, so clicks and
-//! the caret use GPUI's own text layout (the pattern in gpui's `examples/input.rs`) and stay
-//! right at any font size and with word wrap.
+//! The window: tabs, the source editor, the preview, the outline, menus and the find bar.
+//!
+//! Text lives in a rope (`buffer.rs`) with undo and redo. Characters arrive through GPUI's platform
+//! input handler, because that is how Windows text input and IME reach a view. Both panes are
+//! virtualised GPUI lists, so only the lines and blocks near the viewport are laid out, and the
+//! preview is re-parsed on a background thread once typing pauses, as in the app.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    FocusHandle, Focusable, FontWeight, GlobalElementId, HighlightStyle, InspectorElementId, IntoElement, LayoutId,
-    MouseButton, MouseDownEvent, Pixels, Point, Position, PromptLevel, ScrollHandle, SharedString, Style, StyledText, Subscription,
-    TextLayout, UTF16Selection, Window, actions, canvas, deferred, div, fill, point, prelude::*, px, relative, rgb,
-    size, svg,
+    AnyElement, App, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, FocusHandle, Focusable, HighlightStyle,
+    IntoElement, ListAlignment, ListOffset, ListScrollEvent, ListState, MouseButton, MouseDownEvent, Pixels, Point,
+    PromptLevel, SharedString, StyledText, Subscription, Task, TextLayout, UTF16Selection, Window, actions, canvas,
+    deferred, div, fill, list, prelude::*, px, rgb, size, svg,
 };
-use unicode_segmentation::UnicodeSegmentation;
 
+use crate::buffer::{self, Buffer, EditKind, LineSplice};
 use crate::files::{self, FileMeta, OpenedFile};
 use crate::perf;
-use crate::preview::{self, Align, Block, Kind, Run, Table};
+use crate::preview::{self, Block, Kind};
+use crate::preview_view::{self, Look, tone};
 use crate::settings::{self, ViewSettings};
+use crate::text_field::{FieldEvent, InputLayer, TextField};
 
 actions!(
     prototype,
@@ -41,10 +44,20 @@ actions!(
         Copy,
         Quit,
         Save,
+        Undo,
+        Redo,
+        Find,
+        FindReplace,
+        FindNext,
+        FindPrevious,
+        FindClose,
     ]
 );
 
 const CARET: u32 = 0x2563eb;
+
+/// Lines and blocks laid out beyond the viewport, so scrolling a little does not wait for layout.
+const OVERDRAW: f32 = 400.;
 
 /// The app's `--font-mono` list, in its order. Windows 10 has only Consolas; Windows 11 adds Cascadia.
 const MONO_FONTS: [&str; 3] = ["Cascadia Code", "Cascadia Mono", "Consolas"];
@@ -56,6 +69,12 @@ fn mono_family(cx: &App) -> SharedString {
     family.into()
 }
 
+/// The preview waits for typing to pause: twice the last parse, 30–150 ms, like the app's `typingPauseMs`.
+/// A typical document updates about 40 ms after the last keystroke; a large one never parses mid-burst.
+fn parse_pause(last_parse_ms: f64) -> Duration {
+    Duration::from_secs_f64((last_parse_ms * 2.0).clamp(30.0, 150.0) / 1000.0)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OpenMenu {
     File,
@@ -64,46 +83,81 @@ enum OpenMenu {
 }
 
 struct Document {
+    /// Finds the document again when a background parse finishes, even if tabs moved meanwhile.
+    id: u64,
     path: String,
-    content: String,
     meta: FileMeta,
     /// Lossy decode. Saving would corrupt the file, so Save refuses it.
     read_only: bool,
-    dirty: bool,
+    buffer: Buffer,
     selected: Range<usize>,
     /// The caret is at `selected.start` when the selection was made backwards.
     selection_reversed: bool,
     marked: Option<Range<usize>>,
     blocks: Vec<Block>,
+    parse_task: Option<Task<()>>,
+    last_parse_ms: f64,
+    /// The last edit the preview has not caught up with; logged as `preview_ms` when it does.
+    edited_at: Option<Instant>,
+    /// One item per source line.
+    lines: ListState,
+    /// One item per preview block.
+    block_list: ListState,
     followed_cursor_line: Option<usize>,
     synced_source_line: Option<usize>,
 }
 
 impl Document {
-    fn open(opened: OpenedFile) -> Self {
-        let blocks = preview::blocks(&opened.text);
+    fn open(opened: OpenedFile, id: u64, cx: &mut Context<Prototype>) -> Self {
+        let buffer = Buffer::new(&opened.text);
+        let lines = ListState::new(buffer.line_count(), ListAlignment::Top, px(OVERDRAW));
+        // The preview follows the source pane, so scrolling the source re-renders the view.
+        lines.set_scroll_handler(cx.listener(|_, _: &ListScrollEvent, _, cx| cx.notify()));
         Self {
+            id,
             path: opened.path,
-            content: opened.text,
             meta: opened.meta,
             read_only: opened.read_only,
-            dirty: false,
+            buffer,
             selected: 0..0,
             selection_reversed: false,
             marked: None,
-            blocks,
+            blocks: Vec::new(),
+            parse_task: None,
+            last_parse_ms: 0.,
+            edited_at: None,
+            lines,
+            block_list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
             followed_cursor_line: None,
             synced_source_line: None,
         }
     }
+
+    fn cursor(&self) -> usize {
+        if self.selection_reversed { self.selected.start } else { self.selected.end }
+    }
+
+    fn splice_lines(&self, splice: LineSplice) {
+        self.lines.splice(splice.first..splice.first + splice.old, splice.new);
+    }
+}
+
+struct FindBar {
+    query: Entity<TextField>,
+    replacement: Entity<TextField>,
+    show_replace: bool,
+    /// Sorted, non-overlapping byte ranges.
+    matches: Vec<Range<usize>>,
+    /// Document id, buffer version and query the matches belong to.
+    searched: Option<(u64, u64, String)>,
+    _subscriptions: Vec<Subscription>,
 }
 
 pub struct Prototype {
     focus: FocusHandle,
     documents: Vec<Document>,
     active: usize,
-    /// Process start, taken at the top of `main`.
-    started: Instant,
+    next_document_id: u64,
     logged_first_frame: bool,
     /// When the last edit arrived; logged as `type_ms` once that frame has painted.
     typed_at: Option<Instant>,
@@ -113,11 +167,10 @@ pub struct Prototype {
     mono: SharedString,
     config_dir: PathBuf,
     open_menu: Option<OpenMenu>,
-    source_scroll: ScrollHandle,
-    preview_scroll: ScrollHandle,
+    find: Option<FindBar>,
     /// Where the caret was painted in the last frame. The IME places its candidate window here.
     caret_bounds: Option<Bounds<Pixels>>,
-    /// The last error, shown in the path bar: a release build has no console.
+    /// The last error or result, shown in the path bar: a release build has no console.
     status: Option<String>,
     window_title: String,
     /// Set once the user chose Discard, so the second close request goes through.
@@ -126,36 +179,35 @@ pub struct Prototype {
 }
 
 impl Prototype {
-    pub fn new(
-        opened: OpenedFile,
-        settings: ViewSettings,
-        config_dir: PathBuf,
-        started: Instant,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(opened: OpenedFile, settings: ViewSettings, config_dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // "System" follows Windows' light or dark mode while the window is open.
         let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
-        Self {
+        let document = Document::open(opened, 0, cx);
+        perf::mark("open");
+        let mono = mono_family(cx);
+        perf::mark("fonts");
+        let mut this = Self {
             focus: cx.focus_handle(),
-            documents: vec![Document::open(opened)],
+            documents: vec![document],
             active: 0,
-            started,
+            next_document_id: 1,
             logged_first_frame: false,
             typed_at: None,
             dark: settings.is_dark(window.appearance()),
-            mono: mono_family(cx),
+            mono,
             settings,
             config_dir,
             open_menu: None,
-            source_scroll: ScrollHandle::new(),
-            preview_scroll: ScrollHandle::new(),
+            find: None,
             caret_bounds: None,
             status: None,
             window_title: String::new(),
             close_confirmed: false,
             _appearance: appearance,
-        }
+        };
+        // The source paints first; the preview follows when the background parse is done, like the app.
+        this.schedule_parse(0, Duration::ZERO, cx);
+        this
     }
 
     fn doc(&self) -> &Document {
@@ -171,106 +223,209 @@ impl Prototype {
         self.status = Some(message);
     }
 
-    fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.doc().selected.is_empty() {
-            self.select_to(previous_grapheme(&self.doc().content, self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
+    // ----- Editing -----
 
-    fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if self.doc().selected.is_empty() {
-            self.select_to(next_grapheme(&self.doc().content, self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.doc().selected.is_empty() {
-            self.move_to(self.doc().selected.start, cx);
+    /// Every change to the text goes through here: the buffer, its undo history, the source list and the preview.
+    fn edit(&mut self, range: Range<usize>, text: &str, kind: EditKind, cx: &mut Context<Self>) {
+        if range.is_empty() && text.is_empty() {
             return;
         }
-        self.move_to(previous_grapheme(&self.doc().content, self.cursor_offset()), cx);
-    }
-
-    fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.doc().selected.is_empty() {
-            self.move_to(self.doc().selected.end, cx);
-            return;
-        }
-        self.move_to(next_grapheme(&self.doc().content, self.cursor_offset()), cx);
-    }
-
-    fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(vertical_target(&self.doc().content, self.cursor_offset(), -1), cx);
-    }
-
-    fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(vertical_target(&self.doc().content, self.cursor_offset(), 1), cx);
-    }
-
-    fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(previous_grapheme(&self.doc().content, self.cursor_offset()), cx);
-    }
-
-    fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(next_grapheme(&self.doc().content, self.cursor_offset()), cx);
-    }
-
-    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        let end = self.doc().content.len();
         let doc = self.doc_mut();
-        doc.selected = 0..end;
+        let before = doc.selected.clone();
+        let (caret, splice) = doc.buffer.edit(range, text, kind, before);
+        doc.splice_lines(splice);
+        doc.selected = caret..caret;
         doc.selection_reversed = false;
+        doc.marked = None;
+        self.after_change(cx);
+    }
+
+    fn after_change(&mut self, cx: &mut Context<Self>) {
+        self.typed_at = Some(Instant::now());
+        self.doc_mut().edited_at = self.typed_at;
+        let (id, pause) = (self.doc().id, parse_pause(self.doc().last_parse_ms));
+        self.schedule_parse(id, pause, cx);
         cx.notify();
     }
 
-    fn line_start(&mut self, _: &LineStart, _: &mut Window, cx: &mut Context<Self>) {
-        let (start, _) = line_range(&self.doc().content, self.cursor_offset());
-        self.move_to(start, cx);
+    /// Parses a snapshot of the text on a background thread after `pause`. Each edit replaces the
+    /// task, which cancels the previous one, so only the text after the last keystroke is parsed.
+    fn schedule_parse(&mut self, id: u64, pause: Duration, cx: &mut Context<Self>) {
+        let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else { return };
+        let rope = doc.buffer.snapshot();
+        let version = doc.buffer.version();
+        doc.parse_task = Some(cx.spawn(async move |this, cx| {
+            if !pause.is_zero() {
+                cx.background_executor().timer(pause).await;
+            }
+            let started = Instant::now();
+            let blocks = cx.background_executor().spawn(async move { preview::blocks(&rope.to_string()) }).await;
+            let parse_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let _ = this.update(cx, |this, cx| this.apply_parse(id, version, blocks, parse_ms, cx));
+        }));
     }
 
-    fn line_end(&mut self, _: &LineEnd, _: &mut Window, cx: &mut Context<Self>) {
-        let (_, end) = line_range(&self.doc().content, self.cursor_offset());
-        self.move_to(end, cx);
+    /// Replaces only the blocks that changed, so the preview keeps its measured heights and scroll position.
+    fn apply_parse(&mut self, id: u64, version: u64, blocks: Vec<Block>, parse_ms: f64, cx: &mut Context<Self>) {
+        let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else { return };
+        if doc.buffer.version() != version {
+            return;
+        }
+        doc.last_parse_ms = parse_ms;
+        // From the last keystroke to the preview showing it: the pause, the parse and this update.
+        if let Some(edited_at) = doc.edited_at.take() {
+            perf::log(&format!("preview_ms={:.0} parse_ms={parse_ms:.1}", edited_at.elapsed().as_secs_f64() * 1000.0));
+        }
+        let (changed, count) = preview_view::changed_blocks(&doc.blocks, &blocks);
+        doc.block_list.splice(changed, count);
+        doc.blocks = blocks;
+        doc.synced_source_line = None;
+        cx.notify();
     }
 
-    fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
-        self.replace_text_in_range(None, "\n", window, cx);
+    fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
+        let doc = self.doc();
+        if !doc.selected.is_empty() {
+            let range = doc.selected.clone();
+            self.edit(range, "", EditKind::Other, cx);
+            return;
+        }
+        let cursor = doc.cursor();
+        let range = doc.buffer.previous_grapheme(cursor)..cursor;
+        self.edit(range, "", EditKind::Deleting, cx);
     }
 
-    fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+    fn delete(&mut self, _: &Delete, _: &mut Window, cx: &mut Context<Self>) {
+        let doc = self.doc();
+        if !doc.selected.is_empty() {
+            let range = doc.selected.clone();
+            self.edit(range, "", EditKind::Other, cx);
+            return;
+        }
+        let cursor = doc.cursor();
+        let range = cursor..doc.buffer.next_grapheme(cursor);
+        self.edit(range, "", EditKind::Deleting, cx);
+    }
+
+    fn enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
+        let range = self.doc().selected.clone();
+        self.edit(range, "\n", EditKind::Typing, cx);
+    }
+
+    fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else { return };
+        let range = self.doc().selected.clone();
         // The buffer is LF only, like the app's editor; files::write restores the file's line ending.
-        self.replace_text_in_range(None, &text.replace("\r\n", "\n"), window, cx);
+        self.edit(range, &text.replace("\r\n", "\n"), EditKind::Other, cx);
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if self.doc().selected.is_empty() {
+        let doc = self.doc();
+        if doc.selected.is_empty() {
             return;
         }
-        cx.write_to_clipboard(ClipboardItem::new_string(self.doc().content[self.doc().selected.clone()].to_string()));
+        cx.write_to_clipboard(ClipboardItem::new_string(doc.buffer.slice(doc.selected.clone())));
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
         if self.doc().selected.is_empty() {
             return;
         }
-        cx.write_to_clipboard(ClipboardItem::new_string(self.doc().content[self.doc().selected.clone()].to_string()));
-        self.replace_text_in_range(None, "", window, cx);
+        self.copy(&Copy, window, cx);
+        let range = self.doc().selected.clone();
+        self.edit(range, "", EditKind::Other, cx);
     }
 
-    fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        let offset = char_boundary(&self.doc().content, offset);
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
         let doc = self.doc_mut();
+        let Some((selection, splices)) = doc.buffer.undo() else { return };
+        self.restore(selection, splices, cx);
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        let doc = self.doc_mut();
+        let Some((selection, splices)) = doc.buffer.redo() else { return };
+        self.restore(selection, splices, cx);
+    }
+
+    fn restore(&mut self, selection: Range<usize>, splices: Vec<LineSplice>, cx: &mut Context<Self>) {
+        let doc = self.doc_mut();
+        for splice in splices {
+            doc.splice_lines(splice);
+        }
+        doc.selected = doc.buffer.boundary(selection.start)..doc.buffer.boundary(selection.end);
+        doc.selection_reversed = false;
+        doc.marked = None;
+        self.after_change(cx);
+    }
+
+    // ----- Caret and selection -----
+
+    fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        let doc = self.doc();
+        let target = if doc.selected.is_empty() { doc.buffer.previous_grapheme(doc.cursor()) } else { doc.selected.start };
+        self.move_to(target, cx);
+    }
+
+    fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        let doc = self.doc();
+        let target = if doc.selected.is_empty() { doc.buffer.next_grapheme(doc.cursor()) } else { doc.selected.end };
+        self.move_to(target, cx);
+    }
+
+    fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        let target = self.doc().buffer.vertical_target(self.doc().cursor(), -1);
+        self.move_to(target, cx);
+    }
+
+    fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        let target = self.doc().buffer.vertical_target(self.doc().cursor(), 1);
+        self.move_to(target, cx);
+    }
+
+    fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        let target = self.doc().buffer.previous_grapheme(self.doc().cursor());
+        self.select_to(target, cx);
+    }
+
+    fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        let target = self.doc().buffer.next_grapheme(self.doc().cursor());
+        self.select_to(target, cx);
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        let doc = self.doc_mut();
+        doc.selected = 0..doc.buffer.len();
+        doc.selection_reversed = false;
+        doc.buffer.break_group();
+        cx.notify();
+    }
+
+    fn line_start(&mut self, _: &LineStart, _: &mut Window, cx: &mut Context<Self>) {
+        let doc = self.doc();
+        let start = doc.buffer.line_start(doc.buffer.line_of(doc.cursor()));
+        self.move_to(start, cx);
+    }
+
+    fn line_end(&mut self, _: &LineEnd, _: &mut Window, cx: &mut Context<Self>) {
+        let doc = self.doc();
+        let end = doc.buffer.line_range(doc.buffer.line_of(doc.cursor())).end;
+        self.move_to(end, cx);
+    }
+
+    /// A caret move also ends the current typing group, so the next keystroke is a new undo step.
+    fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let doc = self.doc_mut();
+        let offset = doc.buffer.boundary(offset);
         doc.selected = offset..offset;
         doc.selection_reversed = false;
+        doc.buffer.break_group();
         cx.notify();
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        let offset = char_boundary(&self.doc().content, offset);
         let doc = self.doc_mut();
+        let offset = doc.buffer.boundary(offset);
         if doc.selection_reversed {
             doc.selected.start = offset;
         } else {
@@ -280,25 +435,185 @@ impl Prototype {
             doc.selection_reversed = !doc.selection_reversed;
             doc.selected = doc.selected.end..doc.selected.start;
         }
+        doc.buffer.break_group();
         cx.notify();
     }
 
-    fn cursor_offset(&self) -> usize {
-        if self.doc().selection_reversed { self.doc().selected.start } else { self.doc().selected.end }
+    fn select(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let doc = self.doc_mut();
+        doc.selected = doc.buffer.boundary(range.start)..doc.buffer.boundary(range.end);
+        doc.selection_reversed = false;
+        doc.marked = None;
+        doc.buffer.break_group();
+        cx.notify();
     }
 
-    /// Returns the caret after the edit. Deleting nothing (Backspace at the start) leaves the tab clean.
-    fn replace(&mut self, range: Range<usize>, new_text: &str) -> usize {
-        if range.is_empty() && new_text.is_empty() {
-            return range.start;
-        }
-        self.typed_at = Some(Instant::now());
-        let doc = self.doc_mut();
-        doc.content.replace_range(range.clone(), new_text);
-        doc.blocks = preview::blocks(&doc.content);
-        doc.dirty = true;
-        range.start + new_text.len()
+    /// A click on a source line: GPUI's layout of that line maps the point to a character, wrapped or not.
+    fn click_line(&mut self, line: usize, layout: &TextLayout, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus);
+        self.open_menu = None;
+        let range = self.doc().buffer.line_range(line);
+        let (Ok(index) | Err(index)) = layout.index_for_position(position);
+        self.move_to(range.start + index.min(range.len()), cx);
     }
+
+    /// A click below the last line puts the caret at the end.
+    fn click_source(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus);
+        self.open_menu = None;
+        let end = self.doc().buffer.len();
+        self.move_to(end, cx);
+    }
+
+    fn jump_to_line(&mut self, line: usize, cx: &mut Context<Self>) {
+        let offset = self.doc().buffer.line_start(line.saturating_sub(1));
+        self.move_to(offset, cx);
+    }
+
+    // ----- Find and replace -----
+
+    fn open_find(&mut self, show_replace: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_menu = None;
+        if self.find.is_none() {
+            let query = cx.new(|cx| TextField::new("Find", cx));
+            let replacement = cx.new(|cx| TextField::new("Replace with", cx));
+            let subscriptions = vec![
+                cx.subscribe(&query, |this, _, event: &FieldEvent, cx| match event {
+                    FieldEvent::Changed => this.search_from_caret(cx),
+                    FieldEvent::Submitted => this.find_step(1, cx),
+                }),
+                cx.subscribe(&replacement, |this, _, event: &FieldEvent, cx| {
+                    if let FieldEvent::Submitted = event {
+                        this.replace_current(cx);
+                    }
+                }),
+            ];
+            self.find = Some(FindBar { query, replacement, show_replace, matches: Vec::new(), searched: None, _subscriptions: subscriptions });
+        }
+        let Some(find) = self.find.as_mut() else { return };
+        find.show_replace |= show_replace;
+        let query = find.query.clone();
+        // A selection on one line becomes the query, as in most editors.
+        let doc = self.doc();
+        let selected = doc.buffer.slice(doc.selected.clone());
+        if !selected.is_empty() && !selected.contains('\n') {
+            query.update(cx, |field, cx| field.set_text(&selected, cx));
+        }
+        window.focus(&query.focus_handle(cx));
+        cx.notify();
+    }
+
+    fn find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_find(false, window, cx);
+    }
+
+    fn find_replace(&mut self, _: &FindReplace, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_find(true, window, cx);
+    }
+
+    fn find_next(&mut self, _: &FindNext, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find.is_none() {
+            self.open_find(false, window, cx);
+            return;
+        }
+        self.find_step(1, cx);
+    }
+
+    fn find_previous(&mut self, _: &FindPrevious, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find.is_none() {
+            self.open_find(false, window, cx);
+            return;
+        }
+        self.find_step(-1, cx);
+    }
+
+    /// Esc closes the find bar, or an open menu.
+    fn find_close(&mut self, _: &FindClose, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_menu = None;
+        if self.find.take().is_some() {
+            window.focus(&self.focus);
+        }
+        cx.notify();
+    }
+
+    /// Searches again only when the query, the document or its text changed.
+    fn refresh_matches(&mut self, cx: &App) {
+        let Some(find) = self.find.as_mut() else { return };
+        let doc = &self.documents[self.active];
+        let query = find.query.read(cx).text().to_string();
+        let key = (doc.id, doc.buffer.version(), query);
+        if find.searched.as_ref() == Some(&key) {
+            return;
+        }
+        find.matches = buffer::find_all(&doc.buffer.text(), &key.2);
+        find.searched = Some(key);
+    }
+
+    fn matches(&self) -> &[Range<usize>] {
+        self.find.as_ref().map(|find| find.matches.as_slice()).unwrap_or(&[])
+    }
+
+    /// While typing a query, the first match at or after the caret is selected.
+    fn search_from_caret(&mut self, cx: &mut Context<Self>) {
+        self.refresh_matches(cx);
+        let from = self.doc().selected.start;
+        let matches = self.matches();
+        let Some(found) = matches.iter().find(|found| found.start >= from).or(matches.first()).cloned() else {
+            cx.notify();
+            return;
+        };
+        self.select(found, cx);
+    }
+
+    fn find_step(&mut self, direction: isize, cx: &mut Context<Self>) {
+        self.refresh_matches(cx);
+        let selected = self.doc().selected.clone();
+        let matches = self.matches();
+        let found = if direction > 0 {
+            matches.iter().find(|found| found.start >= selected.end && **found != selected).or(matches.first())
+        } else {
+            matches.iter().rev().find(|found| found.end <= selected.start).or(matches.last())
+        };
+        let Some(found) = found.cloned() else { return };
+        self.select(found, cx);
+    }
+
+    fn replacement_text(&self, cx: &App) -> String {
+        self.find.as_ref().map(|find| find.replacement.read(cx).text().to_string()).unwrap_or_default()
+    }
+
+    /// Replaces the selected match, then selects the next one.
+    fn replace_current(&mut self, cx: &mut Context<Self>) {
+        self.refresh_matches(cx);
+        let selected = self.doc().selected.clone();
+        if self.matches().contains(&selected) {
+            let replacement = self.replacement_text(cx);
+            self.edit(selected, &replacement, EditKind::Other, cx);
+            self.refresh_matches(cx);
+        }
+        self.find_step(1, cx);
+    }
+
+    /// One edit from the first match to the last, so Replace all is a single undo step.
+    fn replace_all(&mut self, cx: &mut Context<Self>) {
+        self.refresh_matches(cx);
+        let matches = self.matches().to_vec();
+        let (Some(first), Some(last)) = (matches.first(), matches.last()) else { return };
+        let span = first.start..last.end;
+        let replacement = self.replacement_text(cx);
+        let text = self.doc().buffer.slice(span.clone());
+        let mut replaced = String::with_capacity(text.len());
+        let mut copied = span.start;
+        for found in &matches {
+            replaced.push_str(&text[copied - span.start..found.start - span.start]);
+            replaced.push_str(&replacement);
+            copied = found.end;
+        }
+        self.edit(span, &replaced, EditKind::Other, cx);
+        self.status = Some(format!("Replaced {} matches", matches.len()));
+    }
+
+    // ----- Files, tabs and closing -----
 
     /// Restores the file's BOM and line ending. A clean buffer and a lossy decode are left on disk as they are.
     fn write_active(&mut self, cx: &mut Context<Self>) {
@@ -309,13 +624,14 @@ impl Prototype {
             self.report(message);
             return;
         }
-        if !self.doc().dirty {
+        if !self.doc().buffer.is_dirty() {
             return;
         }
         let path = self.doc().path.clone();
-        match files::write(Path::new(&path), &self.doc().content, self.doc().meta) {
+        let text = self.doc().buffer.text();
+        match files::write(Path::new(&path), &text, self.doc().meta) {
             Ok(_) => {
-                self.doc_mut().dirty = false;
+                self.doc_mut().buffer.mark_saved();
                 self.status = None;
             }
             Err(err) => self.report(format!("Could not save {path}: {err}")),
@@ -330,23 +646,71 @@ impl Prototype {
         self.write_active(cx);
     }
 
-    /// A click on a source line: GPUI's layout of that line maps the point to a character, wrapped or not.
-    fn click_line(&mut self, line: Range<usize>, layout: &TextLayout, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus);
+    fn open_file(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         self.open_menu = None;
-        let (Ok(index) | Err(index)) = layout.index_for_position(position);
-        self.move_to(line.start + index.min(line.len()), cx);
+        cx.notify();
+        let Some(path) = rfd::FileDialog::new().add_filter("Markdown", files::MARKDOWN_EXTS).pick_file() else {
+            return;
+        };
+        if let Some(index) = self.documents.iter().position(|doc| files::same_path(Path::new(&doc.path), &path)) {
+            self.activate_tab(index, cx);
+            return;
+        }
+        match files::read(&path) {
+            Ok(opened) => {
+                let id = self.next_document_id;
+                self.next_document_id += 1;
+                let document = Document::open(opened, id, cx);
+                self.documents.push(document);
+                self.schedule_parse(id, Duration::ZERO, cx);
+                self.activate_tab(self.documents.len() - 1, cx);
+            }
+            Err(err) => self.report(format!("Could not open {}: {err}", path.display())),
+        }
     }
 
-    /// A click below the last line puts the caret at the end.
-    fn click_source(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus);
-        self.open_menu = None;
-        self.move_to(self.doc().content.len(), cx);
+    /// Each tab keeps its own lists, so switching back restores its scroll positions.
+    fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.documents.len() {
+            return;
+        }
+        self.active = index;
+        self.doc_mut().synced_source_line = None;
+        cx.notify();
     }
 
     fn dirty_count(&self) -> usize {
-        self.documents.iter().filter(|doc| doc.dirty).count()
+        self.documents.iter().filter(|doc| doc.buffer.is_dirty()).count()
+    }
+
+    fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.documents.len() == 1 || index >= self.documents.len() {
+            return;
+        }
+        if !self.documents[index].buffer.is_dirty() {
+            self.remove_tab(index, cx);
+            return;
+        }
+        // Tabs can move while the prompt is open, so the answer finds the tab again by id.
+        let id = self.documents[index].id;
+        let message = format!("Discard unsaved changes in {}?", file_name(&self.documents[index].path));
+        self.confirm_discard(&message, window, cx, move |this, _, cx| {
+            if let Some(index) = this.documents.iter().position(|doc| doc.id == id) {
+                this.remove_tab(index, cx);
+            }
+        });
+    }
+
+    fn remove_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.documents.len() == 1 || index >= self.documents.len() {
+            return;
+        }
+        self.documents.remove(index);
+        if self.active > index || self.active == self.documents.len() {
+            self.active -= 1;
+        }
+        self.doc_mut().synced_source_line = None;
+        cx.notify();
     }
 
     /// Asks before unsaved edits are thrown away. The prompt is asynchronous, so `then` runs later, and only on Discard.
@@ -387,10 +751,7 @@ impl Prototype {
         }
     }
 
-    fn menu_quit(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_menu = None;
-        self.quit(&Quit, window, cx);
-    }
+    // ----- Menus and view settings -----
 
     fn toggle_menu(&mut self, menu: OpenMenu, cx: &mut Context<Self>) {
         self.open_menu = if self.open_menu == Some(menu) { None } else { Some(menu) };
@@ -403,26 +764,6 @@ impl Prototype {
         }
         self.open_menu = None;
         cx.notify();
-    }
-
-    fn menu_select_all(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_menu = None;
-        self.select_all(&SelectAll, window, cx);
-    }
-
-    fn menu_copy(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_menu = None;
-        self.copy(&Copy, window, cx);
-    }
-
-    fn menu_cut(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_menu = None;
-        self.cut(&Cut, window, cx);
-    }
-
-    fn menu_paste(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_menu = None;
-        self.paste(&Paste, window, cx);
     }
 
     /// Hiding the editor never changes `showPreview`; the preview shows anyway, as in the app.
@@ -446,12 +787,9 @@ impl Prototype {
         self.keep_settings(cx);
     }
 
-    fn larger_text(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.step_font(1, cx);
-    }
-
-    fn smaller_text(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.step_font(-1, cx);
+    fn toggle_outline(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.show_outline = !self.settings.show_outline;
+        self.keep_settings(cx);
     }
 
     fn step_font(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -466,11 +804,6 @@ impl Prototype {
         self.keep_settings(cx);
     }
 
-    fn toggle_outline(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.show_outline = !self.settings.show_outline;
-        self.keep_settings(cx);
-    }
-
     fn keep_settings(&mut self, cx: &mut Context<Self>) {
         if let Err(message) = settings::save(&self.config_dir, &self.settings) {
             self.report(message);
@@ -479,116 +812,48 @@ impl Prototype {
         cx.notify();
     }
 
-    /// The source pane leads. The preview shows the block for the top visible source line.
+    // ----- Scrolling and timing -----
+
+    /// The caret stays visible, and the preview shows the block for the top visible source line.
     fn sync_scroll(&mut self) {
-        if !self.settings.show_editor || !self.settings.preview_visible() {
-            return;
-        }
-        let cursor_line = line_index(&self.doc().content, self.cursor_offset());
-        if self.doc().followed_cursor_line != Some(cursor_line) {
-            self.doc_mut().followed_cursor_line = Some(cursor_line);
-            self.source_scroll.scroll_to_item(cursor_line);
-        }
-        let top = self.source_scroll.top_item();
-        if self.doc().synced_source_line == Some(top) || self.doc().blocks.is_empty() {
-            return;
-        }
-        self.doc_mut().synced_source_line = Some(top);
-        let block = preview::block_at_line(&self.doc().blocks, top + 1);
-        // The first block means the top of the document, padding included. GPUI 0.2.2 also resolves
-        // scroll_to_top_of_item before it knows the pane's position on the first frame, which scrolled
-        // the opening heading out of view (an offset of -76.8 px instead of 0).
-        if block == 0 {
-            self.preview_scroll.set_offset(point(px(0.), px(0.)));
-        } else {
-            self.preview_scroll.scroll_to_top_of_item(block);
-        }
-    }
-
-    fn open_file(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.open_menu = None;
-        cx.notify();
-        let Some(path) = rfd::FileDialog::new().add_filter("Markdown", files::MARKDOWN_EXTS).pick_file() else {
-            return;
-        };
-        if let Some(index) = self.documents.iter().position(|doc| files::same_path(Path::new(&doc.path), &path)) {
-            self.activate_tab(index, cx);
-            return;
-        }
-        match files::read(&path) {
-            Ok(opened) => {
-                self.documents.push(Document::open(opened));
-                self.activate_tab(self.documents.len() - 1, cx);
+        let show_editor = self.settings.show_editor;
+        let show_preview = self.settings.preview_visible();
+        let doc = self.doc_mut();
+        let cursor_line = doc.buffer.line_of(doc.cursor());
+        if doc.followed_cursor_line != Some(cursor_line) {
+            doc.followed_cursor_line = Some(cursor_line);
+            if show_editor {
+                doc.lines.scroll_to_reveal_item(cursor_line);
             }
-            Err(err) => self.report(format!("Could not open {}: {err}", path.display())),
         }
-    }
-
-    fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.documents.len() {
+        if !show_editor || !show_preview || doc.blocks.is_empty() {
             return;
         }
-        self.active = index;
-        self.reset_view();
-        cx.notify();
-    }
-
-    fn reset_view(&mut self) {
-        self.doc_mut().followed_cursor_line = None;
-        self.doc_mut().synced_source_line = None;
-        self.source_scroll.set_offset(point(px(0.), px(0.)));
-        self.preview_scroll.set_offset(point(px(0.), px(0.)));
-    }
-
-    fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.documents.len() == 1 || index >= self.documents.len() {
+        let top = doc.lines.logical_scroll_top().item_ix;
+        if doc.synced_source_line == Some(top) {
             return;
         }
-        if !self.documents[index].dirty {
-            self.remove_tab(index, cx);
-            return;
-        }
-        // Tabs can move while the prompt is open, so the answer finds the tab again by path.
-        let path = self.documents[index].path.clone();
-        let message = format!("Discard unsaved changes in {}?", file_name(&path));
-        self.confirm_discard(&message, window, cx, move |this, _, cx| {
-            if let Some(index) = this.documents.iter().position(|doc| doc.path == path) {
-                this.remove_tab(index, cx);
-            }
-        });
-    }
-
-    fn remove_tab(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.documents.len() == 1 || index >= self.documents.len() {
-            return;
-        }
-        let shown = self.active == index;
-        self.documents.remove(index);
-        if self.active > index || self.active == self.documents.len() {
-            self.active -= 1;
-        }
-        if shown {
-            self.reset_view();
-        }
-        cx.notify();
-    }
-
-    fn jump_to_line(&mut self, line: usize, cx: &mut Context<Self>) {
-        let offset = offset_of_line(&self.doc().content, line.saturating_sub(1));
-        self.move_to(offset, cx);
+        doc.synced_source_line = Some(top);
+        let block = preview::block_at_line(&doc.blocks, top + 1);
+        doc.block_list.scroll_to(ListOffset { item_ix: block, offset_in_item: px(0.) });
     }
 
     /// Startup and typing are timed to the end of the frame's paint, like the app's
     /// measurements (a rAF callback that reports after paint).
     fn frame_timer(&mut self) -> impl IntoElement {
-        let first_frame = (!self.logged_first_frame).then_some(self.started);
+        let first_frame = !self.logged_first_frame;
         self.logged_first_frame = true;
         let typed_at = self.typed_at.take();
         canvas(
-            |_, _, _| {},
+            // Last child: its prepaint runs once layout and every other prepaint are done.
+            move |_, _, _| {
+                if first_frame {
+                    perf::mark("layout");
+                }
+            },
             move |_, _, _, _| {
-                if let Some(started) = first_frame {
-                    perf::log(&format!("startup_ms={:.0}", started.elapsed().as_secs_f64() * 1000.0));
+                if first_frame {
+                    perf::log_startup();
                 }
                 if let Some(typed_at) = typed_at {
                     perf::log(&format!("type_ms={:.1}", typed_at.elapsed().as_secs_f64() * 1000.0));
@@ -601,13 +866,15 @@ impl Prototype {
 
     fn update_title(&mut self, window: &mut Window) {
         let doc = self.doc();
-        let title = format!("{}{} - Marky GPUI", file_name(&doc.path), if doc.dirty { " •" } else { "" });
+        let title = format!("{}{} - Marky GPUI", file_name(&doc.path), if doc.buffer.is_dirty() { " •" } else { "" });
         if title != self.window_title {
             window.set_window_title(&title);
             self.window_title = title;
         }
     }
 }
+
+// ----- Drawing -----
 
 impl Prototype {
     fn menu_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -647,16 +914,40 @@ impl Prototype {
             .bg(tone(dark, 0x3f3f46, 0xffffff))
             .border_1()
             .border_color(tone(dark, 0x52525b, 0xd4d4d8));
+        // Each item closes the menu and runs the same handler as its shortcut.
+        let item = |label: &str, shortcut: &str| command(label, shortcut, dark);
         match menu {
             OpenMenu::File => column
-                .child(command("Open", dark).on_mouse_down(MouseButton::Left, cx.listener(Self::open_file)))
-                .child(command("Save", dark).on_mouse_down(MouseButton::Left, cx.listener(Self::save_clicked)))
-                .child(command("Quit", dark).on_mouse_down(MouseButton::Left, cx.listener(Self::menu_quit))),
+                .child(item("Open", "").on_mouse_down(MouseButton::Left, cx.listener(Self::open_file)))
+                .child(item("Save", "Ctrl+S").on_mouse_down(MouseButton::Left, cx.listener(Self::save_clicked)))
+                .child(item("Quit", "").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.quit(&Quit, window, cx)))),
             OpenMenu::Edit => column
-                .child(command("Select all", dark).on_mouse_down(MouseButton::Left, cx.listener(Self::menu_select_all)))
-                .child(command("Copy", dark).on_mouse_down(MouseButton::Left, cx.listener(Self::menu_copy)))
-                .child(command("Cut", dark).on_mouse_down(MouseButton::Left, cx.listener(Self::menu_cut)))
-                .child(command("Paste", dark).on_mouse_down(MouseButton::Left, cx.listener(Self::menu_paste))),
+                .child(item("Undo", "Ctrl+Z").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                    this.open_menu = None;
+                    this.undo(&Undo, window, cx);
+                })))
+                .child(item("Redo", "Ctrl+Y").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                    this.open_menu = None;
+                    this.redo(&Redo, window, cx);
+                })))
+                .child(item("Cut", "Ctrl+X").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                    this.open_menu = None;
+                    this.cut(&Cut, window, cx);
+                })))
+                .child(item("Copy", "Ctrl+C").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                    this.open_menu = None;
+                    this.copy(&Copy, window, cx);
+                })))
+                .child(item("Paste", "Ctrl+V").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                    this.open_menu = None;
+                    this.paste(&Paste, window, cx);
+                })))
+                .child(item("Select all", "Ctrl+A").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                    this.open_menu = None;
+                    this.select_all(&SelectAll, window, cx);
+                })))
+                .child(item("Find", "Ctrl+F").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.open_find(false, window, cx))))
+                .child(item("Replace", "Ctrl+H").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.open_find(true, window, cx)))),
             OpenMenu::View => {
                 let editor = if self.settings.show_editor { "Hide editor" } else { "Show editor" };
                 let preview = if self.settings.show_preview { "Hide preview" } else { "Show preview" };
@@ -664,20 +955,20 @@ impl Prototype {
                 let theme = self.settings.theme.label();
                 let outline = if self.settings.show_outline { "Hide outline" } else { "Show outline" };
                 column
-                    .child(command(editor, dark).on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_editor)))
-                    .child(command(preview, dark).on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_preview)))
-                    .child(command(outline, dark).on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_outline)))
-                    .child(command(wrap, dark).on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_word_wrap)))
-                    .child(command(theme, dark).on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_theme)))
-                    .child(command("Larger text", dark).on_mouse_down(MouseButton::Left, cx.listener(Self::larger_text)))
-                    .child(command("Smaller text", dark).on_mouse_down(MouseButton::Left, cx.listener(Self::smaller_text)))
+                    .child(item(editor, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_editor)))
+                    .child(item(preview, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_preview)))
+                    .child(item(outline, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_outline)))
+                    .child(item(wrap, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_word_wrap)))
+                    .child(item(theme, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_theme)))
+                    .child(item("Larger text", "").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.step_font(1, cx))))
+                    .child(item("Smaller text", "").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.step_font(-1, cx))))
             }
         }
     }
 
     fn toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
-        let dirty = self.doc().dirty;
+        let dirty = self.doc().buffer.is_dirty();
         let read_only = self.doc().read_only;
         let editor = self.settings.show_editor;
         let preview = self.settings.preview_visible();
@@ -712,7 +1003,7 @@ impl Prototype {
     fn tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active;
         let dark = self.dark;
-        let tabs: Vec<(String, bool)> = self.documents.iter().map(|doc| (file_name(&doc.path), doc.dirty)).collect();
+        let tabs: Vec<(String, bool)> = self.documents.iter().map(|doc| (file_name(&doc.path), doc.buffer.is_dirty())).collect();
         div().flex().flex_row().bg(tone(dark, 0x27272a, 0xe4e4e7)).children(tabs.into_iter().enumerate().map(|(index, (name, dirty))| {
             let name = if dirty { format!("{name} •") } else { name };
             let current = index == active;
@@ -756,81 +1047,158 @@ impl Prototype {
         }
     }
 
+    fn find_bar(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let dark = self.dark;
+        let find = self.find.as_ref()?;
+        for field in [&find.query, &find.replacement] {
+            field.update(cx, |field, _| field.dark = dark);
+        }
+        let selected = self.doc().selected.clone();
+        let count = match (find.matches.len(), find.matches.iter().position(|found| *found == selected)) {
+            (0, _) if find.query.read(cx).text().is_empty() => String::new(),
+            (0, _) => "No results".to_string(),
+            (total, Some(current)) => format!("{} of {total}", current + 1),
+            (total, None) => format!("{total} matches"),
+        };
+        let button = |label: &str| {
+            div().px_2().py(px(3.)).bg(tone(dark, 0x3f3f46, 0xe4e4e7)).text_color(tone(dark, 0xfafafa, 0x18181b)).child(label.to_string())
+        };
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1()
+                .text_size(px(13.))
+                .bg(tone(dark, 0x27272a, 0xe4e4e7))
+                .text_color(tone(dark, 0xa1a1aa, 0x52525b))
+                .child(find.query.clone())
+                .child(div().min_w(px(80.)).child(count))
+                .child(button("Previous").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.find_step(-1, cx))))
+                .child(button("Next").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.find_step(1, cx))))
+                .when(find.show_replace, |bar| {
+                    bar.child(find.replacement.clone())
+                        .child(button("Replace").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.replace_current(cx))))
+                        .child(button("Replace all").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.replace_all(cx))))
+                })
+                .child(button("×").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.find_close(&FindClose, window, cx)))),
+        )
+    }
+
+    /// One source line, laid out only when the list needs it. Find matches and the selection are
+    /// highlights on the line's own `StyledText`, whose layout also maps clicks and places the caret.
+    fn render_line(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let dark = self.dark;
+        let doc = &self.documents[self.active];
+        let start = doc.buffer.line_start(ix);
+        let text = doc.buffer.line(ix);
+        let line = start..start + text.len();
+        let selected = doc.selected.clone();
+        let cursor = doc.cursor();
+
+        let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+        if !text.is_empty() {
+            let found_style = HighlightStyle { background_color: Some(tone(dark, 0x713f12, 0xfef08a).into()), ..HighlightStyle::default() };
+            let matches = self.matches();
+            let first = matches.partition_point(|found| found.end <= line.start);
+            for found in matches[first..].iter().take_while(|found| found.start < line.end) {
+                if found.start < selected.end && selected.start < found.end {
+                    continue;
+                }
+                highlights.push((found.start.max(line.start) - start..found.end.min(line.end) - start, found_style));
+            }
+            let overlap = selected.start.max(line.start)..selected.end.min(line.end);
+            if !overlap.is_empty() {
+                let selection_style = HighlightStyle { background_color: Some(tone(dark, 0x1e3a8a, 0xbfdbfe).into()), ..HighlightStyle::default() };
+                highlights.push((overlap.start - start..overlap.end - start, selection_style));
+            }
+            highlights.sort_by_key(|(range, _)| range.start);
+        }
+        let styled = StyledText::new(if text.is_empty() { " ".to_string() } else { text }).with_highlights(highlights);
+        let layout = styled.layout().clone();
+        let click_layout = layout.clone();
+        let row = div()
+            .relative()
+            .px_3()
+            .when(ix == 0, |row| row.pt_2())
+            .map(|row| if self.settings.word_wrap { row.whitespace_normal() } else { row.whitespace_nowrap() })
+            .child(styled)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.click_line(ix, &click_layout, event.position, window, cx);
+                    cx.stop_propagation();
+                }),
+            );
+        if !selected.is_empty() || !(line.start..=line.end).contains(&cursor) {
+            return row.into_any_element();
+        }
+        let column = cursor - line.start;
+        let view = cx.entity();
+        row.child(
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, cx| {
+                    let Some(origin) = layout.position_for_index(column) else { return };
+                    let caret = Bounds::new(origin, size(px(1.5), layout.line_height()));
+                    window.paint_quad(fill(caret, rgb(CARET)));
+                    view.update(cx, |view, _| view.caret_bounds = Some(caret));
+                },
+            )
+            .absolute()
+            .size_full(),
+        )
+        .into_any_element()
+    }
+
     fn editor_column(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
-        let view = cx.entity();
-        let doc = self.doc();
-        let cursor = if doc.selection_reversed { doc.selected.start } else { doc.selected.end };
-        let selected = doc.selected.clone();
-        let selection_color = tone(dark, 0x1e3a8a, 0xbfdbfe);
-        let rows: Vec<gpui::Div> = line_spans(&doc.content)
-            .into_iter()
-            .map(|line| {
-                let text = &doc.content[line.clone()];
-                let mut styled = StyledText::new(if text.is_empty() { " ".to_string() } else { text.to_string() });
-                let overlap = selected.start.max(line.start)..selected.end.min(line.end);
-                if !overlap.is_empty() {
-                    let highlight = HighlightStyle { background_color: Some(selection_color.into()), ..HighlightStyle::default() };
-                    styled = styled.with_highlights([(overlap.start - line.start..overlap.end - line.start, highlight)]);
-                }
-                let layout = styled.layout().clone();
-                let click_layout = layout.clone();
-                let click_line = line.clone();
-                let row = div()
-                    .relative()
-                    .map(|row| if self.settings.word_wrap { row.whitespace_normal() } else { row.whitespace_nowrap() })
-                    .child(styled)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                            this.click_line(click_line.clone(), &click_layout, event.position, window, cx);
-                            cx.stop_propagation();
-                        }),
-                    );
-                if !selected.is_empty() || !(line.start..=line.end).contains(&cursor) {
-                    return row;
-                }
-                let column = cursor - line.start;
-                let view = view.clone();
-                row.child(
-                    canvas(
-                        |_, _, _| {},
-                        move |_, _, window, cx| {
-                            let Some(origin) = layout.position_for_index(column) else { return };
-                            let caret = Bounds::new(origin, size(px(1.5), layout.line_height()));
-                            window.paint_quad(fill(caret, rgb(CARET)));
-                            view.update(cx, |view, _| view.caret_bounds = Some(caret));
-                        },
-                    )
-                    .absolute()
-                    .size_full(),
-                )
-            })
-            .collect();
-
+        let lines = self.doc().lines.clone();
         div()
+            .relative()
             .flex_1()
             .min_w(px(0.))
             .h_full()
-            .flex()
-            .flex_col()
             .bg(tone(dark, 0x18181b, 0xfafafa))
             .text_color(tone(dark, 0xfafafa, 0x18181b))
-            .child(TextInputLayer { view })
+            .child(InputLayer { view: cx.entity(), focus: self.focus.clone() })
             .child(
                 div()
                     .id("source")
-                    .flex_1()
+                    .size_full()
                     // The I-beam over the whole pane, including the space past the end of short lines.
                     .cursor_text()
                     // Monospace, as in the app's editor, so padded table columns line up.
                     .font_family(self.mono.clone())
-                    .overflow_scroll()
-                    .track_scroll(&self.source_scroll)
-                    .px_3()
-                    .py_2()
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::click_source))
-                    .children(rows),
+                    .child(list(lines, cx.processor(|this, ix, _window, cx| this.render_line(ix, cx))).size_full()),
+            )
+    }
+
+    fn preview_column(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let dark = self.dark;
+        let blocks = self.doc().block_list.clone();
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .h_full()
+            .bg(tone(dark, 0x09090b, 0xffffff))
+            .text_color(tone(dark, 0xfafafa, 0x18181b))
+            .child(
+                list(
+                    blocks,
+                    cx.processor(|this, ix, _window, _cx| {
+                        let look = Look { font_size: this.settings.font_size, dark: this.dark, mono: this.mono.clone() };
+                        match this.doc().blocks.get(ix) {
+                            Some(block) => preview_view::preview_item(block, ix, &look),
+                            None => div().into_any_element(),
+                        }
+                    }),
+                )
+                .size_full(),
             )
     }
 
@@ -874,48 +1242,34 @@ impl EntityInputHandler for Prototype {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let content = &self.doc().content;
-        let range = utf16_to_utf8(content, range_utf16.start)..utf16_to_utf8(content, range_utf16.end);
-        *actual_range = Some(utf8_to_utf16(content, range.start)..utf8_to_utf16(content, range.end));
-        Some(content[range].to_string())
+        let buffer = &self.doc().buffer;
+        let range = buffer.offset_of_utf16(range_utf16.start)..buffer.offset_of_utf16(range_utf16.end);
+        *actual_range = Some(buffer.utf16_of(range.start)..buffer.utf16_of(range.end));
+        Some(buffer.slice(range))
     }
 
-    fn selected_text_range(
-        &mut self,
-        _ignore_disabled_input: bool,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<UTF16Selection> {
+    fn selected_text_range(&mut self, _ignore_disabled_input: bool, _window: &mut Window, _cx: &mut Context<Self>) -> Option<UTF16Selection> {
         let doc = self.doc();
         Some(UTF16Selection {
-            range: utf8_to_utf16(&doc.content, doc.selected.start)..utf8_to_utf16(&doc.content, doc.selected.end),
+            range: doc.buffer.utf16_of(doc.selected.start)..doc.buffer.utf16_of(doc.selected.end),
             reversed: doc.selection_reversed,
         })
     }
 
     fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
         let doc = self.doc();
-        doc.marked.as_ref().map(|range| utf8_to_utf16(&doc.content, range.start)..utf8_to_utf16(&doc.content, range.end))
+        doc.marked.as_ref().map(|range| doc.buffer.utf16_of(range.start)..doc.buffer.utf16_of(range.end))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
         self.doc_mut().marked = None;
     }
 
-    fn replace_text_in_range(
-        &mut self,
-        range_utf16: Option<Range<usize>>,
-        new_text: &str,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Typed text and the end of an IME composition. Typing at the caret groups into one undo step.
+    fn replace_text_in_range(&mut self, range_utf16: Option<Range<usize>>, new_text: &str, _window: &mut Window, cx: &mut Context<Self>) {
         let range = self.edit_range(range_utf16);
-        let cursor = self.replace(range, new_text);
-        let doc = self.doc_mut();
-        doc.selected = cursor..cursor;
-        doc.selection_reversed = false;
-        doc.marked = None;
-        cx.notify();
+        let kind = if range.is_empty() || self.doc().marked.as_ref() == Some(&range) { EditKind::Typing } else { EditKind::Other };
+        self.edit(range, new_text, kind, cx);
     }
 
     fn replace_and_mark_text_in_range(
@@ -928,36 +1282,24 @@ impl EntityInputHandler for Prototype {
     ) {
         let range = self.edit_range(range_utf16);
         let replaced_at = range.start;
-        let cursor = self.replace(range, new_text);
+        self.edit(range, new_text, EditKind::Typing, cx);
         let doc = self.doc_mut();
-        doc.marked = (!new_text.is_empty()).then_some(replaced_at..cursor);
-        doc.selected = match new_selected_utf16 {
-            Some(selected) => replaced_at + utf16_to_utf8(new_text, selected.start)..replaced_at + utf16_to_utf8(new_text, selected.end),
-            None => cursor..cursor,
-        };
-        doc.selection_reversed = false;
-        cx.notify();
+        let end = replaced_at + new_text.len();
+        doc.marked = (!new_text.is_empty()).then_some(replaced_at..end);
+        if let Some(selected) = new_selected_utf16 {
+            let start = replaced_at + utf16_to_byte(new_text, selected.start);
+            doc.selected = start..replaced_at + utf16_to_byte(new_text, selected.end);
+        }
     }
 
     /// The IME asks where to put its candidate window. The caret painted last frame is the composition point;
     /// its bounds already include scrolling, padding and the column.
-    fn bounds_for_range(
-        &mut self,
-        _range_utf16: Range<usize>,
-        element_bounds: Bounds<Pixels>,
-        window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<Bounds<Pixels>> {
+    fn bounds_for_range(&mut self, _range_utf16: Range<usize>, element_bounds: Bounds<Pixels>, window: &mut Window, _cx: &mut Context<Self>) -> Option<Bounds<Pixels>> {
         Some(self.caret_bounds.unwrap_or_else(|| Bounds::new(element_bounds.origin, size(px(1.5), window.line_height()))))
     }
 
     /// Only used for IME reconversion by mouse. Not supported in the prototype; GPUI accepts `None`.
-    fn character_index_for_point(
-        &mut self,
-        _point: Point<Pixels>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<usize> {
+    fn character_index_for_point(&mut self, _point: Point<Pixels>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
         None
     }
 }
@@ -966,12 +1308,9 @@ impl Prototype {
     fn edit_range(&self, range_utf16: Option<Range<usize>>) -> Range<usize> {
         let doc = self.doc();
         if let Some(range) = range_utf16 {
-            return utf16_to_utf8(&doc.content, range.start)..utf16_to_utf8(&doc.content, range.end);
+            return doc.buffer.offset_of_utf16(range.start)..doc.buffer.offset_of_utf16(range.end);
         }
-        if let Some(range) = &doc.marked {
-            return range.clone();
-        }
-        doc.selected.clone()
+        doc.marked.clone().unwrap_or_else(|| doc.selected.clone())
     }
 }
 
@@ -983,9 +1322,13 @@ impl Focusable for Prototype {
 
 impl Render for Prototype {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.logged_first_frame {
+            perf::mark("render");
+        }
         self.dark = self.settings.is_dark(window.appearance());
         self.caret_bounds = None;
         self.update_title(window);
+        self.refresh_matches(cx);
         self.sync_scroll();
         let dark = self.dark;
         let show_editor = self.settings.show_editor;
@@ -1000,10 +1343,8 @@ impl Render for Prototype {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::close_menu))
             .when(show_outline, |row| row.child(self.outline_column(cx)))
             .when(show_editor, |row| row.child(self.editor_column(cx)))
-            .when(show_preview, |row| {
-                let look = Look { font_size, dark, mono: self.mono.clone() };
-                row.child(preview_column(&self.doc().blocks, &self.preview_scroll, &look))
-            });
+            .when(show_preview, |row| row.child(self.preview_column(cx)));
+        let find_bar = self.find_bar(cx);
 
         div()
             .size_full()
@@ -1030,12 +1371,20 @@ impl Render for Prototype {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
+            .on_action(cx.listener(Self::find))
+            .on_action(cx.listener(Self::find_replace))
+            .on_action(cx.listener(Self::find_next))
+            .on_action(cx.listener(Self::find_previous))
+            .on_action(cx.listener(Self::find_close))
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::save))
             .child(self.menu_bar(cx))
             .child(self.toolbar(cx))
             .child(self.tab_strip(cx))
             .child(self.path_bar(cx))
+            .children(find_bar)
             .child(panes)
             // Last child, so it paints after the panes.
             .child(self.frame_timer())
@@ -1061,357 +1410,27 @@ fn tool(label: &str, icon: &'static str, pressed: bool, bright: bool, dark: bool
         .child(label.to_string())
 }
 
-fn command(label: &str, dark: bool) -> gpui::Div {
-    div().px_3().py_1().w(px(180.)).text_color(tone(dark, 0xfafafa, 0x18181b)).child(label.to_string())
-}
-
-/// What every preview block is drawn with.
-struct Look {
-    font_size: f32,
-    dark: bool,
-    mono: SharedString,
-}
-
-impl Look {
-    /// The app's `.markdown-body code, pre { font-size: 0.88em }`.
-    fn code_size(&self) -> Pixels {
-        px(self.font_size * 0.88)
-    }
-
-    fn border(&self) -> gpui::Rgba {
-        tone(self.dark, 0x3f3f46, 0xd4d4d8)
-    }
-}
-
-fn preview_column(blocks: &[Block], scroll: &ScrollHandle, look: &Look) -> impl IntoElement {
+fn command(label: &str, shortcut: &str, dark: bool) -> gpui::Div {
     div()
-        .id("preview")
-        .flex_1()
-        .min_w(px(0.))
-        .h_full()
-        .overflow_y_scroll()
-        .track_scroll(scroll)
-        .bg(tone(look.dark, 0x09090b, 0xffffff))
-        .text_color(tone(look.dark, 0xfafafa, 0x18181b))
-        .px_4()
-        .py_3()
-        .children(blocks.iter().map(|block| preview_block(block, look)))
+        .flex()
+        .flex_row()
+        .justify_between()
+        .gap_4()
+        .px_3()
+        .py_1()
+        .w(px(200.))
+        .text_color(tone(dark, 0xfafafa, 0x18181b))
+        .child(label.to_string())
+        .child(div().text_color(tone(dark, 0xa1a1aa, 0x71717a)).child(shortcut.to_string()))
 }
 
-fn preview_block(block: &Block, look: &Look) -> gpui::Div {
-    let dark = look.dark;
-    let font_size = look.font_size;
-    let size = match block.kind {
-        Kind::Heading(1) => px(font_size + 8.),
-        Kind::Heading(2) => px(font_size + 4.),
-        Kind::Heading(_) => px(font_size + 2.),
-        Kind::Code | Kind::Math | Kind::Diagram => look.code_size(),
-        _ => px(font_size),
-    };
-    if let (Kind::Table, Some(table)) = (block.kind, &block.table) {
-        return table_block(table, look);
-    }
-    let body = styled_runs(&block.runs, size, look);
-    match block.kind {
-        Kind::Quote => div().mb_3().pl_3().border_l_2().border_color(tone(dark, 0x71717a, 0xa1a1aa)).child(body),
-        Kind::Item { ordered } => {
-            let marker = match ordered {
-                Some(number) => format!("{number}."),
-                None => "•".to_string(),
-            };
-            div().mb_1().flex().flex_row().gap_2().child(marker).child(body)
+fn utf16_to_byte(text: &str, utf16_offset: usize) -> usize {
+    let mut utf16 = 0;
+    for (index, ch) in text.char_indices() {
+        if utf16 >= utf16_offset {
+            return index;
         }
-        Kind::Code => div().mb_3().px_3().py_2().font_family(look.mono.clone()).bg(tone(dark, 0x27272a, 0xf4f4f5)).child(body),
-        Kind::Math => div()
-            .mb_3()
-            .px_3()
-            .py_2()
-            .font_family(look.mono.clone())
-            .bg(tone(dark, 0x1e1b4b, 0xeef2ff))
-            .text_color(tone(dark, 0xe0e7ff, 0x312e81))
-            .child(body),
-        Kind::Diagram => div()
-            .mb_3()
-            .px_3()
-            .py_2()
-            .border_1()
-            .border_color(tone(dark, 0x52525b, 0xa1a1aa))
-            .child(div().text_size(px(12.)).text_color(tone(dark, 0xa1a1aa, 0x52525b)).child("Mermaid source"))
-            .child(div().font_family(look.mono.clone()).child(body)),
-        // Like the app: headings are bold, and h1 and h2 are underlined by a rule.
-        Kind::Heading(level) => div()
-            .mt_2()
-            .mb_3()
-            .font_weight(FontWeight::BOLD)
-            .when(level <= 2, |heading| heading.pb_1().border_b_1().border_color(look.border()))
-            .child(body),
-        Kind::Paragraph => div().mb_3().child(body),
-        Kind::Table => div(),
-    }
-}
-
-/// The app's table: 1px borders, 6px 12px cell padding, a bold header row and shaded even body rows.
-/// Columns get widths in proportion to their longest cell, so they line up across rows like an auto table.
-fn table_block(table: &Table, look: &Look) -> gpui::Div {
-    let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0).max(table.align.len());
-    let weights: Vec<f32> = (0..columns)
-        .map(|column| {
-            let longest = table.rows.iter().filter_map(|row| row.get(column)).map(|cell| preview::plain_text(cell).chars().count()).max();
-            longest.unwrap_or(0).max(3) as f32
-        })
-        .collect();
-    let size = px(look.font_size);
-    let shade = tone(look.dark, 0x18181b, 0xf4f4f5);
-    let rows = table.rows.iter().enumerate().map(|(index, row)| {
-        let cells = (0..columns).map(|column| {
-            let runs = row.get(column).map(Vec::as_slice).unwrap_or(&[]);
-            let mut cell = div()
-                .min_w(px(0.))
-                .flex_basis(px(0.))
-                .px_3()
-                .py(px(6.))
-                .border_r_1()
-                .border_b_1()
-                .border_color(look.border())
-                .child(styled_runs(runs, size, look));
-            cell.style().flex_grow = Some(weights[column]);
-            match table.align.get(column) {
-                Some(Align::Center) => cell.text_center(),
-                Some(Align::Right) => cell.text_right(),
-                _ => cell,
-            }
-        });
-        div()
-            .flex()
-            .flex_row()
-            .w_full()
-            .when(index == 0, |header| header.font_weight(FontWeight::BOLD))
-            // Body rows count from 1, as in the app's `tr:nth-child(even)`.
-            .when(index > 0 && index % 2 == 0, |row| row.bg(shade))
-            .children(cells)
-    });
-    div().mb_3().w_full().flex().flex_col().border_t_1().border_l_1().border_color(look.border()).children(rows)
-}
-
-fn styled_runs(runs: &[Run], size: Pixels, look: &Look) -> gpui::Div {
-    let dark = look.dark;
-    let count = runs.len();
-    let runs = runs.iter().map(|run| {
-        let mut text = div().whitespace_normal().text_size(size).child(run.text.clone());
-        if run.style.bold {
-            text = text.font_weight(FontWeight::BOLD);
-        }
-        if run.style.italic {
-            text = text.italic();
-        }
-        if run.style.strike {
-            text = text.line_through();
-        }
-        if run.style.code {
-            text = text.font_family(look.mono.clone()).text_size(look.code_size()).bg(tone(dark, 0x3f3f46, 0xe4e4e7)).px_1();
-        }
-        text
-    });
-    if count <= 1 {
-        return div().w_full().children(runs);
-    }
-    div().w_full().flex().flex_row().flex_wrap().children(runs)
-}
-
-fn tone(dark: bool, dark_value: u32, light_value: u32) -> gpui::Rgba {
-    if dark { rgb(dark_value) } else { rgb(light_value) }
-}
-
-/// GPUI delivers typed text only while an element is painting. This layer fills the
-/// source column without taking a row, so the caret keeps receiving keystrokes.
-struct TextInputLayer {
-    view: Entity<Prototype>,
-}
-
-impl IntoElement for TextInputLayer {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl Element for TextInputLayer {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        let style = Style {
-            position: Position::Absolute,
-            size: size(relative(1.).into(), relative(1.).into()),
-            ..Style::default()
-        };
-        (window.request_layout(style, [], cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _state: &mut Self::RequestLayoutState,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) {
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _state: &mut Self::RequestLayoutState,
-        _prepaint: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let focus = self.view.read(cx).focus.clone();
-        window.handle_input(&focus, ElementInputHandler::new(bounds, self.view.clone()), cx);
-    }
-}
-
-fn line_spans(text: &str) -> Vec<Range<usize>> {
-    let mut spans = Vec::new();
-    let mut start = 0;
-    for (index, byte) in text.bytes().enumerate() {
-        if byte == b'\n' {
-            spans.push(start..index);
-            start = index + 1;
-        }
-    }
-    spans.push(start..text.len());
-    spans
-}
-
-fn line_index(text: &str, offset: usize) -> usize {
-    text[..char_boundary(text, offset)].bytes().filter(|byte| *byte == b'\n').count()
-}
-
-fn line_range(text: &str, offset: usize) -> (usize, usize) {
-    let offset = char_boundary(text, offset);
-    let start = text[..offset].rfind('\n').map(|index| index + 1).unwrap_or(0);
-    let end = text[offset..].find('\n').map(|index| offset + index).unwrap_or(text.len());
-    (start, end)
-}
-
-fn offset_of_line(text: &str, line: usize) -> usize {
-    if line == 0 {
-        return 0;
-    }
-    let mut seen = 0;
-    for (index, byte) in text.bytes().enumerate() {
-        if byte != b'\n' {
-            continue;
-        }
-        seen += 1;
-        if seen == line {
-            return index + 1;
-        }
+        utf16 += ch.len_utf16();
     }
     text.len()
-}
-
-/// The nearest char boundary at or before `offset`. Every offset that slices the text passes through here.
-fn char_boundary(text: &str, offset: usize) -> usize {
-    let mut offset = offset.min(text.len());
-    while !text.is_char_boundary(offset) {
-        offset -= 1;
-    }
-    offset
-}
-
-/// Up or Down: the same column, counted in graphemes, on the line above or below.
-/// Counting bytes could land inside a character on a line with non-ASCII text.
-fn vertical_target(text: &str, offset: usize, delta: isize) -> usize {
-    let (start, end) = line_range(text, offset);
-    if delta < 0 && start == 0 {
-        return 0;
-    }
-    if delta > 0 && end == text.len() {
-        return text.len();
-    }
-    let column = text[start..char_boundary(text, offset)].graphemes(true).count();
-    let probe = if delta < 0 { start - 1 } else { end + 1 };
-    let (target_start, target_end) = line_range(text, probe);
-    text[target_start..target_end]
-        .grapheme_indices(true)
-        .nth(column)
-        .map(|(index, _)| target_start + index)
-        .unwrap_or(target_end)
-}
-
-fn previous_grapheme(text: &str, offset: usize) -> usize {
-    text.grapheme_indices(true).rev().find_map(|(index, _)| (index < offset).then_some(index)).unwrap_or(0)
-}
-
-fn next_grapheme(text: &str, offset: usize) -> usize {
-    text.grapheme_indices(true).find_map(|(index, _)| (index > offset).then_some(index)).unwrap_or(text.len())
-}
-
-fn utf16_to_utf8(text: &str, utf16_offset: usize) -> usize {
-    let mut utf8 = 0;
-    let mut utf16 = 0;
-    for ch in text.chars() {
-        if utf16 >= utf16_offset {
-            break;
-        }
-        utf16 += ch.len_utf16();
-        utf8 += ch.len_utf8();
-    }
-    utf8
-}
-
-fn utf8_to_utf16(text: &str, utf8_offset: usize) -> usize {
-    let mut utf8 = 0;
-    let mut utf16 = 0;
-    for ch in text.chars() {
-        if utf8 >= utf8_offset {
-            break;
-        }
-        utf8 += ch.len_utf8();
-        utf16 += ch.len_utf16();
-    }
-    utf16
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn up_and_down_keep_the_column_in_graphemes_and_never_split_a_character() {
-        let text = "a\néx\nabc";
-        // After "a" on line 1, Down lands after "é" (2 bytes), not inside it.
-        assert_eq!(vertical_target(text, 1, 1), 4);
-        // At the end of "abc", Up lands at the end of the shorter line above.
-        assert_eq!(vertical_target(text, text.len(), -1), 5);
-        assert_eq!(vertical_target(text, 0, -1), 0);
-        assert_eq!(vertical_target(text, 6, 1), text.len());
-    }
-
-    #[test]
-    fn offsets_inside_a_character_snap_back() {
-        assert_eq!(char_boundary("é", 1), 0);
-        assert_eq!(char_boundary("é", 9), 2);
-        assert_eq!(line_index("a\né", 3), 1);
-    }
 }

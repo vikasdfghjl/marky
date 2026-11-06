@@ -9,6 +9,7 @@
   The release profile matches src-tauri's, so "Program" compares with the README's number.
   Typing: keystrokes are sent with SendKeys after the RAM sample, and type_ms is the time from the edit
   arriving to the end of the frame that shows it, like the app's rAF-after-paint measure in bench-large.ts.
+  Preview: preview_ms is the time from the last keystroke to the re-parsed preview being applied.
   The edits are never saved. Compare with Marky only within one session (see AGENTS.md).
   SendKeys types into whatever window is in front: leave the machine alone while it runs, or pass -Keys 0.
 #>
@@ -48,6 +49,7 @@ function Get-LogCount([string]$pattern) {
 
 $shell = New-Object -ComObject WScript.Shell
 $ramMb = @()
+$previewMs = @()
 for ($i = 1; $i -le $Runs; $i++) {
   $startsBefore = Get-LogCount 'startup_ms='
   $launched = Get-Date
@@ -62,13 +64,21 @@ for ($i = 1; $i -le $Runs; $i++) {
   $ramMb += Get-TreeRamMb $app.Id
 
   if ($Keys -gt 0 -and $shell.AppActivate($app.Id)) {
+    $typedBefore = Get-LogCount 'type_ms='
     for ($k = 0; $k -lt $Keys; $k++) {
       $shell.SendKeys('a')
       # Paced like a typist, so each keystroke gets its own frame.
       Start-Sleep -Milliseconds 50
     }
-    $typedBefore = $Keys * ($i - 1)
     Wait-Until { (Get-LogCount 'type_ms=') -ge $typedBefore + $Keys } 10 | Out-Null
+    # The preview catches up once typing stops: wait for a preview_ms line after the last keystroke.
+    $caughtUp = Wait-Until {
+      $lines = @(Get-Content $log)
+      $lastType = ($lines | Select-String 'type_ms=' | Select-Object -Last 1).LineNumber
+      $lastPreview = $lines | Select-String 'preview_ms=(\d+)' | Select-Object -Last 1
+      if ($lastPreview -and $lastPreview.LineNumber -gt $lastType) { $lastPreview }
+    } 30
+    if ($caughtUp) { $previewMs += [double]$caughtUp.Matches[0].Groups[1].Value }
   }
   Stop-ProcessTree $app.Id
 }
@@ -86,5 +96,8 @@ if ($typeMs.Count) {
   "Typing         p50 {0:N1} ms  p95 {1:N1} ms  ({2} keystrokes)" -f (Get-Median $typeMs), (Get-Percentile $typeMs 0.95), $typeMs.Count
 } else {
   "Typing         not measured: the window could not be brought to the front for SendKeys"
+}
+if ($previewMs.Count) {
+  "Preview        median {0} ms after typing stops  [{1}]" -f (Get-Median $previewMs), ($previewMs -join ', ')
 }
 "Program        {0:N2} MB" -f ((Get-Item $exe).Length / 1MB)

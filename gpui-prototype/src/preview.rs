@@ -75,7 +75,29 @@ struct Parse {
     style: RunStyle,
     runs: Vec<Run>,
     line: usize,
+    lines: LineCounter,
     table: Option<Table>,
+}
+
+/// Line numbers for block starts. Blocks start in document order, so each lookup counts only the
+/// newlines since the previous one; counting from the start every time made a 1 MB parse take seconds.
+#[derive(Default)]
+struct LineCounter {
+    byte: usize,
+    newlines: usize,
+}
+
+impl LineCounter {
+    /// 1-based line of `byte`.
+    fn line_at(&mut self, markdown: &str, byte: usize) -> usize {
+        let byte = byte.min(markdown.len());
+        if byte < self.byte {
+            *self = Self::default();
+        }
+        self.newlines += markdown.as_bytes()[self.byte..byte].iter().filter(|b| **b == b'\n').count();
+        self.byte = byte;
+        self.newlines + 1
+    }
 }
 
 pub fn blocks(markdown: &str) -> Vec<Block> {
@@ -87,6 +109,7 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
         style: RunStyle::default(),
         runs: Vec::new(),
         line: 1,
+        lines: LineCounter::default(),
         table: None,
     };
     // Frontmatter is metadata, as in the app's preview; without the option it parses as a rule and a heading.
@@ -172,7 +195,7 @@ impl Parse {
         self.finish(out);
         self.open = Some(open);
         self.runs.clear();
-        self.line = line_at(markdown, byte);
+        self.line = self.lines.line_at(markdown, byte);
     }
 
     fn push(&mut self, text: &str, code: bool) {
@@ -256,10 +279,6 @@ fn display_math(text: &str) -> Option<String> {
     let trimmed = text.trim();
     let inner = trimmed.strip_prefix("$$")?.strip_suffix("$$")?.trim();
     if inner.is_empty() { None } else { Some(inner.to_string()) }
-}
-
-fn line_at(markdown: &str, byte: usize) -> usize {
-    markdown[..byte.min(markdown.len())].bytes().filter(|b| *b == b'\n').count() + 1
 }
 
 /// The last block that starts on or before `line` (1-based). Used to keep the preview beside the source.
@@ -357,6 +376,14 @@ mod tests {
     fn frontmatter_is_not_a_heading() {
         let blocks = blocks("---\nname: deploy\n---\n\n# Title\n");
         assert_eq!(blocks, vec![plain(Kind::Heading(1), "Title", 5)]);
+    }
+
+    #[test]
+    fn line_numbers_stay_right_across_many_blocks() {
+        let markdown: String = (0..2000).map(|index| format!("Paragraph {index}.\n\n")).collect();
+        let blocks = blocks(&markdown);
+        assert_eq!(blocks.len(), 2000);
+        assert!(blocks.iter().enumerate().all(|(index, block)| block.line == index * 2 + 1));
     }
 
     #[test]

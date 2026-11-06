@@ -7,14 +7,16 @@
 #[path = "../../src-tauri/src/files.rs"]
 mod files;
 
+mod buffer;
 mod editor;
 mod icons;
 mod perf;
 mod preview;
+mod preview_view;
 mod settings;
+mod text_field;
 
 use std::path::PathBuf;
-use std::time::Instant;
 
 use editor::Prototype;
 use gpui::{
@@ -23,7 +25,7 @@ use gpui::{
 
 fn main() {
     // The app's startup_ms also counts from the top of main, so the two numbers compare.
-    let started = Instant::now();
+    perf::start();
     let path = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/fixtures/typical.md")
     });
@@ -38,10 +40,14 @@ fn main() {
             std::process::exit(1);
         }
     };
+    perf::mark("read");
     let app_dir = settings::app_config_dir();
     let own_dir = settings::own_config_dir();
 
-    Application::new().with_assets(icons::IconAssets).run(move |cx: &mut App| {
+    let application = Application::new().with_assets(icons::IconAssets);
+    perf::mark("platform");
+    application.run(move |cx: &mut App| {
+        perf::mark("gpui");
         bind_keys(cx);
         // GPUI keeps running after its last window closes unless the app quits.
         cx.on_window_closed(|cx| {
@@ -63,11 +69,13 @@ fn main() {
                     ..Default::default()
                 },
                 move |window, cx| {
+                    perf::mark("os-window");
                     let settings = settings::load(&app_dir, &own_dir);
-                    cx.new(|cx| Prototype::new(opened, settings, own_dir.clone(), started, window, cx))
+                    cx.new(|cx| Prototype::new(opened, settings, own_dir.clone(), window, cx))
                 },
             )
             .unwrap();
+        perf::mark("window");
         window
             .update(cx, |view, window, cx| {
                 window.focus(&view.focus_handle(cx));
@@ -110,5 +118,16 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-c", editor::Copy, None),
         KeyBinding::new("secondary-x", editor::Cut, None),
         KeyBinding::new("secondary-s", editor::Save, None),
+        KeyBinding::new("secondary-z", editor::Undo, None),
+        KeyBinding::new("secondary-y", editor::Redo, None),
+        KeyBinding::new("secondary-shift-z", editor::Redo, None),
+        KeyBinding::new("secondary-f", editor::Find, None),
+        KeyBinding::new("secondary-h", editor::FindReplace, None),
+        KeyBinding::new("f3", editor::FindNext, None),
+        KeyBinding::new("shift-f3", editor::FindPrevious, None),
+        KeyBinding::new("escape", editor::FindClose, None),
+        // Shift+Enter is a new line in the editor and "previous match" in the find field.
+        KeyBinding::new("shift-enter", editor::Enter, None),
+        KeyBinding::new("shift-enter", editor::FindPrevious, Some("TextField")),
     ]);
 }
