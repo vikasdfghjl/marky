@@ -473,7 +473,7 @@ impl Prototype {
 
     /// A click on a source line: GPUI's layout of that line maps the point to a character, wrapped or not.
     fn click_line(&mut self, line: usize, layout: &TextLayout, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         self.open_menu = None;
         let range = self.doc().buffer.line_range(line);
         let (Ok(index) | Err(index)) = layout.index_for_position(position);
@@ -482,7 +482,7 @@ impl Prototype {
 
     /// A click below the last line puts the caret at the end.
     fn click_source(&mut self, _: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         self.open_menu = None;
         let end = self.doc().buffer.len();
         self.move_to(end, cx);
@@ -522,7 +522,8 @@ impl Prototype {
         if !selected.is_empty() && !selected.contains('\n') {
             query.update(cx, |field, cx| field.set_text(&selected, cx));
         }
-        window.focus(&query.focus_handle(cx));
+        let handle = query.focus_handle(cx);
+        window.focus(&handle, cx);
         cx.notify();
     }
 
@@ -554,7 +555,7 @@ impl Prototype {
     fn find_close(&mut self, _: &FindClose, window: &mut Window, cx: &mut Context<Self>) {
         self.open_menu = None;
         if self.find.take().is_some() {
-            window.focus(&self.focus);
+            window.focus(&self.focus, cx);
         }
         cx.notify();
     }

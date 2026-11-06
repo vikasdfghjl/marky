@@ -122,7 +122,7 @@ impl Render for TextField {
             .flex()
             .flex_row()
             .items_center()
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, _| window.focus(&this.focus)))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| window.focus(&this.focus, cx)))
             .child(InputLayer { view: cx.entity(), focus: self.focus.clone() })
             // The caret is at the end of typed text, and before the placeholder in an empty field.
             .when(focused && empty, |field| field.child(caret()))

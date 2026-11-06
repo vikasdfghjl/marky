@@ -14,18 +14,18 @@ A full port would throw away `src/` (CodeMirror, the preview worker, panels) and
 
 ## What GPUI is, as of this note
 
-Two different things are called GPUI 0.2.2. The **published crate** on crates.io is what the prototype builds. Zed's **`main` branch** still says 0.2.2 in its `Cargo.toml` but has moved on. Claims below say which one they are about.
+Two different things are called GPUI 0.2.2: the **published crate** on crates.io, and Zed's **`main` branch**, which still says 0.2.2 in its `Cargo.toml` but has moved on. The prototype started on the published crate and, since 6 Nov 2026, uses `main` pinned at commit `b77ec90` (3 Jul 2026); the reasons are in [DECISION.md](../DECISION.md).
 
-- License Apache-2.0. Pre-1.0: breaking changes are expected between versions ([GPUI README](https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md)).
-- Published crate: one crate. Windows uses Win32 for the window, DirectWrite for text and DirectX 11 for drawing, with no extra features. `main` splits the platform code into a separate `gpui_platform` crate.
+- License Apache-2.0. Pre-1.0: breaking changes are expected between commits ([GPUI README](https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md)).
+- On `main` the platform code is a separate crate: an app starts with `gpui_platform::application()`. Windows uses Win32 for the window, DirectWrite for text and DirectX 11 for drawing, with no extra features.
 - UI is a Rust view tree styled with a Tailwind-like API. CSS support is whatever Zed needs, not the full CSS platform.
 - Keyboard input is actions and key bindings, dispatched in-process. There is no webview IPC.
-- **Accessibility: the published crate has no AccessKit.** `main` depends on `accesskit` and has an `a11y` example ([Cargo.toml on main](https://github.com/zed-industries/zed/blob/main/crates/gpui/Cargo.toml)). Getting an accessibility tree means a git dependency on a reviewed Zed revision, not the crates.io release.
-- Menus: on Windows the published crate stores the menu set by `set_menus` but creates no native menu bar. The app draws its own.
-- The crate can draw SVG (`resvg` / `usvg`). Something still has to produce the SVG. Mermaid is that producer today, and it is JavaScript.
+- **Accessibility.** The published crate has no AccessKit. `main` has it (Zed #56065, May 2026): elements with an `id` take ARIA-style attributes (`.role(Role::Button)`, `.aria_label(...)`, `.aria_level(...)`, `.aria_toggled(...)`), `gpui_windows` exposes them through UI Automation (`accesskit_windows`), and `examples/a11y.rs` and the `_accessibility` module document it.
+- Menus: on Windows GPUI stores the menu set by `set_menus` but creates no native menu bar. The app draws its own.
+- GPUI can draw SVG (`resvg` / `usvg`). Something still has to produce the SVG. Mermaid is that producer today, and it is JavaScript.
 - Closing the last window does not end the process; the app must quit itself (`on_window_closed`, see the `on_window_close_quit` example).
 
-Apache-2.0 is acceptable next to Marky's MIT license. Pin exactly: `version = "=0.2.2"` or a git `rev`. A bare `"0.2.2"` accepts any later 0.2.x.
+Apache-2.0 is acceptable next to Marky's MIT license. Pin exactly: a git `rev`, or `version = "=x.y.z"`. A bare version accepts later releases.
 
 **Zed's own crates are not GPUI.** `editor`, `rope`, `markdown` and `mermaid_render` are GPL-3.0-or-later. Read them to learn how Zed solves a problem; do not copy their code into MIT Marky.
 
@@ -114,10 +114,12 @@ Record the results, the GPUI version or revision, and the date below. Do not put
 | --- | --- | --- | --- | --- | --- |
 | 6 Nov 2026 | Marky 0.3.3 (`bench.ps1`; typing from `bench-large.ps1 -SizesKb 5`) | 863 ms | 103.7 MB | 15.9 / 18.8 ms | 6.74 MB |
 | 6 Nov 2026 | Prototype, crates.io GPUI =0.2.2 (`gpui-prototype/bench.ps1`) | 651 ms (−25%) | 18.9 MB (−82%) | 4.1 / 8.2 ms | 4.49 MB |
+| 6 Nov 2026, later session | Marky 0.3.3 (`bench.ps1`) | 810 ms | 102.1 MB | | 6.74 MB |
+| 6 Nov 2026, same session | Prototype with editor core and highlighting, GPUI from Zed at `b77ec90` | 474 ms (−41%) | 16.3 MB (−84%) | 1.4 / 2.4 ms | 8.88 MB |
 
 Result, 6 Nov 2026: **the gate passes**, on an i5-9300H, five runs each, medians. Read it with these limits:
 
-- Cold start passes with little margin: 25% against the 20% bar, and one of the five runs took 892 ms. The start-up profile below shows where the time goes and how to recover about 185 ms.
+- On GPUI 0.2.2, cold start passed with little margin: 25% against the 20% bar. The start-up profile below found why; on the pinned Zed commit the margin is 41%. The program is 8.88 MB, over the 8 MB target; see DECISION.md.
 - The prototype does much less than Marky: no code highlighting, KaTeX, Mermaid, recovery, file watching or recent files. Memory and start time will grow as those arrive; the margin on memory is large enough to absorb that, the margin on start time is not.
 - Typing is measured differently. Marky's figure is a DevTools key event to after paint, on a generated 6 KB document; the prototype's is an OS keystroke (SendKeys) from arrival to the end of its paint, on `typical.md`. Treat it as "both well within budget", not as a 4× speed-up. The prototype logged 201 of 300 keystrokes, because the window lost focus during some runs.
 - Large documents are measured separately, below.
@@ -136,7 +138,9 @@ Measured 6 Nov 2026 with phase marks on the `startup_ms` line and a temporary ti
 | Message window, drag-drop helper, icon, Windows version | ~45 ms |
 | Window, first render and layout, first paint | ~75 ms |
 
-About 85–90% of the start is GPUI's platform set-up, before any window or document: the two Direct3D device creations alone are about 70%. The second one is waste, and Zed's `main` already removes it: `get_adapter` in `crates/gpui_windows/src/directx_devices.rs` keeps the device it tests. Moving to a reviewed Zed revision would bring start-up to roughly 465 ms and is also what step 4 needs for AccessKit. The document itself costs almost nothing at start: reading `typical.md` takes under 1 ms, parsing moved to the background, and the first frame lays out only visible lines.
+About 85–90% of the start is GPUI's platform set-up, before any window or document: the two Direct3D device creations alone are about 70%. The second one is waste, and Zed's `main` already removes it (Zed #49001, Feb 2026): `get_adapter` in `crates/gpui_windows/src/directx_devices.rs` keeps the device it tests. The document itself costs almost nothing at start: reading `typical.md` takes under 1 ms, parsing moved to the background, and the first frame lays out only visible lines.
+
+After moving to Zed at `b77ec90` (same marks, five runs): platform set-up about 400 ms instead of about 600, window about 55 ms, render, layout and paint about 25 ms; **474 ms in all against 641 ms** on 0.2.2 earlier the same day, close to the 185 ms the profile predicted.
 
 ### Large documents
 
@@ -153,7 +157,7 @@ Start · memory 10 s after launch · typing p50 · preview after typing stops. T
 
 Before the rework the prototype laid out every line and re-parsed on every keystroke; virtualised lists and the background parse made start-up and typing independent of file size. The first measurement of the rework found the preview 3.4 s behind at 1 MB: block line numbers were counted from the start of the document for every block, so parsing was quadratic, and a parse cancelled by the next keystroke kept running on its thread, so they piled up. Counting from the previous block fixed both. Memory still grows with the file (the text, the parsed blocks and the line index), at about 13 MB per MB against Marky's 300.
 
-Syntax highlighting, added afterwards, leaves start-up and typing unchanged and costs the large files in the background parse and in memory: at 4 MB, 83.4 MB and 324 ms to update the preview (parse 159 ms), against 68.4 MB and 251 ms without it. The program grew from 4.49 MB to 8.42 MB, 0.42 MB over the README's 8 MB target. That increase was accepted on 6 Nov 2026, as gate criterion 4 requires; the reasons are in [DECISION.md](../DECISION.md).
+Syntax highlighting, added afterwards, leaves start-up and typing unchanged and costs the large files in the background parse and in memory: at 4 MB, 83.4 MB and 324 ms to update the preview (parse 159 ms), against 68.4 MB and 251 ms without it. The program grew from 4.49 MB to 8.42 MB with highlighting, and to 8.88 MB with GPUI from Zed's repository: 0.88 MB over the README's 8 MB target. That size was accepted on 6 Nov 2026, as gate criterion 4 requires; the reasons are in [DECISION.md](../DECISION.md).
 
 ## After the gate
 
@@ -162,7 +166,7 @@ Do these in order. Each one keeps the app shippable; do not delete WebView2 unti
 1. **Editor.** One document on a rope, undo, find and replace, word wrap, Windows text input, drawn with a virtualised list so cost follows the screen, not the file. Done in the prototype on 6 Nov 2026 (tabs with separate undo histories included). Still missing: selecting with the mouse or Shift+Up/Down, word and document-wide caret moves (Ctrl+arrows, Ctrl+Home/End), Home/End on wrapped rows, horizontal scrolling when word wrap is off (long lines are cut off), IME reconversion, and case folding beyond ASCII in find.
 2. **Plain preview.** The syntax Marky renders today that is text layout: tables, task lists, strikethrough, footnotes, definition lists, abbreviations, subscript, superscript, marked text. Keep a line map so scrolling can stay in step. Share one parser's idea of a token with the editor so the two panes do not disagree.
 3. **Math and diagrams.** Decide explicitly to port them or to drop them. Do not embed a JavaScript engine to keep KaTeX and Mermaid; that spends the browser cost again.
-4. **Chrome.** Menus, shortcuts, settings, outline, status bar, light and dark theme, keyboard access and an AccessKit tree that exposes the editor text. Contrast still has to meet WCAG 2.2 AA. This step needs a GPUI revision with AccessKit (see above).
+4. **Chrome.** Menus, shortcuts, settings, outline, status bar, light and dark theme, keyboard access and an AccessKit tree that exposes the editor text. Contrast still has to meet WCAG 2.2 AA. The pinned Zed commit has AccessKit (see above).
 5. **Test harness and packaging.** A driver for the end-to-end and benchmark scripts, and an installer pipeline, before anything is removed.
 6. **Remove Tauri.** Drop the webview, `src/`, the frontend bundle budget, and `npm run dev`. Keep the Rust file rules and the tests that protect them; port the release scripts to the new installer.
 
@@ -170,11 +174,11 @@ Do these in order. Each one keeps the app shippable; do not delete WebView2 unti
 
 Official GPUI material (Apache-2.0):
 
-- [GPUI README](https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md), [gpui.rs](https://gpui.rs/), and [docs.rs for 0.2.2](https://docs.rs/gpui/0.2.2).
-- `examples/input.rs`, also shipped in the 0.2.2 crate: the reference text input. It implements `EntityInputHandler` for Windows text input and IME, and maps clicks and the caret through text layout (`closest_index_for_x`, `x_for_index`, `bounds_for_range`).
+- [GPUI README](https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md) and [gpui.rs](https://gpui.rs/). For the pinned commit, read the source in Cargo's checkout (`~/.cargo/git/checkouts/zed-*/b77ec90/crates/gpui`); docs.rs only has the published 0.2.2.
+- `examples/input.rs`: the reference text input. It implements `EntityInputHandler` for Windows text input and IME, and maps clicks and the caret through text layout (`closest_index_for_x`, `x_for_index`, `bounds_for_range`).
 - `examples/uniform_list.rs` and the `list` element: virtualised rows, for an editor or preview that should not lay out the whole document. The prototype uses `list` for both panes, because wrapped lines and preview blocks have different heights; `ListState::splice` keeps measured heights when lines change.
 - `examples/set_menus.rs` and `examples/on_window_close_quit.rs`: menus, and quitting when the window closes.
-- `examples/a11y.rs` on `main` only, with [AccessKit](https://github.com/AccessKit/accesskit).
+- `examples/a11y.rs` and `src/_accessibility.rs`, with [AccessKit](https://github.com/AccessKit/accesskit).
 
 Reference implementations to read but not copy (GPL-3.0-or-later): Zed's `crates/editor`, `crates/rope`, `crates/markdown` and `crates/mermaid_render`.
 
@@ -189,9 +193,10 @@ Permissive libraries:
 
 ## Risks
 
-- **API churn.** GPUI is pre-1.0 and changes with Zed, and the crates.io release already trails `main`. A port owns that breakage.
+- **API churn.** GPUI is pre-1.0 and changes with Zed, and the crates.io release already trails `main`. A port owns that breakage. Moving the prototype from 0.2.2 to `b77ec90` took two changes (`gpui_platform::application()`, and `window.focus` taking `cx`).
+- **Consuming Zed by Git.** Every Zed commit since 3 Jul 2026 contains a lint test fixture with stub packages named `gpui` and `gpui_shared_string`, and Cargo resolves to the stub, so the pin cannot move past `b77ec90` until that is fixed upstream (DECISION.md).
 - **Text input.** A correct Windows editor includes IME, selection, and undo. The prototype has the input handler and IME placement, but no undo, drag selection, or vertical selection.
-- **Accessibility.** WebView2 exposes the editor text today. GPUI needs a revision with AccessKit, and the app must build the tree for its custom editor.
+- **Accessibility.** WebView2 exposes the editor text today. The pinned GPUI has AccessKit, but the app must build the tree for its custom editor.
 - **Menus.** Marky uses native Windows menus. GPUI draws its own. Recheck keyboard access rather than assuming the native menu behavior carries over.
 - **Size and licences.** The 4.46 MB installer is small because Windows already has the browser. The prototype pulls in about 450 crates; licences include Unicode-3.0, Zlib and BSL-1.0, which need notices in `THIRD_PARTY_NOTICES.txt`, and nothing copyleft.
 - **Installer and SmartScreen.** The app stays unsigned until a signing command exists. Changing UI toolkits does not change that.

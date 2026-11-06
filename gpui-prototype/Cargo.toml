@@ -11,9 +11,20 @@ name = "gpui-prototype"
 path = "src/main.rs"
 
 [dependencies]
-# Exactly the published 0.2.2: a bare "0.2.2" would accept any later 0.2.x. Windows draws with
-# DirectX 11 and needs no Linux features. This crate has no AccessKit; Zed's main branch does.
-gpui = { version = "=0.2.2", default-features = false, features = ["windows-manifest"] }
+# GPUI from Zed's repository, pinned to one commit of `main`: b77ec90, 3 Jul 2026. Unlike the
+# crates.io 0.2.2 it creates one Direct3D device instead of two (Zed #49001, ~185 ms of start-up),
+# has AccessKit (#56065) and the gpui/gpui_platform split. Move the pin on purpose: GPUI is pre-1.0
+# and its API changes between commits; both crates must use the same commit.
+#
+# Why not a newer commit: the next one (#58496) added tooling/lints/test_fixture, a workspace with
+# stub packages also named `gpui` and `gpui_shared_string`. Cargo then resolves gpui_platform's
+# `gpui` to the stub and fails ("gpui does not have feature windows-manifest"; the version and
+# feature list it prints belong to usvg). Every later commit has the fixture; see DECISION.md.
+#
+# gpui_platform turns on gpui's `windows-manifest` itself; its default `multithreaded` feature
+# is only for the web backend.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "b77ec90b2e6585622099235d9fb7d708d22ad956", default-features = false }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "b77ec90b2e6585622099235d9fb7d708d22ad956", default-features = false }
 pulldown-cmark = "0.13"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }

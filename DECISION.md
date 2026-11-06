@@ -2,6 +2,53 @@
 
 Decisions about Marky that are not obvious from the code, with the reasons and the evidence behind them. Newest first. Each entry says what was decided, what else was considered, and what it costs; change one only with new evidence, and add a new entry rather than rewriting an old one.
 
+## 2026-11-06: The GPUI prototype uses GPUI from Zed's repository, pinned at b77ec90
+
+Context: [docs/gpui-migration.md](docs/gpui-migration.md), `gpui-prototype/Cargo.toml`.
+
+### Decision
+
+- `gpui` and `gpui_platform` come from `https://github.com/zed-industries/zed` at commit **`b77ec90`** (3 Jul 2026), instead of the crates.io release 0.2.2. Both crates use the same commit.
+- Move early: every feature written against 0.2.2 was more to port later.
+- The pin moves only on purpose, with a build, the tests and a start-up measurement, and an update to this entry.
+
+### Why this commit and not the newest
+
+The newest `main` (`78fde14`, 6 Nov 2026) does not build as a Git dependency. Zed #58496 (3 Jul 2026) added `tooling/lints/test_fixture`, a workspace with stub packages named `gpui` (0.0.0) and `gpui_shared_string`. Cargo loads every package in a Git dependency's repository, keeps both `gpui` packages because their versions differ, and resolves `gpui_platform`'s `gpui` to the stub. It fails with "gpui does not have feature windows-manifest"; the version (0.46.0) and feature list it prints belong to `usvg` and mislead. `b77ec90` is the commit just before #58496, and it already has what the move is for:
+
+- one Direct3D device instead of two (Zed #49001, 12 Feb 2026)
+- AccessKit (Zed #56065, 27 May 2026)
+- the `gpui` / `gpui_platform` split and the current API up to July
+
+### Options considered
+
+| Option | For | Against |
+| --- | --- | --- |
+| Stay on crates.io 0.2.2 | Nothing to change | Two Direct3D devices (~185 ms), no AccessKit, an API that trails Zed by about a year |
+| **Zed Git, pinned at `b77ec90` (chosen)** | Zed's own source; all three gains | Four months behind `main`; Cargo downloads the whole Zed repository (about 540 MB, 17 minutes here) |
+| Zed Git at the newest commit | Current API | Does not resolve (the fixture above) |
+| `gpui-pre` crates.io snapshots (what gpui-kit uses) | Current, small download | Published by a third party (`huacnlee`), not Zed |
+| Zed as a Git submodule with path dependencies | Any commit, no resolution clash | A second 540 MB checkout in the repository, and machine-specific paths |
+
+### Evidence
+
+Same session, i5-9300H, `typical.md`, medians of 5 runs:
+
+| Build | Start | Memory | Typing p50 / p95 | Program |
+| --- | ---: | ---: | ---: | ---: |
+| Prototype on GPUI 0.2.2 (earlier session) | 641 ms | 17.0 MB | 1.4 / 2.7 ms | 8.42 MB |
+| **Prototype on Zed `b77ec90`** | **474 ms** | 16.3 MB | 1.4 / 2.4 ms | 8.88 MB |
+| Marky 0.3.3 | 810 ms | 102.1 MB | | 6.74 MB |
+
+Start-up phases moved as the profile predicted: GPUI's platform set-up dropped from about 600 to about 400 ms. Start is now 41% faster than Marky, against 25% on 0.2.2. The port took two changes: `gpui_platform::application()` replaces `Application::new()`, and `window.focus` and `on_window_closed` gained a `cx` and a window-id argument. Clippy is clean and all 32 tests pass.
+
+### Consequences
+
+- **Program size: 8.88 MB**, 0.46 MB more than on 0.2.2 (AccessKit and the newer platform code) and 0.88 MB over the README's 8 MB target. **Accepted on 6 Nov 2026**; this supersedes the 8.42 MB accepted for highlighting and is the written acceptance the migration gate asks for.
+- The pin cannot move past `b77ec90` until Zed excludes the test fixture from its repository's packages (or renames the stubs). Reporting it upstream would unblock this.
+- Cargo keeps the Zed checkout in `~/.cargo/git` (about 0.9 GB with its history).
+- API reference for the pin is the source in Cargo's checkout; docs.rs only covers 0.2.2.
+
 ## 2026-11-06: Code highlighting in the GPUI prototype uses tree-sitter, with nine grammars
 
 Context: [docs/gpui-migration.md](docs/gpui-migration.md). This applies to `gpui-prototype/`, not the shipping app, which keeps CodeMirror's Lezer parsers.

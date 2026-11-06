@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use editor::Prototype;
 use gpui::{
-    App, AppContext, Application, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
+    App, AppContext, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
 
 fn main() {
@@ -45,13 +45,14 @@ fn main() {
     let app_dir = settings::app_config_dir();
     let own_dir = settings::own_config_dir();
 
-    let application = Application::new().with_assets(icons::IconAssets);
+    // The platform (Win32 windows, DirectWrite text, DirectX 11) comes from gpui_platform.
+    let application = gpui_platform::application().with_assets(icons::IconAssets);
     perf::mark("platform");
     application.run(move |cx: &mut App| {
         perf::mark("gpui");
         bind_keys(cx);
         // GPUI keeps running after its last window closes unless the app quits.
-        cx.on_window_closed(|cx| {
+        cx.on_window_closed(|cx, _closed| {
             if cx.windows().is_empty() {
                 cx.quit();
             }
@@ -79,7 +80,8 @@ fn main() {
         perf::mark("window");
         window
             .update(cx, |view, window, cx| {
-                window.focus(&view.focus_handle(cx));
+                let handle = view.focus_handle(cx);
+                window.focus(&handle, cx);
                 let entity = cx.entity();
                 window.on_window_should_close(cx, move |window, cx| entity.update(cx, |view, cx| view.may_close(window, cx)));
             })
