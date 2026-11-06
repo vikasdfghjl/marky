@@ -1,7 +1,7 @@
 //! The preview's blocks from a pulldown-cmark parse: headings, paragraphs, quotes, lists and task
 //! lists, code, tables, footnotes, definition lists, images, display math and Mermaid fences, with
 //! inline emphasis, strikethrough, code, links, `~sub~`, `^sup^` and `==mark==`.
-//! Math is the TeX source: there is no DOM for KaTeX.
+//! Math is TeX for RaTeX to lay out (math.rs): inline and display formulas, and math fences.
 //! A diagram is the Mermaid source: this window does not run Mermaid.
 
 use std::collections::HashMap;
@@ -22,6 +22,7 @@ pub fn options() -> Options {
         | Options::ENABLE_DEFINITION_LIST
         | Options::ENABLE_SUPERSCRIPT
         | Options::ENABLE_SUBSCRIPT
+        | Options::ENABLE_MATH
         | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
 }
 
@@ -69,6 +70,9 @@ pub struct RunStyle {
     pub sub: bool,
     pub sup: bool,
     pub mark: bool,
+    /// The run is TeX: inline `$…$`, or `$$…$$` (display) inside a paragraph.
+    pub math: bool,
+    pub display: bool,
     /// The link's destination, as written: a URL, a relative path, or `#fn:N` for a footnote reference.
     pub link: Option<Arc<str>>,
 }
@@ -259,9 +263,12 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
                 parse.finish(&mut out);
             }
             Event::End(TagEnd::Paragraph) => {
-                if let Some(math) = display_math(&parse.plain()) {
-                    parse.runs = vec![Run { text: math, style: RunStyle::default() }];
-                    parse.open = Some(Open::Math);
+                // A paragraph that is only `$$…$$` is a display formula block, as in the app.
+                if let [run] = parse.runs.as_slice() {
+                    if run.style.display && matches!(parse.open, Some(Open::Paragraph)) {
+                        parse.runs = vec![Run { text: run.text.clone(), style: RunStyle::default() }];
+                        parse.open = Some(Open::Math);
+                    }
                 }
                 if !parse.open.is_some_and(Open::holds_paragraphs) {
                     parse.finish(&mut out);
@@ -270,6 +277,8 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
             Event::End(TagEnd::Item) => parse.finish(&mut out),
             Event::Text(fragment) if parse.open.is_some() => parse.push_text(&fragment),
             Event::Code(fragment) if parse.open.is_some() => parse.push(&fragment, true),
+            Event::InlineMath(tex) if parse.open.is_some() => parse.push_math(&tex, false),
+            Event::DisplayMath(tex) if parse.open.is_some() => parse.push_math(&tex, true),
             Event::SoftBreak | Event::HardBreak if matches!(parse.open, Some(Open::Code | Open::Math | Open::Diagram)) => parse.push("\n", false),
             Event::SoftBreak | Event::HardBreak if parse.open.is_some() => parse.push(" ", false),
             _ => {}
@@ -291,6 +300,12 @@ impl Parse {
     fn footnote_number(&mut self, label: &str) -> u32 {
         let next = self.footnotes.len() as u32 + 1;
         *self.footnotes.entry(label.to_string()).or_insert(next)
+    }
+
+    /// A formula is its own run, never merged with text: the preview draws it as an image.
+    fn push_math(&mut self, tex: &str, display: bool) {
+        let style = RunStyle { math: true, display, ..self.style.clone() };
+        self.runs.push(Run { text: tex.trim().to_string(), style });
     }
 
     fn push_text(&mut self, text: &str) {
@@ -322,9 +337,6 @@ impl Parse {
         self.runs.push(Run { text: alt, style });
     }
 
-    fn plain(&self) -> String {
-        plain_text(&self.runs)
-    }
 
     fn finish(&mut self, out: &mut Vec<Block>) {
         let Some(open) = self.open.take() else { return };
@@ -400,7 +412,7 @@ impl Parse {
 fn inline_extensions(runs: Vec<Run>) -> Vec<Run> {
     let mut out: Vec<Run> = Vec::with_capacity(runs.len());
     for run in runs {
-        if run.style.code {
+        if run.style.code || run.style.math {
             out.push(run);
             continue;
         }
@@ -512,12 +524,6 @@ fn align_of(align: &Alignment) -> Align {
     }
 }
 
-/// A paragraph that is only a `$$...$$` block. Inline `$...$` stays inside the paragraph.
-fn display_math(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    let inner = trimmed.strip_prefix("$$")?.strip_suffix("$$")?.trim();
-    if inner.is_empty() { None } else { Some(inner.to_string()) }
-}
 
 /// The last block that starts on or before `line` (1-based). Used to keep the preview beside the source.
 pub fn block_at_line(blocks: &[Block], line: usize) -> usize {
@@ -670,6 +676,24 @@ mod tests {
         assert_eq!(blocks[3].kind, Kind::Math);
         assert_eq!(blocks[3].text, "x+1");
         assert_eq!(blocks[3].line, 12);
+    }
+
+    #[test]
+    fn inline_math_follows_the_apps_rules_so_prices_stay_text() {
+        // The app sample's own line.
+        let blocks = blocks("Inline $E = mc^2$ and $\\frac{n}{2}$, while prices like $5 and $10 stay text.\n");
+        let math: Vec<&str> = blocks[0].runs.iter().filter(|run| run.style.math).map(|run| run.text.as_str()).collect();
+        assert_eq!(math, ["E = mc^2", "\\frac{n}{2}"]);
+        assert!(blocks[0].text.ends_with("prices like $5 and $10 stay text."));
+    }
+
+    #[test]
+    fn a_paragraph_of_display_math_is_a_math_block() {
+        let blocks = blocks("$$\n\\sum_j e^{x_j}\n$$\n\nText with $$x$$ inside.\n");
+        assert_eq!(blocks[0].kind, Kind::Math);
+        assert_eq!(blocks[0].text, "\\sum_j e^{x_j}");
+        assert_eq!(blocks[1].kind, Kind::Paragraph);
+        assert!(blocks[1].runs.iter().any(|run| run.style.display && run.text == "x"));
     }
 
     #[test]

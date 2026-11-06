@@ -32,6 +32,11 @@ serde_json = "1"
 unicode-segmentation = "1"
 # The editor buffer. MIT.
 ropey = "1.6"
+# Math: RaTeX lays out TeX like KaTeX, in pure Rust, with KaTeX's fonts embedded. MIT. ~3 MB.
+ratex-parser = "0.1.15"
+ratex-layout = "0.1.15"
+ratex-types = "0.1.15"
+ratex-svg = { version = "0.1.15", features = ["standalone", "embed-fonts"] }
 # Code highlighting in fences, as Zed does it. All MIT. Each grammar is compiled C that adds to the
 # program, so each is a feature (below) and the default set fits the 8 MB budget.
 tree-sitter = "0.27"

@@ -2,6 +2,33 @@
 
 Decisions about Marky that are not obvious from the code, with the reasons and the evidence behind them. Newest first. Each entry says what was decided, what else was considered, and what it costs; change one only with new evidence, and add a new entry rather than rewriting an old one.
 
+## 2026-11-07: Math is ported with RaTeX; Mermaid diagrams move to an on-demand helper with merman
+
+Context: step 3 of [docs/gpui-migration.md](docs/gpui-migration.md), whose "Step 3: math and diagrams without JavaScript" section has the full research. Math was built on 7 Nov 2026; the diagram helper is not built yet.
+
+### Decision
+
+- **Math: RaTeX in the main program.** Inline `$…$`, display `$$…$$` and ```` ```math ```` fences render in the preview as SVG drawn by GPUI, in the theme's text colour. Broken TeX shows its source and the error, as the app does.
+- **Diagrams: merman in a separate helper program**, `marky-diagrams.exe`, with all 34 diagram types and the Cytoscape layout. The main program runs it only when a document has a ```` ```mermaid ```` fence, as the app loads Mermaid only then, and draws the SVG it returns. Mermaid's `htmlLabels` is set to false, so every label is SVG text that GPUI can draw.
+- No JavaScript engine, as the migration doc requires.
+
+### Options considered
+
+| | Port in the main program | Port in a helper program | Drop |
+| --- | --- | --- | --- |
+| Math (RaTeX, +3.0 MB) | **Chosen**: formulas are common and inline, so a process round trip per document would delay them | Keeps the main program small, but every math-heavy page waits on the helper | Shows TeX source |
+| Diagrams (merman, +6.85 MB for 7 types, +10.2 MB for all 34) | Breaks the 12 MB hard limit | **Chosen**: size goes to the installer; cost only when a document has a diagram | Shows Mermaid source |
+
+### Evidence
+
+Spike, 7 Nov 2026: seven diagram types render in 0.1–2.6 ms each with merman 0.9.3 and draw correctly with resvg 0.46 (GPUI's SVG renderer) once `htmlLabels` is false; formulas render like KaTeX in 0.4–1.2 ms with RaTeX 0.1.15. Sizes are added to an empty program built with the prototype's release profile.
+
+### Consequences
+
+- **Program size: 10.87 MB measured** with math built in (RaTeX added 1.99 MB, less than the 3.0 MB it adds to an empty program, because the prototype already links much of what it needs). Over the README's 8 MB target and under its 12 MB hard limit; choosing RaTeX accepted this, and it replaces the 8.88 MB accepted with the GPUI pin.
+- The helper is a second program to build, sign and ship, and a process to start (tens of milliseconds) when a document first shows a diagram. It should stay running while such documents are open and render all of a document's diagrams in one request.
+- Diagram output differs slightly from Mermaid.js: edge-label backgrounds sit a little off and long class names can overflow their box.
+
 ## 2026-11-06: The GPUI prototype uses GPUI from Zed's repository, pinned at b77ec90
 
 Context: [docs/gpui-migration.md](docs/gpui-migration.md), `gpui-prototype/Cargo.toml`.

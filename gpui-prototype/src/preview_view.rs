@@ -7,6 +7,7 @@ use std::sync::Arc;
 use gpui::{Context, FontWeight, IntoElement, MouseButton, Pixels, SharedString, StyledText, div, img, prelude::*, px, rgb};
 
 use crate::editor::Prototype;
+use crate::math;
 use crate::preview::{self, Align, Block, Kind, Run, Table};
 use crate::syntax::Span;
 
@@ -63,6 +64,9 @@ fn preview_block(block: &Block, look: &Look, cx: &mut Context<Prototype>) -> gpu
     if let Kind::Image = block.kind {
         return image_block(block, look);
     }
+    if let Kind::Math = block.kind {
+        return math_block(&block.text, look);
+    }
     let body = styled_runs(&block.runs, size, look, cx);
     match block.kind {
         Kind::Quote => div().mb_3().pl_3().border_l_2().border_color(tone(dark, 0x71717a, 0xa1a1aa)).child(body),
@@ -77,14 +81,6 @@ fn preview_block(block: &Block, look: &Look, cx: &mut Context<Prototype>) -> gpu
             div().mb_1().flex().flex_row().gap_2().child(marker).child(body)
         }
         Kind::Code => div().mb_3().px_3().py_2().font_family(look.mono.clone()).bg(tone(dark, 0x27272a, 0xf4f4f5)).child(body),
-        Kind::Math => div()
-            .mb_3()
-            .px_3()
-            .py_2()
-            .font_family(look.mono.clone())
-            .bg(tone(dark, 0x1e1b4b, 0xeef2ff))
-            .text_color(tone(dark, 0xe0e7ff, 0x312e81))
-            .child(body),
         Kind::Diagram => div()
             .mb_3()
             .px_3()
@@ -111,7 +107,7 @@ fn preview_block(block: &Block, look: &Look, cx: &mut Context<Prototype>) -> gpu
         Kind::Term => div().mt_1().font_weight(FontWeight::BOLD).child(body),
         Kind::Definition => div().mb_2().pl_6().child(body),
         Kind::Paragraph => div().mb_3().child(body),
-        Kind::Table | Kind::Image => div(),
+        Kind::Table | Kind::Image | Kind::Math => div(),
     }
 }
 
@@ -126,6 +122,42 @@ fn code_block(text: &str, spans: &[Span], look: &Look) -> gpui::Div {
         .text_size(look.code_size())
         .bg(tone(look.dark, 0x27272a, 0xf4f4f5))
         .child(StyledText::new(text.to_string()).with_highlights(highlights))
+}
+
+/// A display formula, centred like KaTeX's display mode. Broken TeX shows its source and the error,
+/// as the app does with KaTeX's `throwOnError: false`.
+fn math_block(tex: &str, look: &Look) -> gpui::Div {
+    match math::render(tex, true, look.font_size, look.dark) {
+        Ok(formula) => div().mb_3().flex().justify_center().child(formula_image(&formula)),
+        Err(err) => div()
+            .mb_3()
+            .px_3()
+            .py_2()
+            .font_family(look.mono.clone())
+            .text_size(look.code_size())
+            .bg(tone(look.dark, 0x27272a, 0xf4f4f5))
+            .child(tex.to_string())
+            .child(div().pt_1().text_size(px(12.)).text_color(error_color(look.dark)).child(format!("TeX error: {err}"))),
+    }
+}
+
+/// An inline formula in a paragraph; broken TeX stays as its `$…$` source in the error colour.
+fn inline_formula(run: &Run, look: &Look) -> gpui::Div {
+    match math::render(&run.text, run.style.display, look.font_size, look.dark) {
+        Ok(formula) => div().child(formula_image(&formula)),
+        Err(_) => {
+            let fence = if run.style.display { "$$" } else { "$" };
+            div().text_color(error_color(look.dark)).child(format!("{fence}{}{fence}", run.text))
+        }
+    }
+}
+
+fn formula_image(formula: &math::Formula) -> gpui::Img {
+    img(formula.image.clone()).w(px(formula.width)).h(px(formula.height))
+}
+
+fn error_color(dark: bool) -> gpui::Rgba {
+    tone(dark, 0xfca5a5, 0xb91c1c)
 }
 
 /// The app loads relative images from the document's folder and blocks remote ones (its CSP allows
@@ -200,14 +232,38 @@ fn table_block(table: &Table, look: &Look, cx: &mut Context<Prototype>) -> gpui:
 }
 
 fn styled_runs(runs: &[Run], size: Pixels, look: &Look, cx: &mut Context<Prototype>) -> gpui::Div {
-    let dark = look.dark;
     let count = runs.len();
+    // Each piece is its own box in a wrapping row. Next to a formula, a long text run as one box
+    // would drop below it whole, so in paragraphs with math the text goes in word by word.
+    let has_math = runs.iter().any(|run| run.style.math);
     let mut pieces = Vec::with_capacity(count);
     for run in runs {
-        let style = &run.style;
+        if run.style.math {
+            pieces.push(inline_formula(run, look));
+        } else if has_math {
+            pieces.extend(run.text.split_inclusive(' ').map(|word| styled_piece(word, run, size, look, true, cx)));
+        } else {
+            pieces.push(styled_piece(&run.text, run, size, look, false, cx));
+        }
+    }
+    if count <= 1 && !has_math {
+        return div().w_full().children(pieces);
+    }
+    // Formulas are taller than the text around them; centre each line's pieces on one another.
+    div().w_full().flex().flex_row().flex_wrap().when(has_math, |row| row.items_center()).children(pieces)
+}
+
+/// One run of text, or one word of it, with the run's style.
+fn styled_piece(text: &str, run: &Run, size: Pixels, look: &Look, word: bool, cx: &mut Context<Prototype>) -> gpui::Div {
+    let dark = look.dark;
+    let style = &run.style;
+    {
         // Sub- and superscript are smaller and shifted, like the app's 80% and ±0.3em.
         let run_size = if style.sub || style.sup { size * 0.8 } else { size };
-        let mut text = div().whitespace_normal().text_size(run_size).child(run.text.clone());
+        let mut text = div()
+            .map(|piece| if word { piece.whitespace_nowrap() } else { piece.whitespace_normal() })
+            .text_size(run_size)
+            .child(text.to_string());
         if style.bold {
             text = text.font_weight(FontWeight::BOLD);
         }
@@ -234,12 +290,8 @@ fn styled_runs(runs: &[Run], size: Pixels, look: &Look, cx: &mut Context<Prototy
         if let Some(link) = style.link.clone().filter(|link| !link.starts_with("image:")) {
             text = clickable(text, link, dark, cx);
         }
-        pieces.push(text);
+        text
     }
-    if count <= 1 {
-        return div().w_full().children(pieces);
-    }
-    div().w_full().flex().flex_row().flex_wrap().children(pieces)
 }
 
 /// A link in the app's link colour. Clicks go to `Prototype::follow_link`, which applies the app's rules.

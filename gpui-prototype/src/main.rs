@@ -10,6 +10,7 @@ mod files;
 mod buffer;
 mod editor;
 mod icons;
+mod math;
 mod perf;
 mod preview;
 mod preview_view;
