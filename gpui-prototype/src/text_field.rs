@@ -10,7 +10,11 @@ use gpui::{
     SharedString, Style, UTF16Selection, Window, div, prelude::*, px, relative, size,
 };
 
-use crate::editor::{Backspace, Copy, Cut, Delete, Down, Enter, Left, LineEnd, LineStart, Paste, Redo, Right, SelectAll, SelectLeft, SelectRight, Undo, Up};
+use crate::editor::{
+    Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight, DocumentEnd, DocumentStart, Down, Enter, Left, LineEnd, LineStart, Paste,
+    Redo, Right, SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd, SelectLineStart, SelectRight,
+    SelectUp, SelectWordLeft, SelectWordRight, Undo, Up, WordLeft, WordRight,
+};
 use crate::preview_view::tone;
 
 pub enum FieldEvent {
@@ -108,6 +112,20 @@ impl Render for TextField {
             .on_action(|_: &Cut, _, _| {})
             .on_action(|_: &Undo, _, _| {})
             .on_action(|_: &Redo, _, _| {})
+            .on_action(|_: &SelectUp, _, _| {})
+            .on_action(|_: &SelectDown, _, _| {})
+            .on_action(|_: &SelectLineStart, _, _| {})
+            .on_action(|_: &SelectLineEnd, _, _| {})
+            .on_action(|_: &WordLeft, _, _| {})
+            .on_action(|_: &WordRight, _, _| {})
+            .on_action(|_: &SelectWordLeft, _, _| {})
+            .on_action(|_: &SelectWordRight, _, _| {})
+            .on_action(|_: &DocumentStart, _, _| {})
+            .on_action(|_: &DocumentEnd, _, _| {})
+            .on_action(|_: &SelectDocumentStart, _, _| {})
+            .on_action(|_: &SelectDocumentEnd, _, _| {})
+            .on_action(|_: &DeleteWordLeft, _, _| {})
+            .on_action(|_: &DeleteWordRight, _, _| {})
             .relative()
             .w(px(220.))
             .px_2()

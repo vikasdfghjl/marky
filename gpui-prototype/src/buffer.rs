@@ -155,6 +155,73 @@ impl Buffer {
     }
 
     /// Up or Down: the same column, counted in graphemes, on the line above or below.
+    /// Ctrl+Left: back over spaces, then over a run of word characters or of punctuation. At the
+    /// start of a line it goes to the end of the line above, as in most Windows editors.
+    pub fn previous_word(&self, offset: usize) -> usize {
+        let offset = self.boundary(offset);
+        let line = self.line_of(offset);
+        let start = self.line_start(line);
+        if offset == start {
+            return offset.saturating_sub(1);
+        }
+        let before = self.slice(start..offset);
+        let chars: Vec<(usize, char)> = before.char_indices().collect();
+        let mut index = chars.len();
+        while index > 0 && chars[index - 1].1.is_whitespace() {
+            index -= 1;
+        }
+        if index > 0 {
+            let class = char_class(chars[index - 1].1);
+            while index > 0 && char_class(chars[index - 1].1) == class {
+                index -= 1;
+            }
+        }
+        start + chars.get(index).map(|(byte, _)| *byte).unwrap_or(0)
+    }
+
+    /// Ctrl+Right: over a run of word characters or of punctuation, then over spaces. At the end of
+    /// a line it goes to the start of the next one.
+    pub fn next_word(&self, offset: usize) -> usize {
+        let offset = self.boundary(offset);
+        let range = self.line_range(self.line_of(offset));
+        if offset >= range.end {
+            return (offset + 1).min(self.len());
+        }
+        let after = self.slice(offset..range.end);
+        let mut chars = after.char_indices().peekable();
+        if let Some(&(_, first)) = chars.peek() {
+            let class = char_class(first);
+            if class != CharClass::Space {
+                while chars.next_if(|(_, c)| char_class(*c) == class).is_some() {}
+            }
+        }
+        while chars.next_if(|(_, c)| c.is_whitespace()).is_some() {}
+        offset + chars.peek().map(|(byte, _)| *byte).unwrap_or(after.len())
+    }
+
+    /// Double-click: the word, punctuation run or space run around `offset`.
+    pub fn word_at(&self, offset: usize) -> Range<usize> {
+        let offset = self.boundary(offset);
+        let range = self.line_range(self.line_of(offset));
+        let text = self.slice(range.clone());
+        let column = offset - range.start;
+        let chars: Vec<(usize, char)> = text.char_indices().collect();
+        let Some(at) = chars.iter().position(|(byte, _)| *byte >= column).or(chars.len().checked_sub(1)) else {
+            return offset..offset;
+        };
+        let class = char_class(chars[at].1);
+        let mut first = at;
+        while first > 0 && char_class(chars[first - 1].1) == class {
+            first -= 1;
+        }
+        let mut last = at;
+        while last + 1 < chars.len() && char_class(chars[last + 1].1) == class {
+            last += 1;
+        }
+        let end = chars.get(last + 1).map(|(byte, _)| *byte).unwrap_or(text.len());
+        range.start + chars[first].0..range.start + end
+    }
+
     pub fn vertical_target(&self, offset: usize, delta: isize) -> usize {
         let offset = self.boundary(offset);
         let line = self.line_of(offset);
@@ -247,6 +314,23 @@ impl Buffer {
         self.version += 1;
         let new_last = self.rope.byte_to_line(at + new.len());
         LineSplice { first, old: old_last - first + 1, new: new_last - first + 1 }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CharClass {
+    Space,
+    Word,
+    Punctuation,
+}
+
+fn char_class(c: char) -> CharClass {
+    if c.is_whitespace() {
+        CharClass::Space
+    } else if c.is_alphanumeric() || c == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Punctuation
     }
 }
 
@@ -360,6 +444,22 @@ mod tests {
         assert_eq!(buffer.line(2), "B2");
         let (_, splices) = buffer.undo().unwrap();
         assert_eq!(splices, vec![LineSplice { first: 1, old: 2, new: 1 }]);
+    }
+
+    #[test]
+    fn word_moves_skip_spaces_then_one_run() {
+        let buffer = Buffer::new("let café = foo(bar);\nnext");
+        let text = buffer.text();
+        let at = |needle: &str| text.find(needle).unwrap();
+        assert_eq!(buffer.next_word(0), at("café"));
+        assert_eq!(buffer.next_word(at("café")), at("= foo"));
+        assert_eq!(buffer.next_word(at("foo")), at("(bar"));
+        assert_eq!(buffer.previous_word(at("(bar")), at("foo"));
+        assert_eq!(buffer.previous_word(at(" = ")), at("café"));
+        assert_eq!(buffer.next_word(at(";") + 1), at("next"));
+        assert_eq!(buffer.previous_word(at("next")), at(";") + 1);
+        assert_eq!(buffer.word_at(at("café") + 2), at("café")..at(" = "));
+        assert_eq!(buffer.word_at(at("bar") + 1), at("bar")..at(");"));
     }
 
     #[test]
