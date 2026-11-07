@@ -4,10 +4,28 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-07
+
+### Added
+
+- Tabs with independent undo histories, New Tab, Save As, Open Recent, auto-save, and the line ending used by new files.
+- Crash recovery every 30 seconds, file-change reloading with Reload / Keep mine, drag and drop, and single-instance opening from Explorer.
+- Syntax highlighting in code fences, math, Mermaid diagrams, and the Markdown syntax Marky supports in both panes.
+- Windows high-contrast themes, menu access keys, a real UI Automation caret, and character/word/line review of the preview.
+- Subscript and superscript are drawn at 80% size in the editor.
+
 ### Changed
 
+- Marky is now a native Rust application drawn with GPUI. It no longer needs WebView2, and a typical document uses about 17 MB of memory and starts in under half a second.
+- The installer is per-user and carries both Marky programs; the portable ZIP does the same.
+- Menus are drawn in the window, and the preview is one keyboard tab stop with arrow-key link selection.
+- Settings and recent files stay in `%APPDATA%\dev.marky.editor`; recovery snapshots and the log stay in `%LOCALAPPDATA%\dev.marky.editor`.
 - Marky is a stable release, and new GitHub releases are published as stable.
 - The README describes the app in plain language.
+
+### Removed
+
+- The previous browser-based shell, WebView2, CodeMirror, markdown-it, and the browser development mode.
 
 ## [0.3.3] - 2026-10-29
 

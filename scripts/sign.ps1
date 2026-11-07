@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Signing hook called by Tauri (bundle.windows.signCommand) for every binary it produces.
+  Signing hook called by scripts/build-signed.ps1 for each program and for the installer.
 .DESCRIPTION
   Route-agnostic: the actual command comes from MARKY_SIGN_COMMAND, with {file} as the
   placeholder, so an OV certificate (signtool), Certum SimplySign, SSL.com CodeSignTool or

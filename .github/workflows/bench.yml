@@ -14,24 +14,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: .
 
-      - run: npm ci
-      - run: npx tauri build --no-bundle
+      - run: cargo build --release --workspace
 
       - name: Size budgets
         shell: pwsh
-        run: ./scripts/check-size.ps1
+        run: |
+          ./scripts/build-installer.ps1
+          ./scripts/check-size.ps1
 
-      - name: Cold start and idle RAM (3 runs, no trim wait)
+      - name: Cold start and idle RAM
         shell: pwsh
-        run: ./scripts/bench.ps1 -Runs 3 -SkipTrimmedSample
+        run: ./scripts/bench.ps1 -Runs 3

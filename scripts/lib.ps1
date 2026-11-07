@@ -1,7 +1,7 @@
 # Shared helpers for the release-build scripts. Dot-source it: . (Join-Path $PSScriptRoot 'lib.ps1')
 
-# Marky runs as marky.exe plus several msedgewebview2.exe children; measuring or stopping
-# the app means handling the whole tree.
+# Marky runs as marky.exe and may start marky-diagrams.exe; measuring or stopping the app means
+# handling the whole tree.
 
 function Get-ProcessTree([int]$RootId) {
   $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId
@@ -21,7 +21,7 @@ function Stop-ProcessTree([int]$RootId) {
 }
 
 # Polls $Condition until it returns something truthy or $TimeoutSeconds pass, and returns its last
-# result. Wait for state, not time: a cold CI runner starts WebView2 many times slower than a warm laptop.
+# result. Wait for state, not time: a cold CI runner starts GPUI many times slower than a warm laptop.
 function Wait-Until([scriptblock]$Condition, [int]$TimeoutSeconds = 60) {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ($true) {
