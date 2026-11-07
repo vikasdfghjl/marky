@@ -100,7 +100,10 @@ function Start-Marky([string]$Document) {
   $savedLocalAppData = $env:LOCALAPPDATA
   $env:APPDATA = $appData
   $env:LOCALAPPDATA = $appData
-  try { $process = Start-Process $exe -ArgumentList "`"$Document`"" -PassThru } finally {
+  try {
+    # No document is a launch from the Start menu shortcut, which passes no argument at all.
+    $process = if ($Document) { Start-Process $exe -ArgumentList "`"$Document`"" -PassThru } else { Start-Process $exe -PassThru }
+  } finally {
     $env:APPDATA = $savedAppData
     $env:LOCALAPPDATA = $savedLocalAppData
   }
@@ -309,6 +312,16 @@ try {
   $ready = Wait-Until { (Title-Of $app) -eq 'fixture.md - Marky' } 30
   if ($ready) { [E2e.Win]::Close($window) }
   Write-Check 'clean window closes without a prompt' ($ready -and $app.WaitForExit(10000))
+
+  # ----- Run B2: a launch without a file (the Start menu shortcut) opens an untitled tab -----
+
+  $app = Start-Marky
+  $window = Window-Of $app
+  $untitled = Wait-Until { (Title-Of $app) -eq 'Untitled - Marky' } 30
+  Write-Check 'a launch without a file opens an Untitled tab' ([bool]$untitled) "$(if ($app.HasExited) { "exited with $($app.ExitCode)" } else { Title-Of $app })"
+  if ($untitled) { [E2e.Win]::Close($window) }
+  $app.WaitForExit(10000) | Out-Null
+  Stop-ProcessTree $app.Id
 
   # ----- Run C: files over the size limit are refused before they are read -----
 

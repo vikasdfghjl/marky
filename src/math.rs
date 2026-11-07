@@ -113,6 +113,25 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &draw("x^2", false, 15.0, true).unwrap()));
     }
 
+    /// RaTeX runs in Marky's process and a release build aborts on a panic, so TeX cut off anywhere
+    /// (as it is while someone types it) must come back as an error, never a panic.
+    #[test]
+    fn truncated_tex_never_panics() {
+        let formulas = [
+            r"\frac{n(n+1)}{2} + \sqrt[3]{x^2_{i,j}}",
+            r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}^{-1}",
+            r"\begin{aligned} f(x) &= \int_0^\infty e^{-x}\,dx \\ &= \left[ -e^{-x} \right]_0^\infty \end{aligned}",
+            r"\sum_{k=1}^{n} \binom{n}{k} \overbrace{x\cdots x}^{k} \color{red}{\mathbb{R}}",
+            r"\text{if } \{ x \mid x > 0 \} \operatorname{arg\,max} \hat{\vec{v}} \underline{\overline{y}}",
+        ];
+        let renderer = SvgRenderer::new(Arc::new(()));
+        for formula in formulas {
+            for (end, _) in formula.char_indices().skip(1) {
+                let _ = lay_out(&formula[..end], end % 2 == 0, 16.0, false, &renderer);
+            }
+        }
+    }
+
     #[test]
     fn the_bitmap_is_drawn_at_twice_the_formula_size() {
         let formula = draw(r"\sqrt{x^2+y^2}", false, 16.0, false).unwrap();

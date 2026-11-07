@@ -28,6 +28,8 @@ VIAddVersionKey "LegalCopyright" "MIT"
 Section "Marky"
   SetOutPath "$INSTDIR"
   File /oname=marky.exe "${SRCDIR}\target\release\marky.exe"
+  ; 0.4.0 shipped Mermaid as a separate helper; an upgrade removes it.
+  Delete "$INSTDIR\marky-diagrams.exe"
   File "/oname=LICENSE.txt" "${SRCDIR}\LICENSE"
   File "/oname=THIRD_PARTY_NOTICES.txt" "${SRCDIR}\THIRD_PARTY_NOTICES.txt"
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -60,6 +62,8 @@ SectionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\marky.exe"
+  ; Left by 0.4.0 if Marky was never upgraded; otherwise RMDir below cannot remove the folder.
+  Delete "$INSTDIR\marky-diagrams.exe"
   Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\uninstall.exe"

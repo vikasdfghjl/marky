@@ -146,6 +146,43 @@ mod tests {
         assert_eq!((diagram.width, diagram.height), (120.0, 40.0));
     }
 
+    /// merman runs in Marky's process (it used to run in a helper that could crash alone), and a
+    /// release build aborts on a panic. A diagram cut off anywhere, as it is while someone types it,
+    /// must render or report an error, never panic.
+    #[test]
+    fn truncated_diagrams_never_panic() {
+        let diagrams = [
+            "flowchart LR\n  A[Start] -->|yes| B{Choice}\n  B -.-> C((End))\n  subgraph S\n    C --> D\n  end",
+            "sequenceDiagram\n  participant A\n  A->>B: Hello\n  loop Every minute\n    B-->>A: Hi\n  end\n  Note over A,B: done",
+            "classDiagram\n  class Animal {\n    +String name\n    +eat() void\n  }\n  Animal <|-- Duck : extends",
+            "stateDiagram-v2\n  [*] --> Still\n  Still --> Moving : push\n  state Moving {\n    [*] --> Fast\n  }\n  Moving --> [*]",
+            "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n  ORDER {\n    string id PK\n    int total\n  }",
+            "gantt\n  title Plan\n  dateFormat YYYY-MM-DD\n  section A\n  Task one :a1, 2026-01-01, 3d\n  Task two :after a1, 2d",
+            "pie showData\n  title Pets\n  \"Dogs\" : 386\n  \"Cats\" : 85.5",
+            "journey\n  title Day\n  section Work\n    Code: 5: Me, You\n    Review: 3: Me",
+            "gitGraph\n  commit id: \"a\"\n  branch dev\n  checkout dev\n  commit\n  checkout main\n  merge dev tag: \"v1\"",
+            "mindmap\n  root((Marky))\n    Editor\n      Tabs\n    Preview\n      Math",
+            "timeline\n  title History\n  2025 : Tauri\n  2026 : GPUI : merman",
+            "quadrantChart\n  title Q\n  x-axis Low --> High\n  y-axis Bad --> Good\n  A: [0.3, 0.6]",
+            "xychart-beta\n  x-axis [jan, feb, mar]\n  y-axis \"Sales\" 0 --> 100\n  bar [10, 50, 90]\n  line [5, 40, 80]",
+            "requirementDiagram\n  requirement r1 {\n    id: 1\n    text: fast\n  }\n  element e1 {\n    type: app\n  }\n  e1 - satisfies -> r1",
+            "sankey-beta\n  A,B,10\n  B,C,5\n  B,D,5",
+            "block-beta\n  columns 2\n  a[\"A\"] b\n  block:g\n    c\n  end\n  a --> c",
+            "C4Context\n  Person(u, \"User\")\n  System(m, \"Marky\")\n  Rel(u, m, \"edits\")",
+            "kanban\n  todo[To do]\n    t1[Write tests]\n  done[Done]\n    t2[Ship]",
+            "packet-beta\n  0-15: \"Source\"\n  16-31: \"Dest\"",
+            "architecture-beta\n  group api(cloud)[API]\n  service db(database)[DB] in api\n  service app(server)[App] in api\n  db:L -- R:app",
+        ];
+        let renderers = [super::renderer(false), super::renderer(true)];
+        for diagram in diagrams {
+            // The whole diagram renders, so its prefixes reach layout and not only the parser.
+            assert!(render_diagram(&renderers[0], diagram).is_ok(), "{diagram}");
+            for (end, _) in diagram.char_indices().skip(1) {
+                let _ = render_diagram(&renderers[end % 2], &diagram[..end]);
+            }
+        }
+    }
+
     #[test]
     fn draws_known_diagrams_and_reports_unknown_ones() {
         assert!(matches!(draw("flowchart LR\n  A --> B", false, &renderer()), State::Drawn(_)));

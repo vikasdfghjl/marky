@@ -43,6 +43,13 @@ pub struct OpenedFile {
     pub read_only: bool,
 }
 
+impl OpenedFile {
+    /// An empty document with no path yet: New Tab, or a launch without a file.
+    pub fn untitled(line_ending: LineEnding) -> Self {
+        Self { path: String::new(), text: String::new(), meta: FileMeta { bom: false, line_ending }, mtime_ms: 0, read_only: false }
+    }
+}
+
 pub fn read(path: &Path) -> io::Result<OpenedFile> {
     let size = fs::metadata(path)?.len();
     if size > MAX_OPEN_BYTES {
