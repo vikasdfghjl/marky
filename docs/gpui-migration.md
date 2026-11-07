@@ -1,8 +1,8 @@
 # GPUI migration
 
-Status: proposal. Nothing in the app moves until the prototype below beats today's release build on the same machine.
+Status: completed 7 Nov 2026. The prototype became the app at the repository root and the previous shell was removed; the paths below name `gpui-prototype/` as it was during the migration, and the measurements predate the final packaging.
 
-Marky is a Windows Markdown editor: Tauri 2, WebView2, CodeMirror 6, and markdown-it. [GPUI](https://gpui.rs/) is Zed's GPU UI framework for Rust. It can replace the window. It does not replace the editor or the preview.
+Marky was a Windows Markdown editor built with the previous desktop shell, WebView2, CodeMirror 6 and markdown-it. [GPUI](https://gpui.rs/) is Zed's GPU UI framework for Rust; it replaces the window, the editor and the preview. This document is the record of that migration.
 
 ## Why this is a gate, not a port
 
@@ -10,7 +10,7 @@ Most of a cold start is WebView2 creating its browser process, about 520–550 m
 
 The preview is the other half of the product, and it is HTML. markdown-it emits blocks with `data-line` for synced scrolling. KaTeX and Mermaid run from that HTML. Code colours are shared with the editor's Lezer parsers. GPUI does not provide a browser DOM, and it does not turn its controls into native widgets. Its examples cover layout, text, a one-line input, menus, SVG, and lists. They do not include a Markdown editor. The element API can host a custom editor layout; that is a capability, not a component ([GPUI README](https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md)).
 
-A full port would throw away `src/` (CodeMirror, the preview worker, panels) and the Tauri window, then rebuild editing, preview, menus, and accessibility. The file layer in `src-tauri/src/` can stay.
+A full port would throw away `src/` (CodeMirror, the preview worker, panels) and the previous shell's window, then rebuild editing, preview, menus, and accessibility. The file layer in the previous shell's Rust layer can stay.
 
 ## What GPUI is, as of this note
 
@@ -43,7 +43,7 @@ The rules in [AGENTS.md](../AGENTS.md) still hold: one writer for dirty state, r
 
 | Today | After a port |
 | --- | --- |
-| Tauri window and WebView2 (`window.rs`, `memory.rs`) | A GPUI window. Idle-memory trimming via WebView2 goes away with the browser process. The launch-flash fix (`bench-flash.ps1`) has to be re-checked. |
+| The previous shell's window and WebView2 (`window.rs`, `memory.rs`) | A GPUI window. Idle-memory trimming via WebView2 goes away with the browser process. The launch-flash fix (`bench-flash.ps1`) has to be re-checked. |
 | CodeMirror (`src/editor/`) | A GPUI text view with its own buffer, undo, selection, find, and Windows text input. |
 | markdown-it preview (`src/preview/`) | A Rust layout of the same blocks, still mapped back to source lines for synced scrolling. |
 | KaTeX (`math.ts`) | A Rust math renderer, or the feature is dropped. There is no DOM for KaTeX. |
@@ -51,14 +51,14 @@ The rules in [AGENTS.md](../AGENTS.md) still hold: one writer for dirty state, r
 | Native menus (`menu.rs`) and the shortcut table | GPUI actions and drawn menus. `scripts/check-shortcuts.ts` has to learn the new binding site. |
 | Theme, settings panel, tabs, outline, status bar | GPUI views. `scripts/contrast.ts` reads `styles.css` and needs a new source of colours. |
 | `ipc.ts` and the browser stand-in | Deleted once no webview remains. `npm run dev` in a browser goes away. |
-| Tauri plugins: dialog, single instance, drag-drop, CLI args, title-bar theme | A file dialog crate (`rfd`), a named-pipe or mutex single instance, Win32 drag-drop, and the title-bar colour set by hand. |
-| `npx tauri build`: NSIS and MSI installers, file associations, `bundle.resources` | A separate installer pipeline. `release.yml`, `check-size.ps1`, `build-signed.ps1` and the winget manifests all assume Tauri's output. |
-| End-to-end and benchmark harness: `e2e.ts` and `bench-large.ts` drive the WebView2 DevTools protocol (`cdp.ts`); the bench scripts find the `Tauri Window` class | A new driver, through UI Automation or a test hook in the app. Without it the AGENTS.md verification rules have nothing to run. |
+| The previous shell's plugins: dialog, single instance, drag-drop, CLI args, title-bar theme | A file dialog crate (`rfd`), a named-pipe or mutex single instance, Win32 drag-drop, and the title-bar colour set by hand. |
+| The previous release build: NSIS and MSI installers, file associations, `bundle.resources` | A separate installer pipeline. `release.yml`, `check-size.ps1`, `build-signed.ps1` and the winget manifests all assume the previous shell's output. |
+| End-to-end and benchmark harness: `e2e.ts` and `bench-large.ts` drive the WebView2 DevTools protocol (`cdp.ts`); the bench scripts find the previous window class | A new driver, through UI Automation or a test hook in the app. Without it the AGENTS.md verification rules have nothing to run. |
 | The invariants in AGENTS.md | About half describe the webview, CSS or IPC and have to be rewritten with the port. |
 
 ## Prototype
 
-`gpui-prototype/` is a throwaway binary beside the app, not inside the Tauri shell. One window. It opens files through `files::read` (File → Open, or the path on the command line) and keeps each one as a tab. It edits the active tab and paints headings, paragraphs, emphasis, quotes, lists and task lists, code, tables, footnotes, definition lists, images, display math, and Mermaid fences, with strikethrough, `~sub~`, `^sup^` and `==marked==` text, from a Rust CommonMark parse (pulldown-cmark). pulldown-cmark never opens a single `~` or `^` inside a word, so `H~2~O`, `19^th^` and `==mark==` are found in the text afterwards with markdown-it's rules, as the app's plugins do. Frontmatter is skipped, as in the app. Links follow the app's rules: web and mail links open in the default program, a footnote reference scrolls to its footnote, and a relative link opens only a .md, .markdown or .txt file, as a tab; the preview never navigates. Images load only from the document's folder; remote images show their alt text, as the app's CSP blocks them. Tables follow the app's look: borders, a bold header row, shaded even rows and column alignment; columns are sized in proportion to their longest cell. The editor and all code use the app's monospace font (the first installed of Cascadia Code, Cascadia Mono, Consolas). Math is drawn with RaTeX, and Mermaid diagrams with merman in a helper program (see step 3 below).
+`gpui-prototype/` is a throwaway binary beside the app, not inside the previous shell. One window. It opens files through `files::read` (File → Open, or the path on the command line) and keeps each one as a tab. It edits the active tab and paints headings, paragraphs, emphasis, quotes, lists and task lists, code, tables, footnotes, definition lists, images, display math, and Mermaid fences, with strikethrough, `~sub~`, `^sup^` and `==marked==` text, from a Rust CommonMark parse (pulldown-cmark). pulldown-cmark never opens a single `~` or `^` inside a word, so `H~2~O`, `19^th^` and `==mark==` are found in the text afterwards with markdown-it's rules, as the app's plugins do. Frontmatter is skipped, as in the app. Links follow the app's rules: web and mail links open in the default program, a footnote reference scrolls to its footnote, and a relative link opens only a .md, .markdown or .txt file, as a tab; the preview never navigates. Images load only from the document's folder; remote images show their alt text, as the app's CSP blocks them. Tables follow the app's look: borders, a bold header row, shaded even rows and column alignment; columns are sized in proportion to their longest cell. The editor and all code use the app's monospace font (the first installed of Cascadia Code, Cascadia Mono, Consolas). Math is drawn with RaTeX, and Mermaid diagrams with merman in a helper program (see step 3 below).
 
 Syntax is coloured in the app's `--hl-*` palette. The editor colours Markdown (headings, emphasis, code spans, links, quotes, list markers, fences) from the same pulldown-cmark parse as the preview, and code in fences is highlighted with tree-sitter in both panes from one cached result, so the panes agree. The default build has nine grammars (Bash, CSS, Go, HTML, JavaScript, JSON, Python, TOML, YAML); TypeScript fences use the JavaScript grammar, and C and Rust stay plain. Each grammar is a Cargo feature (`--features lang-rust`); the reasons and sizes are in [DECISION.md](../DECISION.md).
 
@@ -75,14 +75,14 @@ cargo run --manifest-path gpui-prototype/Cargo.toml --release
 cargo run --manifest-path gpui-prototype/Cargo.toml --release -- path\to\file.md
 ```
 
-With no path it opens `scripts/fixtures/typical.md`. The release profile matches `src-tauri`'s (`opt-level = "s"`, LTO, one codegen unit, `panic = "abort"`, stripped), so the executable sizes compare. With `MARKY_PERF_LOG` set it writes `startup_ms` (with the start-up phases), `type_ms` and `preview_ms` lines there, in the format `scripts/bench.ps1` reads. `-File` measures another document, such as the files `bench-large.ts gen` makes.
+With no path it opens `scripts/fixtures/typical.md`. The release profile matches `the previous shell`'s (`opt-level = "s"`, LTO, one codegen unit, `panic = "abort"`, stripped), so the executable sizes compare. With `MARKY_PERF_LOG` set it writes `startup_ms` (with the start-up phases), `type_ms` and `preview_ms` lines there, in the format `scripts/bench.ps1` reads. `-File` measures another document, such as the files `bench-large.ts gen` makes.
 
 ### Measuring
 
 Build both release binaries, then run both benchmarks in one session on the machine that produced the [README benchmarks](../README.md). Background load moves typing latency by up to 2× between sessions ([AGENTS.md](../AGENTS.md)).
 
 ```bash
-npx tauri build --no-bundle
+cargo build --release --workspace
 ```
 
 ```bash
@@ -169,8 +169,8 @@ Do these in order. Each one keeps the app shippable; do not delete WebView2 unti
 2. **Plain preview.** The syntax Marky renders today that is text layout: tables, task lists, strikethrough, footnotes, definition lists, abbreviations, subscript, superscript, marked text. Keep a line map so scrolling can stay in step. Share one parser's idea of a token with the editor so the two panes do not disagree. Done in the prototype on 6 Nov 2026; the rest followed on 7 Nov 2026 in `extras.rs`, for what pulldown-cmark lacks: abbreviations (definitions hidden, every whole-word use underlined with its title on hover), bare links with linkify-it's defaults (so `README.md` is a link, as in the app), the typographer setting (pulldown-cmark's smart punctuation plus (c), (r), (tm) and +-), footnotes gathered at the end under a rule in reference order with a ↩ back link (unreferenced ones left out), images inside a paragraph, and thematic breaks, which were not drawn at all. A paragraph with several styles now flows word by word, so a run no longer drops to the next line whole. Sub- and superscript now render at 80% in the editor too (7 Nov 2026): the delimiters are hidden, the full-size text remains for layout, caret and clicks, and an 80% copy is painted above or below the line. Task boxes are read-only, as in the app.
 3. **Math and diagrams.** Decide explicitly to port them or to drop them. Do not embed a JavaScript engine to keep KaTeX and Mermaid; that spends the browser cost again. Research on 7 Nov 2026 is below, under "Step 3: math and diagrams without JavaScript". Done in the prototype on 7 Nov 2026: math with RaTeX in the program, diagrams with merman in a helper program.
 4. **Chrome.** Menus, shortcuts, settings, outline, status bar, light and dark theme, keyboard access and an AccessKit tree that exposes the editor text. Contrast still has to meet WCAG 2.2 AA. The pinned Zed commit has AccessKit (see above). Done in the prototype on 7 Nov 2026; see "Step 4: chrome and accessibility" below.
-5. **Test harness and packaging.** A driver for the end-to-end and benchmark scripts, and an installer pipeline, before anything is removed. The end-to-end driver is built (7 Nov 2026); see "Step 5: test harness" below. Typing in the benchmark without the window in front was tried and is not a faithful measure (see below). The large-file benchmark followed the same day. Still to do: the installer and CI.
-6. **Remove Tauri.** Drop the webview, `src/`, the frontend bundle budget, and `npm run dev`. Keep the Rust file rules and the tests that protect them; port the release scripts to the new installer.
+5. **Test harness and packaging.** A driver for the end-to-end and benchmark scripts, and an installer pipeline, before anything is removed. The end-to-end driver is built (7 Nov 2026); see "Step 5: test harness" below. Typing in the benchmark without the window in front was tried and is not a faithful measure (see below). The large-file benchmark followed the same day. The installer and CI followed in step 6.
+6. **Remove the previous shell.** Done 7 Nov 2026. The webview, `src/`, the frontend bundle budget and `npm run dev` are gone; the Rust file rules and their tests are kept in `src/`, and the release scripts build the new NSIS installer. The app now lives at the repository root; the `gpui-prototype/` paths in this document are historical.
 
 ## Step 3: math and diagrams without JavaScript
 
@@ -302,6 +302,16 @@ Typing compares loosely. The app's figure runs from `beforeinput` to the frame a
 
 The prototype keeps its preview at 8 MB, where the app turns its preview off. All 13 of its stalls at that size were parse results being applied: comparing about 90,000 old and new blocks, and walking them to free unused images, took 55–67 ms on the main thread. Doing the comparison on the parse thread would remove them; that is not done yet. No frame took over 50 ms at any size.
 
+## Step 6: removing the previous shell
+
+Done 7 Nov 2026, with the packaging port in the same change.
+
+- **Layout.** `gpui-prototype/` became the repository root: `src/`, `diagrams/`, `Cargo.toml`, `Cargo.lock` and the app's icon. The previous shell's Rust layer, the TypeScript frontend, Vite, Vitest, `index.html`, the browser stand-in and its dependencies were deleted. The Rust modules the prototype borrowed by path (`files`, `allowlist`, `diagnostics`, `store`, `watcher`) moved into `src/`; `allowlist::link_target` is now used by the preview's link handler rather than by a webview command gate.
+- **Data folders.** Settings, recent files and the single-instance lock are Marky's own (`%APPDATA%\dev.marky.editor`), and recovery and the log use `%LOCALAPPDATA%\dev.marky.editor`. The prototype's old settings folder is read once for a first run and never written.
+- **Window.** GPUI now restores and saves `window.json` itself, replacing the previous shell's geometry handling.
+- **Packaging.** `installer/marky.nsi` plus `scripts/build-installer.ps1` build a per-user NSIS installer for both programs. `package-portable.ps1`, `check-size.ps1`, `build-signed.ps1`, `release.ps1`, `winget-manifest.ps1`, `ci.yml`, `bench.yml` and `release.yml` all point at the root crate. `Cargo.toml` is the version source; Node remains only for the notice generator.
+- **Verification.** Clippy, 85 tests, the release build and the e2e smoke test (43 pass, 4 skipped, 0 fail) passed. Release measurements: start 465 ms, memory 16.9 MB, typing p50 1.8 / p95 2.8 ms, preview 30 ms; `marky.exe` 11.35 MB, helper 10.39 MB, installer 6.53 MB, portable ZIP 9.11 MB. The installer is 0.53 MB over its 6 MB target and under its 10 MB hard limit; `DECISION.md` records it.
+
 ## References
 
 Official GPUI material (Apache-2.0):
@@ -330,9 +340,9 @@ Permissive libraries:
 - **Text input.** A correct Windows editor includes IME, selection, and undo. The prototype has the input handler and IME placement, but no undo, drag selection, or vertical selection.
 - **Accessibility.** WebView2 exposes the editor text today. The pinned GPUI has AccessKit, but the app must build the tree for its custom editor.
 - **Menus.** Marky uses native Windows menus. GPUI draws its own. Recheck keyboard access rather than assuming the native menu behavior carries over.
-- **Size and licences.** The 4.46 MB installer is small because Windows already has the browser. The prototype pulls in about 450 crates; licences include Unicode-3.0, Zlib and BSL-1.0, which need notices in `THIRD_PARTY_NOTICES.txt`, and nothing copyleft.
+- **Size and licences.** The final installer is 6.53 MB because it now carries both Rust programs rather than reusing Windows' browser. The app pulls in about 450 crates; licences include Unicode-3.0, Zlib and BSL-1.0, which are in `THIRD_PARTY_NOTICES.txt`, and nothing copyleft.
 - **Installer and SmartScreen.** The app stays unsigned until a signing command exists. Changing UI toolkits does not change that.
 
-## Out of scope until the gate passes
+## Out of scope
 
-Rewriting `src/`, adding GPUI to `src-tauri`, keeping a webview and a GPUI window in one release, or changing the README performance table.
+The gate has passed and the previous shell is gone. Keeping a webview alongside GPUI in one release, or reintroducing a browser runtime, stays out of scope; the remaining deferred work is in [TODO.md](../TODO.md).

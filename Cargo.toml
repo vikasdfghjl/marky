@@ -1,0 +1,92 @@
+[package]
+name = "marky"
+version = "0.3.3"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "A fast Markdown editor for Windows"
+
+[[bin]]
+name = "marky"
+path = "src/main.rs"
+
+# The diagram helper shares this target folder, so `cargo build --release --workspace` puts
+# marky-diagrams.exe next to marky.exe, where the app looks for it.
+[workspace]
+members = ["diagrams"]
+
+[dependencies]
+# GPUI from Zed's repository, pinned to one commit of `main`: 9a8ab54, 6 Nov 2026. Unlike the
+# crates.io 0.2.2 it creates one Direct3D device instead of two (Zed #49001, ~185 ms of start-up),
+# has AccessKit (#56065) and the gpui/gpui_platform split. Move the pin on purpose: GPUI is pre-1.0
+# and its API changes between commits; both crates must use the same commit. Moving it needs a
+# build, the tests (one checks that every key binding parses) and a start-up measurement, and an
+# entry in DECISION.md.
+#
+# Marky is Windows-only, so it uses Zed's Windows backend directly. This keeps the other
+# backends' crates (and their platform notification dependencies) out of the lockfile.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "9a8ab54db4f9f9af4dc6efb42b304c55c6a62bd3", default-features = false, features = ["windows-manifest"] }
+gpui_windows = { git = "https://github.com/zed-industries/zed", rev = "9a8ab54db4f9f9af4dc6efb42b304c55c6a62bd3", default-features = false }
+pulldown-cmark = "0.13"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-segmentation = "1"
+# External changes, and the single-instance request file. Same version as the app.
+notify = "8.2"
+# A watcher callback runs on notify's thread; this hands its event to the GPUI task that owns the view.
+async-channel = "2"
+# Windows high-contrast themes: the system colours the user chose, read once a second.
+windows-sys = { version = "0.61", features = ["Win32_Graphics_Gdi", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }
+# The editor buffer. MIT.
+ropey = "1.6"
+# Math: RaTeX lays out TeX like KaTeX, in pure Rust, with KaTeX's fonts embedded. MIT. ~3 MB.
+ratex-parser = "0.1.15"
+ratex-layout = "0.1.15"
+ratex-types = "0.1.15"
+ratex-svg = { version = "0.1.15", features = ["standalone", "embed-fonts"] }
+# Code highlighting in fences, as Zed does it. All MIT. Each grammar is compiled C that adds to the
+# program, so each is a feature (below) and the default set fits the 8 MB budget.
+tree-sitter = "0.27"
+tree-sitter-highlight = "0.27"
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-c = { version = "0.24", optional = true }
+tree-sitter-css = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-html = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-toml-ng = { version = "0.7", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-yaml = { version = "0.7", optional = true }
+
+# One feature per highlighted language. Measured 6 Nov 2026: all twelve make the program 12.8 MB,
+# over the 12 MB hard limit. The compiled grammars cost about half their library size: TypeScript
+# and TSX ~2.9 MB, Bash ~1.4, Rust ~1.1, C ~0.7, Python ~0.5, the rest under 0.5 each. The default
+# leaves out TypeScript (its fences use the JavaScript grammar), C and Rust. Add one back with,
+# for example, `--features lang-rust`.
+[features]
+default = ["lang-bash", "lang-css", "lang-go", "lang-html", "lang-javascript", "lang-json", "lang-python", "lang-toml", "lang-yaml"]
+lang-bash = ["dep:tree-sitter-bash"]
+lang-c = ["dep:tree-sitter-c"]
+lang-css = ["dep:tree-sitter-css"]
+lang-go = ["dep:tree-sitter-go"]
+lang-html = ["dep:tree-sitter-html"]
+lang-javascript = ["dep:tree-sitter-javascript"]
+lang-json = ["dep:tree-sitter-json"]
+lang-python = ["dep:tree-sitter-python"]
+lang-rust = ["dep:tree-sitter-rust"]
+lang-toml = ["dep:tree-sitter-toml-ng"]
+# TypeScript's highlight query extends JavaScript's.
+lang-typescript = ["dep:tree-sitter-typescript", "lang-javascript"]
+lang-yaml = ["dep:tree-sitter-yaml"]
+
+# The release profile. The program-size budget is measured against this build.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

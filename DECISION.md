@@ -2,6 +2,41 @@
 
 Decisions about Marky that are not obvious from the code, with the reasons and the evidence behind them. Newest first. Each entry says what was decided, what else was considered, and what it costs; change one only with new evidence, and add a new entry rather than rewriting an old one.
 
+## 2026-11-07: The GPUI prototype becomes Marky; the previous shell and webview are removed
+
+Context: step 6 of [docs/gpui-migration.md](docs/gpui-migration.md). Steps 1–5 had brought the prototype to feature parity, but the installer and CI were still the previous shell's. Removing the previous shell without them would have left no shippable path, so the packaging port and the removal were done together.
+
+### Decision
+
+- `gpui-prototype/` moves to the repository root as `marky`; the previous shell's Rust layer, the TypeScript frontend, Vite, Vitest, the browser stand-in and its dependency are deleted.
+- The Rust file modules (`files`, `allowlist`, `diagnostics`, `store`, `watcher`) move into `src/`; `allowlist::link_target` now serves preview links, and the rest of the user-chosen-path gate is gone with the webview.
+- The release pipeline is re-pointed at the new programs: `installer/marky.nsi` and `scripts/build-installer.ps1` build a per-user NSIS installer carrying `marky.exe` and `marky-diagrams.exe`; `scripts/package-portable.ps1` makes the portable ZIP; `check-size`, `build-signed`, `release`, the winget manifests, CI and the benchmark workflow use the root `Cargo.toml`.
+- `Cargo.toml` becomes the version source; `package.json` remains only for the notice generator.
+- Settings, recent files and the single-instance lock use `%APPDATA%\dev.marky.editor`; recovery and the log use `%LOCALAPPDATA%\dev.marky.editor`. The old prototype folder is read once for settings and never written.
+
+### Options considered
+
+| | Keep the previous shell | Remove now, packaging later | **Remove with packaging** |
+| --- | --- | --- | --- |
+| Shipping app | Two apps to maintain | No installer or release path | One app, one pipeline |
+| Risk | The GPUI app stays a prototype | Broken releases between steps | Larger single change, verified end to end |
+| Chosen | | | **Yes** |
+
+### Evidence
+
+- `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (85 passed) and `cargo build --release --workspace` pass.
+- End-to-end smoke test: 43 pass, 4 skipped, 0 fail. The skips are unchanged native-dialog, OS drag and IME cases.
+- Same machine, release build, `scripts/bench.ps1`: start 465 ms (five runs), memory 16.9 MB after 10 s, typing p50 1.8 / p95 2.8 ms, preview 30 ms.
+- Sizes: `marky.exe` 11.35 MB, `marky-diagrams.exe` 10.39 MB, installer 6.53 MB, portable ZIP 9.11 MB.
+
+### Consequences
+
+- The app no longer needs WebView2, Node or a frontend build at runtime or install time. Node remains only for `npm run notices`.
+- The installer is 0.53 MB over its 6 MB target because it carries both programs; it stays under the 10 MB hard limit. The program remains over its 8 MB target and under the 12 MB hard limit, as accepted on 6 Nov.
+- Window geometry is now saved by GPUI itself (`window.json`), not by the previous shell; the settings and data folders are the app's own rather than a prototype's.
+- GPUI's pre-1.0 API churn is now the shipping app's problem, not a prototype's. IME reconversion is still blocked upstream.
+- The migration document keeps its historical `gpui-prototype/` paths; they describe the state before this move.
+
 ## 2026-11-07: GPUI moves to Zed's main at 9a8ab54
 
 Context: the 6 Nov entry below pinned GPUI at `b77ec90` because Cargo seemed to resolve `gpui_platform`'s `gpui` to the stub package in Zed's `tooling/lints/test_fixture` on every later commit. On 7 Nov 2026, while a report to Zed about that was being drafted, the failure did not come back. This entry supersedes the 6 Nov one's choice of commit; its reasons for using Zed's repository at all still hold.
@@ -130,7 +165,7 @@ Context: [docs/gpui-migration.md](docs/gpui-migration.md). This applies to `gpui
 
 ### Evidence
 
-Measured on 6 Nov 2026 (i5-9300H, release profile matching `src-tauri`):
+Measured on 6 Nov 2026 (i5-9300H, release profile matching the previous shell):
 
 - The prototype was **4.49 MB** before highlighting. With all twelve grammars it was **12.78 MB**, over the README's 12 MB hard limit for the program.
 - The compiled grammars add about half their static-library size. Library sizes: TypeScript and TSX 5.79 MB, Bash 2.76, Rust 2.29, C 1.37, Python 1.02, JavaScript 0.92, the tree-sitter runtime 0.92, Go 0.52, YAML 0.46, CSS 0.31, HTML 0.08, TOML 0.08, JSON 0.02.
