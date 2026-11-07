@@ -1248,13 +1248,7 @@ impl Prototype {
     fn new_tab(&mut self, cx: &mut Context<Self>) {
         let id = self.next_document_id;
         self.next_document_id += 1;
-        let opened = OpenedFile {
-            path: String::new(),
-            text: String::new(),
-            meta: FileMeta { bom: false, line_ending: self.settings.new_file_line_ending },
-            mtime_ms: 0,
-            read_only: false,
-        };
+        let opened = OpenedFile::untitled(self.settings.new_file_line_ending);
         self.documents.push(Document::open(opened, id, cx));
         self.schedule_parse(id, Duration::ZERO, cx);
         self.activate_tab(self.documents.len() - 1, cx);

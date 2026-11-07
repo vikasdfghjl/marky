@@ -4,10 +4,17 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-07
+
 ### Changed
 
 - Mermaid diagrams render inside `marky.exe`; the separate diagram helper executable is gone.
 - The program-size budget is now 22 MB target / 24 MB hard, which includes every Mermaid diagram type.
+
+### Fixed
+
+- Starting Marky without a file, for example from the Start menu, opens an empty Untitled tab instead of failing with an error about a missing file.
+- Upgrading from 0.4.0 removes the old diagram helper program, and uninstalling removes the whole Marky folder.
 
 ## [0.4.0] - 2026-11-07
 

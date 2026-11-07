@@ -39,7 +39,7 @@ fn main() {
     // A second launch forwards its file to the first window and exits, as the app's single instance does.
     let config_dir = settings::own_config_dir();
     let local_dir = settings::own_local_dir();
-    let startup_arg = std::env::args().skip(1).find(|arg| !arg.starts_with('-')).map(PathBuf::from);
+    let startup_arg = std::env::args().skip(1).find(|arg| !arg.is_empty() && !arg.starts_with('-')).map(PathBuf::from);
     let instance_lock = match instance::start(&config_dir) {
         Ok(instance::Start::Primary(file)) => Some(file),
         Ok(instance::Start::Secondary) => {
@@ -55,11 +55,9 @@ fn main() {
     high_contrast::refresh();
     let recovery = store::read_snapshots(&local_dir);
     let geometry = store::load_window_geometry(&config_dir);
-    let path = startup_arg.unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/fixtures/typical.md")
-    });
-    let path = plain_path(path);
-    let opened = match files::read(&path) {
+    // Without a file (the Start menu shortcut), Marky opens an untitled tab once settings say which
+    // line ending new files use.
+    let opened = startup_arg.map(plain_path).map(|path| match files::read(&path) {
         Ok(opened) => opened,
         Err(err) => {
             // A release build has no console, so the reason has to be shown.
@@ -68,7 +66,7 @@ fn main() {
             rfd::MessageDialog::new().set_title("Marky").set_description(message).show();
             std::process::exit(1);
         }
-    };
+    });
     perf::mark("read");
     let legacy_dir = settings::legacy_config_dir();
 
@@ -112,6 +110,7 @@ fn main() {
                 move |window, cx| {
                     perf::mark("os-window");
                     let settings = settings::load(&config_dir, &legacy_dir);
+                    let opened = opened.unwrap_or_else(|| files::OpenedFile::untitled(settings.new_file_line_ending));
                     cx.new(|cx| {
                         Prototype::new(opened, settings, config_dir.clone(), local_dir.clone(), recovery, instance_lock, window, cx)
                     })

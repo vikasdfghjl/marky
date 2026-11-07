@@ -21,6 +21,7 @@ Context: the helper program kept the main executable under the previous 12 MB li
 
 ### Consequences
 
+- A panic in merman now ends Marky: release builds use `panic = "abort"`, so `catch_unwind` cannot contain it, and the helper's crash isolation is gone. Recovery snapshots bound the loss to 30 seconds of typing. `truncated_diagrams_never_panic` renders every prefix of twenty diagrams, one per diagram family, in both themes (and `truncated_tex_never_panics` does the same for RaTeX), so a panic on half-typed input fails a test instead of a user's session. Switching to `panic = "unwind"` with `catch_unwind` around the renderer is the alternative if a panic is ever reported; it costs unwind tables in the program and needs a size measurement first.
 - One executable to build, sign, install and run; no helper process to start, time out or restart.
 - Mermaid's roughly 10 MB is always in the program, whether a document has a diagram or not. Idle memory and startup are unchanged within noise (17.5 MB and 450 ms).
 - The 15 MB figure considered first was not enough: all diagram types add about 10 MB to the 11.35 MB program. The measured 21.07 MB sets the 24 MB hard limit.

@@ -78,7 +78,7 @@ Marky is MIT. After adding, removing or upgrading any Rust dependency, run `npm 
 ## Environment gotchas
 
 - Shells are PowerShell on Windows. Shells opened before Rust was installed can lack cargo on PATH; prepend `$env:USERPROFILE\.cargo\bin`.
-- `cargo run --release` opens `scripts/fixtures/typical.md` unless a path is given.
+- `cargo run --release` without a path opens an Untitled tab, as the Start menu shortcut does; pass `scripts/fixtures/typical.md` (or use `make run`) for the fixture. Never default to a path from the build machine: `env!` paths are baked into the shipped program.
 - NSIS is needed for `build-installer.ps1`; CI installs it with Chocolatey. `makensis` from PATH or the standard NSIS install folders is used.
 - Node is only for regenerating notices; there is no frontend build, dev server or webview runtime to install.
 
