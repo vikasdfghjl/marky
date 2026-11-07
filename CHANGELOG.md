@@ -4,6 +4,14 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Changed
+
+- The open file's path, and any open or save error, now show in the status bar at the bottom of the window instead of a row above the editor.
+
+### Removed
+
+- The Open and Save toolbar buttons. Both stay in the File menu and on Ctrl+O and Ctrl+S.
+
 ## [0.4.1] - 2026-11-07
 
 ### Changed

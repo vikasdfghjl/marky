@@ -402,12 +402,11 @@ impl Prototype {
         column.children(items.collect::<Vec<_>>())
     }
 
-    // ----- Toolbar, tabs, path bar -----
+    // ----- Toolbar, tabs -----
 
+    /// View toggles only; Open and Save live in the File menu and on Ctrl+O / Ctrl+S.
     pub fn toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
-        let dirty = self.doc().is_dirty();
-        let read_only = self.doc().read_only;
         let editor = self.settings.show_editor;
         let preview = self.settings.preview_visible();
         let outline = self.settings.show_outline;
@@ -423,35 +422,21 @@ impl Prototype {
             .py_1()
             .bg(tone(dark, 0x27272a, 0xe4e4e7))
             .text_size(px(13.))
-            .child(self.tool_button("tool-open", "Open", "icons/open.svg", Command::Open, None, true, cx))
-            .child(self.tool_button("tool-save", if read_only { "Read-only" } else { "Save" }, "icons/save.svg", Command::Save, None, dirty, cx))
-            .child(self.tool_button("tool-editor", "Editor", if editor { "icons/editor.svg" } else { "icons/editor-off.svg" }, Command::ToggleEditor, Some(editor), true, cx))
-            .child(self.tool_button("tool-preview", "Preview", if preview { "icons/preview.svg" } else { "icons/preview-off.svg" }, Command::TogglePreview, Some(preview), true, cx))
-            .child(self.tool_button("tool-outline", "Outline", "icons/outline.svg", Command::ToggleOutline, Some(outline), true, cx))
+            .child(self.tool_button("tool-editor", "Editor", if editor { "icons/editor.svg" } else { "icons/editor-off.svg" }, Command::ToggleEditor, editor, cx))
+            .child(self.tool_button("tool-preview", "Preview", if preview { "icons/preview.svg" } else { "icons/preview-off.svg" }, Command::TogglePreview, preview, cx))
+            .child(self.tool_button("tool-outline", "Outline", "icons/outline.svg", Command::ToggleOutline, outline, cx))
     }
 
-    /// A toolbar button. `pressed` buttons are toggles that are on; `enabled` is false only for
-    /// Save with nothing to save, the one control drawn dimmed (WCAG exempts inactive controls).
-    #[allow(clippy::too_many_arguments)]
-    fn tool_button(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        icon: &'static str,
-        command: Command,
-        pressed: Option<bool>,
-        enabled: bool,
-        cx: &mut Context<Self>,
-    ) -> Stateful<gpui::Div> {
+    /// A toolbar toggle button; `on` draws it pressed.
+    fn tool_button(&self, id: &'static str, label: &'static str, icon: &'static str, command: Command, on: bool, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
         let dark = self.dark;
-        let color = if enabled { tone(dark, 0xfafafa, 0x18181b) } else { tone(dark, 0x71717a, 0xa1a1aa) };
-        let on = pressed.unwrap_or(false);
+        let color = tone(dark, 0xfafafa, 0x18181b);
         focus_ring(
             div()
                 .id(id)
                 .role(Role::Button)
                 .aria_label(label)
-                .when_some(pressed, |button, on| button.aria_toggled(toggled(on)))
+                .aria_toggled(toggled(on))
                 .focusable()
                 .tab_stop(true)
                 .flex()
@@ -510,30 +495,6 @@ impl Prototype {
                     })
             }),
         )
-    }
-
-    pub fn path_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let dark = self.dark;
-        let bar = div()
-            .id("path-bar")
-            .flex()
-            .flex_row()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .text_size(px(12.))
-            .text_color(quiet(dark))
-            .bg(tone(dark, 0x27272a, 0xe4e4e7))
-            // AccessKit names a label by its value.
-            .child(div().id("path").role(Role::Label).aria_value(SharedString::from(self.doc().path.clone())).child(self.doc().path.clone()))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::close_menu));
-        match &self.status {
-            // An alert, so a screen reader reads a failed save or open out when it happens.
-            Some(status) => bar.child(
-                div().id("status-message").role(Role::Alert).aria_label(SharedString::from(status.clone())).text_color(tone(dark, 0xfca5a5, 0xb91c1c)).child(status.clone()),
-            ),
-            None => bar,
-        }
     }
 
     pub fn find_bar(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -687,9 +648,10 @@ impl Prototype {
 
     // ----- Status bar -----
 
-    /// The app's footer (`status-bar.ts`): caret position, counts, line ending, encoding and the two
-    /// timings. Positions and counts are in UTF-16 units, like the app's JavaScript strings.
-    pub fn status_bar(&mut self) -> impl IntoElement {
+    /// The app's footer (`status-bar.ts`): the document's path, the last error, caret position,
+    /// counts, line ending, encoding and the two timings. Positions and counts are in UTF-16 units,
+    /// like the app's JavaScript strings.
+    pub fn status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
         let doc = self.doc();
         let cursor = doc.cursor();
@@ -718,6 +680,8 @@ impl Prototype {
         if let Some(startup) = perf::startup_ms() {
             items.push(format!("start {startup:.0} ms"));
         }
+        let path = SharedString::from(doc.path.clone());
+        let status = self.status.clone();
         div()
             .id("status-bar")
             .role(Role::Group)
@@ -728,10 +692,19 @@ impl Prototype {
             .px_3()
             .py(px(3.))
             .text_size(px(12.))
+            .whitespace_nowrap()
             .bg(tone(dark, 0x27272a, 0xe4e4e7))
             .text_color(quiet(dark))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::close_menu))
+            // A long path gives way to the counts, and is cut at the start so the file name stays.
+            // AccessKit names a label by its value.
+            .child(div().id("path").role(Role::Label).aria_value(path.clone()).flex_1().min_w(px(0.)).overflow_hidden().text_ellipsis_start().child(path))
+            // An alert, so a screen reader reads a failed save or open out when it happens.
+            .children(status.map(|status| {
+                div().id("status-message").role(Role::Alert).aria_label(SharedString::from(status.clone())).flex_none().text_color(tone(dark, 0xfca5a5, 0xb91c1c)).child(status)
+            }))
             .children(items.into_iter().enumerate().map(|(index, item)| {
-                div().id(("status", index)).role(Role::Label).aria_value(SharedString::from(item.clone())).child(item)
+                div().id(("status", index)).role(Role::Label).aria_value(SharedString::from(item.clone())).flex_none().child(item)
             }))
     }
 

@@ -2475,10 +2475,9 @@ impl Render for Prototype {
             .child(self.menu_bar(cx))
             .child(self.toolbar(cx))
             .child(self.tab_strip(cx))
-            .child(self.path_bar(cx))
             .children(find_bar)
             .child(panes)
-            .child(self.status_bar())
+            .child(self.status_bar(cx))
             // Last child, so it paints after the panes.
             .child(self.frame_timer());
         self.command_actions(root, cx)
