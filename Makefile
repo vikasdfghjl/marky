@@ -33,6 +33,8 @@ help:
 
 build:
 	$(CARGO) build --release --workspace
+	@echo Program: $(CURDIR)/target/release/marky.exe
+	@echo Helper:  $(CURDIR)/target/release/marky-diagrams.exe
 
 run:
 	$(CARGO) run --release -- $(FILE)
@@ -53,15 +55,19 @@ notices:
 
 installer: build
 	$(PWSH) -NoProfile -File scripts/build-installer.ps1
+	@$(PWSH) -NoProfile -Command "Write-Output ('Installer: ' + (Get-ChildItem 'dist\Marky_*_x64-setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName))"
 
 signed-installer:
 	$(PWSH) -NoProfile -File scripts/build-signed.ps1
+	@$(PWSH) -NoProfile -Command "Write-Output ('Installer: ' + (Get-ChildItem 'dist\Marky_*_x64-setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName))"
 
 portable: build
 	$(PWSH) -NoProfile -File scripts/package-portable.ps1
+	@$(PWSH) -NoProfile -Command "Write-Output ('Portable: ' + (Get-ChildItem 'marky-*-portable-x64.zip' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName))"
 
 size: installer
 	$(PWSH) -NoProfile -File scripts/check-size.ps1
+	@$(PWSH) -NoProfile -Command "Write-Output ('Installer: ' + (Get-ChildItem 'dist\Marky_*_x64-setup.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName))"
 
 e2e: build
 	$(PWSH) -NoProfile -File scripts/e2e.ps1
