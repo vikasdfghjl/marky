@@ -2035,6 +2035,7 @@ dependencies = [
  "async-channel",
  "gpui",
  "gpui_windows",
+ "merman",
  "notify",
  "pulldown-cmark",
  "ratex-layout",
@@ -2061,15 +2062,6 @@ dependencies = [
  "tree-sitter-yaml",
  "unicode-segmentation",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "marky-diagrams"
-version = "0.4.0"
-dependencies = [
- "merman",
- "serde",
- "serde_json",
 ]
 
 [[package]]

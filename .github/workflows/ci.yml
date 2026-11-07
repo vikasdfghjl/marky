@@ -49,7 +49,7 @@ jobs:
       - name: Audit npm dependencies
         run: npm audit
 
-      - name: Build release programs
+      - name: Build release program
         run: cargo build --release --workspace
 
       - name: Install NSIS

@@ -1,8 +1,8 @@
 # Marky
 
-Marky is a fast Markdown editor for Windows, written in Rust with [GPUI](https://gpui.rs/). It has no WebView2 or bundled browser: the window, editor, preview and menus are drawn with DirectX 11, and a typical document idles around 17 MB.
+Marky is a fast Markdown editor for Windows, written in Rust with [GPUI](https://gpui.rs/). It has no WebView2 or bundled browser: the window, editor, preview and menus are drawn with DirectX 11, and a typical document idles around 18 MB.
 
-**v0.3.3** · [Download a release](https://github.com/vikasdfghjl/marky/releases) · [Changelog](CHANGELOG.md) · [Contributor guide](AGENTS.md)
+**v0.4.0** · [Download a release](https://github.com/vikasdfghjl/marky/releases) · [Changelog](CHANGELOG.md) · [Contributor guide](AGENTS.md)
 
 ## Features
 
@@ -13,7 +13,7 @@ Marky is a fast Markdown editor for Windows, written in Rust with [GPUI](https:/
 - **Interface:** light, dark or system theme, high-contrast support, drawn menus, outline, reading view, and a status bar with line, word, character, encoding and line-ending details.
 - **Accessibility:** the editor exposes its text and caret to Windows UI Automation; the preview can be read by character, word and line; menus have underlined access keys; the settings panel keeps keyboard focus; links are one preview tab stop rather than many.
 
-Marky ships as two programs: `marky.exe` and `marky-diagrams.exe`. The diagram helper is started only when a document contains a Mermaid fence, which keeps most of Mermaid's 10 MB out of the main program and out of its idle memory.
+Mermaid diagrams are rendered inside `marky.exe` with merman, in the background and only when the preview shows a diagram. There is no separate helper process to install or start.
 
 ## Install
 
@@ -27,16 +27,15 @@ Release-build measurements on an i5-9300H with 16 GB RAM, using `scripts/fixture
 
 | Metric | Measured | Target | Hard limit |
 | --- | ---: | ---: | ---: |
-| Installer | 6.53 MB | ≤ 6 MB | 10 MB |
-| Program (`marky.exe`) | 11.35 MB | ≤ 8 MB | 12 MB |
-| Diagram helper (`marky-diagrams.exe`) | 10.39 MB | — | 12 MB |
-| Portable ZIP | 9.11 MB | — | — |
-| Startup, ready to edit | 465 ms | ≤ 900 ms | 1,000 ms |
-| Typing | 1.8 ms p50 / 2.8 ms p95 | ≤ 20 ms | 33 ms |
-| Preview after typing stops | 30 ms | ≤ 200 ms | 400 ms |
-| Memory, 10 s after launch | 16.9 MB | ≤ 35 MB | 60 MB |
+| Installer | 6.27 MB | ≤ 6 MB | 10 MB |
+| Program (`marky.exe`) | 21.07 MB | ≤ 22 MB | 24 MB |
+| Portable ZIP | 8.78 MB | — | — |
+| Startup, ready to edit | 450 ms | ≤ 900 ms | 1,000 ms |
+| Typing | 1.8 ms p50 / 2.9 ms p95 | ≤ 20 ms | 33 ms |
+| Preview after typing stops | 31 ms | ≤ 200 ms | 400 ms |
+| Memory, 10 s after launch | 17.5 MB | ≤ 35 MB | 60 MB |
 
-The program is over its 8 MB target and under the 12 MB hard limit; the accepted reasons are in [DECISION.md](DECISION.md). The installer is 0.53 MB over its 6 MB target because it carries both programs, and remains under the 10 MB hard limit.
+The program grew to accommodate all Mermaid diagram types in one executable; the accepted reasons are in [DECISION.md](DECISION.md). The installer is 6.27 MB, 0.27 MB over its 6 MB target and under the 10 MB hard limit.
 
 Large-file numbers from the migration prototype (`scripts/bench-large.ps1`, 7 Nov 2026) are in [docs/gpui-migration.md](docs/gpui-migration.md). Re-measure them before changing preview or editor layout.
 
@@ -97,7 +96,7 @@ make release VERSION=0.4.0
 | --- | --- |
 | `./scripts/build-installer.ps1` | Build the per-user NSIS installer after a release build |
 | `./scripts/package-portable.ps1` | Build the portable ZIP |
-| `./scripts/check-size.ps1` | Enforce program, helper and installer size budgets |
+| `./scripts/check-size.ps1` | Enforce program and installer size budgets |
 | `./scripts/bench.ps1` | Measure startup, typing, preview and memory |
 | `./scripts/bench-large.ps1` | Measure 100 KB to 8 MB documents |
 | `npm run notices` | Regenerate notices after dependency changes |

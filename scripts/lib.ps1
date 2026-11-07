@@ -1,7 +1,6 @@
 # Shared helpers for the release-build scripts. Dot-source it: . (Join-Path $PSScriptRoot 'lib.ps1')
 
-# Marky runs as marky.exe and may start marky-diagrams.exe; measuring or stopping the app means
-# handling the whole tree.
+# Marky is one process now; process-tree helpers still cover anything it starts indirectly.
 
 function Get-ProcessTree([int]$RootId) {
   $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId

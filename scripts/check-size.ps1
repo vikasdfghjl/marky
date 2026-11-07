@@ -10,8 +10,7 @@ $release = Join-Path $root 'target\release'
 $version = [regex]::Match((Get-Content (Join-Path $root 'Cargo.toml') -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
 
 $budgets = @(
-  @{ Name = 'Marky program'; Path = (Join-Path $release 'marky.exe'); LimitMb = 12 },
-  @{ Name = 'Diagram helper'; Path = (Join-Path $release 'marky-diagrams.exe'); LimitMb = 12 },
+  @{ Name = 'Marky program'; Path = (Join-Path $release 'marky.exe'); LimitMb = 24 },
   @{ Name = 'Installer'; Path = (Join-Path $root "dist\Marky_${version}_x64-setup.exe"); LimitMb = 10 }
 )
 

@@ -2,7 +2,7 @@
 //! lists, code, tables, footnotes, definition lists, images, display math and Mermaid fences, with
 //! inline emphasis, strikethrough, code, links, `~sub~`, `^sup^` and `==mark==`.
 //! Math is TeX for RaTeX to lay out (math.rs): inline and display formulas, and math fences.
-//! Diagrams are Mermaid fences for the diagram helper (diagrams.rs). Abbreviations, bare links,
+//! Diagrams are Mermaid fences rendered by diagrams.rs. Abbreviations, bare links,
 //! the typographer and the app's math rule for `$…$` come from extras.rs.
 
 use std::collections::{HashMap, HashSet};

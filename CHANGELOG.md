@@ -4,6 +4,11 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Changed
+
+- Mermaid diagrams render inside `marky.exe`; the separate diagram helper executable is gone.
+- The program-size budget is now 22 MB target / 24 MB hard, which includes every Mermaid diagram type.
+
 ## [0.4.0] - 2026-11-07
 
 ### Added

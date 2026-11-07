@@ -1,6 +1,6 @@
-// Generates THIRD_PARTY_NOTICES.txt: license texts of the crates linked into Marky and its
-// diagram helper (normal edges, no proc-macros or build deps). Identical license texts are printed
-// once with every package that uses them.
+// Generates THIRD_PARTY_NOTICES.txt: license texts of the crates linked into Marky (normal edges,
+// no proc-macros or build deps). Identical license texts are printed once with every package that
+// uses them.
 // Usage: npm run notices
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -131,7 +131,7 @@ function cratePackages(): PackageRow[] {
     const [, name, version] = match;
     const key = `${name} ${version}`;
     const meta = byName.get(key);
-    if (name === 'marky' || name === 'marky-diagrams') continue;
+    if (name === 'marky') continue;
     const folder = meta ? dirname(meta.manifest_path) : undefined;
     seen.set(key, {
       id: `${name} ${version} (crate)`,
