@@ -246,7 +246,20 @@ impl Prototype {
                 } else {
                     this.open_menu_at(menu, event.is_keyboard(), window, cx);
                 }
-            }));
+            }))
+            // A screen reader opens and closes a menu with UI Automation's Expand and Collapse.
+            .on_a11y_action(gpui::AccessibleAction::Expand, {
+                let view = cx.entity().downgrade();
+                move |_, window, cx| {
+                    let _ = view.update(cx, |this, cx| this.open_menu_at(menu, true, window, cx));
+                }
+            })
+            .on_a11y_action(gpui::AccessibleAction::Collapse, {
+                let view = cx.entity().downgrade();
+                move |_, window, cx| {
+                    let _ = view.update(cx, |this, cx| this.close_menus(window, cx));
+                }
+            });
         if !opened {
             return button;
         }

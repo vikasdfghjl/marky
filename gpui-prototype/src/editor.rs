@@ -6,6 +6,7 @@
 //! preview is re-parsed on a background thread once typing pauses, as in the app.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -121,7 +122,10 @@ struct Document {
     /// The caret is at `selected.start` when the selection was made backwards.
     selection_reversed: bool,
     marked: Option<Range<usize>>,
-    blocks: Vec<Block>,
+    /// Shared with the next background parse, which compares its result against them.
+    blocks: Arc<Vec<Block>>,
+    /// The formulas and diagrams in `blocks`, gathered by the parse: freeing unused images reads these.
+    images: Arc<ImagesInUse>,
     /// Syntax colours per source line, from the last background parse.
     spans: Vec<Vec<Span>>,
     /// The longest line in characters, from the last parse: the width to scroll to when word wrap is off.
@@ -143,12 +147,49 @@ struct Document {
 }
 
 /// The status bar's counts: words as the app counts them (`/\S+/g`), characters as JavaScript's `length`.
-/// What a background parse hands back to the window.
+/// What a background parse hands back to the window. Everything that costs time in proportion to
+/// the document is done on the parse thread, so applying it stays cheap at any size (at 8 MB the
+/// comparison alone took 55–67 ms on the main thread).
 struct Parsed {
     blocks: Vec<Block>,
     spans: Vec<Vec<Span>>,
     longest: usize,
     counts: Counts,
+    /// The blocks this parse was compared against, and what changed: the range of old blocks to
+    /// replace and how many new ones replace them.
+    base: Arc<Vec<Block>>,
+    changed: (Range<usize>, usize),
+    images: ImagesInUse,
+}
+
+/// The formula and diagram sources a document shows, which keep their bitmaps alive.
+#[derive(Default)]
+struct ImagesInUse {
+    diagrams: HashSet<String>,
+    /// TeX and whether it is display math.
+    formulas: HashSet<(String, bool)>,
+}
+
+impl ImagesInUse {
+    fn of(blocks: &[Block]) -> Self {
+        let mut images = Self::default();
+        for block in blocks {
+            match block.kind {
+                Kind::Diagram => {
+                    images.diagrams.insert(block.text.clone());
+                }
+                Kind::Math => {
+                    images.formulas.insert((block.text.clone(), true));
+                }
+                _ => {}
+            }
+            let cells = block.table.iter().flat_map(|table| table.rows.iter().flatten());
+            for run in block.runs.iter().chain(cells.flatten()).filter(|run| run.style.math) {
+                images.formulas.insert((run.text.clone(), run.style.display));
+            }
+        }
+        images
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -178,7 +219,8 @@ impl Document {
             selected: 0..0,
             selection_reversed: false,
             marked: None,
-            blocks: Vec::new(),
+            blocks: Arc::default(),
+            images: Arc::default(),
             spans: Vec::new(),
             longest_line: 0,
             parse_task: None,
@@ -275,6 +317,9 @@ pub struct Prototype {
     drag_scroll: Option<Task<()>>,
     /// Source lines painted in the last frame, with their layouts.
     painted_lines: Vec<(usize, TextLayout)>,
+    /// When this frame's render began: a frame over 50 ms is logged as `stall_ms`, the prototype's
+    /// counterpart of the long tasks the app's large-file benchmark counts.
+    frame_started: Option<Instant>,
     _appearance: Subscription,
 }
 
@@ -320,6 +365,7 @@ impl Prototype {
             drag_outside: None,
             drag_scroll: None,
             painted_lines: Vec::new(),
+            frame_started: None,
             _appearance: appearance,
         };
         // The source paints first; the preview follows when the background parse is done, like the app.
@@ -373,6 +419,7 @@ impl Prototype {
         let rope = doc.buffer.snapshot();
         let version = doc.buffer.version();
         let flavor = preview::Flavor { typographer: self.settings.typographer };
+        let base = doc.blocks.clone();
         doc.parse_task = Some(cx.spawn(async move |this, cx| {
             if !pause.is_zero() {
                 cx.background_executor().timer(pause).await;
@@ -385,7 +432,10 @@ impl Prototype {
                 .spawn(async move {
                     let text = rope.to_string();
                     let longest = text.lines().map(|line| line.chars().count()).max().unwrap_or(0);
-                    Parsed { blocks: preview::blocks_with(&text, flavor), spans: syntax::source_spans(&text), longest, counts: Counts::of(&text) }
+                    let blocks = preview::blocks_with(&text, flavor);
+                    let changed = preview_view::changed_blocks(&base, &blocks);
+                    let images = ImagesInUse::of(&blocks);
+                    Parsed { blocks, spans: syntax::source_spans(&text), longest, counts: Counts::of(&text), base, changed, images }
                 })
                 .await;
             let parse_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -395,7 +445,8 @@ impl Prototype {
 
     /// Replaces only the blocks that changed, so the preview keeps its measured heights and scroll position.
     fn apply_parse(&mut self, id: u64, version: u64, parsed: Parsed, parse_ms: f64, cx: &mut Context<Self>) {
-        let Parsed { blocks, spans, longest, counts } = parsed;
+        let applying = Instant::now();
+        let Parsed { blocks, spans, longest, counts, base, changed, images } = parsed;
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else { return };
         if doc.buffer.version() != version {
             return;
@@ -408,13 +459,23 @@ impl Prototype {
             perf::log(&format!("preview_ms={latency:.0} parse_ms={parse_ms:.1}"));
             doc.last_preview = Some((latency, parse_ms));
         }
-        let (changed, count) = preview_view::changed_blocks(&doc.blocks, &blocks);
+        // Only one parse per document is in flight (a new one replaces the task), so the blocks it
+        // compared against are still the shown ones; if not, compare here.
+        let (changed, count) = if Arc::ptr_eq(&base, &doc.blocks) { changed } else { preview_view::changed_blocks(&doc.blocks, &blocks) };
         doc.block_list.splice(changed, count);
-        doc.blocks = blocks;
-        doc.spans = spans;
+        let old_blocks = std::mem::replace(&mut doc.blocks, Arc::new(blocks));
+        let old_spans = std::mem::replace(&mut doc.spans, spans);
+        doc.images = Arc::new(images);
         doc.longest_line = longest;
         doc.synced_source_line = None;
+        // Freeing a large document's old blocks and colours is itself tens of milliseconds.
+        cx.background_spawn(async move { drop((old_blocks, old_spans, base)) }).detach();
         self.release_unused_images(cx);
+        // The main thread's part of a parse: splicing the list and freeing images.
+        let ms = applying.elapsed().as_secs_f64() * 1000.0;
+        if ms > 50.0 {
+            perf::log(&format!("stall_ms={ms:.0} apply"));
+        }
         cx.notify();
     }
 
@@ -422,22 +483,12 @@ impl Prototype {
     /// current font size and theme: every edit of one makes a new bitmap, and GPUI keeps each until
     /// it is dropped.
     fn release_unused_images(&self, cx: &mut App) {
+        let images = self.documents.iter().map(|doc| doc.images.as_ref());
         let mut diagrams_in_use = HashSet::new();
         let mut formulas_in_use = HashSet::new();
-        for block in self.documents.iter().flat_map(|doc| &doc.blocks) {
-            match block.kind {
-                Kind::Diagram => {
-                    diagrams_in_use.insert(block.text.as_str());
-                }
-                Kind::Math => {
-                    formulas_in_use.insert((block.text.as_str(), true));
-                }
-                _ => {}
-            }
-            let cells = block.table.iter().flat_map(|table| table.rows.iter().flatten());
-            for run in block.runs.iter().chain(cells.flatten()).filter(|run| run.style.math) {
-                formulas_in_use.insert((run.text.as_str(), run.style.display));
-            }
+        for found in images {
+            diagrams_in_use.extend(found.diagrams.iter().map(String::as_str));
+            formulas_in_use.extend(found.formulas.iter().map(|(tex, display)| (tex.as_str(), *display)));
         }
         diagrams::release_unused(&diagrams_in_use, self.dark, cx);
         math::release_unused(&formulas_in_use, self.settings.font_size, self.dark, cx);
@@ -1314,6 +1365,7 @@ impl Prototype {
         let first_frame = !self.logged_first_frame;
         self.logged_first_frame = true;
         let typed_at = self.typed_at.take();
+        let started = self.frame_started.take();
         canvas(
             // Last child: its prepaint runs once layout and every other prepaint are done.
             move |_, _, _| {
@@ -1327,6 +1379,14 @@ impl Prototype {
                 }
                 if let Some(typed_at) = typed_at {
                     perf::log(&format!("type_ms={:.1}", typed_at.elapsed().as_secs_f64() * 1000.0));
+                }
+                // Render, layout, prepaint and paint of one frame, all on the main thread. The first
+                // frame is start-up, timed as such.
+                if let Some(started) = started.filter(|_| !first_frame) {
+                    let ms = started.elapsed().as_secs_f64() * 1000.0;
+                    if ms > 50.0 {
+                        perf::log(&format!("stall_ms={ms:.0} frame"));
+                    }
                 }
             },
         )
@@ -1743,6 +1803,7 @@ impl Focusable for Prototype {
 
 impl Render for Prototype {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.frame_started = Some(Instant::now());
         if !self.logged_first_frame {
             perf::mark("render");
         }

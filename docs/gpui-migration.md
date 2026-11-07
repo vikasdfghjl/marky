@@ -167,7 +167,7 @@ Do these in order. Each one keeps the app shippable; do not delete WebView2 unti
 2. **Plain preview.** The syntax Marky renders today that is text layout: tables, task lists, strikethrough, footnotes, definition lists, abbreviations, subscript, superscript, marked text. Keep a line map so scrolling can stay in step. Share one parser's idea of a token with the editor so the two panes do not disagree. Done in the prototype on 6 Nov 2026; the rest followed on 7 Nov 2026 in `extras.rs`, for what pulldown-cmark lacks: abbreviations (definitions hidden, every whole-word use underlined with its title on hover), bare links with linkify-it's defaults (so `README.md` is a link, as in the app), the typographer setting (pulldown-cmark's smart punctuation plus (c), (r), (tm) and +-), footnotes gathered at the end under a rule in reference order with a ↩ back link (unreferenced ones left out), images inside a paragraph, and thematic breaks, which were not drawn at all. A paragraph with several styles now flows word by word, so a run no longer drops to the next line whole. Still different: sub- and superscript in the editor are not at 80% size. Task boxes are read-only, as in the app.
 3. **Math and diagrams.** Decide explicitly to port them or to drop them. Do not embed a JavaScript engine to keep KaTeX and Mermaid; that spends the browser cost again. Research on 7 Nov 2026 is below, under "Step 3: math and diagrams without JavaScript". Done in the prototype on 7 Nov 2026: math with RaTeX in the program, diagrams with merman in a helper program.
 4. **Chrome.** Menus, shortcuts, settings, outline, status bar, light and dark theme, keyboard access and an AccessKit tree that exposes the editor text. Contrast still has to meet WCAG 2.2 AA. The pinned Zed commit has AccessKit (see above). Done in the prototype on 7 Nov 2026; see "Step 4: chrome and accessibility" below.
-5. **Test harness and packaging.** A driver for the end-to-end and benchmark scripts, and an installer pipeline, before anything is removed.
+5. **Test harness and packaging.** A driver for the end-to-end and benchmark scripts, and an installer pipeline, before anything is removed. The end-to-end driver is built (7 Nov 2026); see "Step 5: test harness" below. Typing in the benchmark without the window in front was tried and is not a faithful measure (see below). The large-file benchmark followed the same day. Still to do: the installer and CI.
 6. **Remove Tauri.** Drop the webview, `src/`, the frontend bundle budget, and `npm run dev`. Keep the Rust file rules and the tests that protect them; port the release scripts to the new installer.
 
 ## Step 3: math and diagrams without JavaScript
@@ -235,6 +235,65 @@ Still open:
 - Every link in the preview is a tab stop, as in a browser; a long document has many.
 - Menus show no underlined access keys, and the settings panel does not hold the focus while open.
 - Windows high-contrast themes are not followed.
+
+## Step 5: test harness
+
+`gpui-prototype/e2e.ps1`, built on 7 Nov 2026, is the prototype's counterpart of `scripts/e2e.ps1`. GPUI has no DevTools protocol, so it drives the window through Windows UI Automation, as a screen reader does: it reads the AccessKit tree from step 4, finds controls by role and name, and presses them through their Invoke, Toggle or Expand patterns (menus open with Expand, which the menu buttons now handle). Text is typed with window messages and read back through the editor's TextPattern; files are compared byte for byte. It needs no mouse, keyboard or window in front, so it can run while someone works, and it runs with a temporary `APPDATA`, so no settings are read or changed.
+
+It checks, against a release build:
+
+- opening: the title, the editor's text (no BOM, LF), the rendered preview, CRLF and UTF-8 BOM in the status bar, prices left as text, footnotes at the end, a Mermaid fence sent to the diagram helper;
+- editing and saving: the unsaved marker, Save, the saved bytes (BOM and CRLF kept), Undo and Redo from the Edit menu;
+- find (case-insensitive count, Esc back to the editor), the toolbar's preview, editor and outline toggles, the outline's headings;
+- the settings panel from the File menu, a setting saved to `settings.json`, closing the panel;
+- links: a relative `.md` link opening a tab, closing that tab, a link to a PDF refused;
+- accessibility: focusing the editor from UI Automation, the caret followed through the TextPattern, Esc then Tab leaving the editor;
+- closing: held with unsaved changes, immediate when clean, the diagram helper exiting with the window, and a file over 128 MB refused before it is read.
+
+On 7 Nov 2026: 32 pass, 4 skipped, in about 10 s. The skipped ones are what the app's test covers and the prototype lacks: reloading an external change (no file watcher), crash recovery, recent files, a second launch opening a tab, the drop overlay, and IME composition, which window messages cannot produce (`buffer.rs` tests the composition path). Ctrl shortcuts are reached through the menus, because GPUI reads modifier keys from the keyboard's state, which window messages do not set.
+
+The first runs found a real difference from mouse use: pressing a link through UI Automation leaves the focus on the link, as a browser does, so the test moves it back to the editor with UI Automation's SetFocus.
+
+### Typing without the window in front
+
+`bench.ps1` types with SendKeys, which needs the prototype in front and types into whatever window is there. On 7 Nov 2026 it gained `-Via Messages`, which posts the key presses to the window instead (key-down and key-up, which GPUI's message loop turns into a character), so a benchmark could run while someone uses the machine. Every keystroke arrives, and `type_ms` is measured inside the prototype either way, but the numbers differ. Same build, same session, `typical.md`, three runs of 60 keystrokes each:
+
+| How the keys arrive | p50 | p95 |
+| --- | ---: | ---: |
+| SendKeys, window in front | 1.6 ms | 2.6 ms |
+| Window messages, window behind | 2.5–3.8 ms | 16.4–17.3 ms |
+| Window messages, window in front | 3.3 ms | 16.1 ms |
+| Window messages, key held 2, 15, 60 or 100 ms | 3.0–5.8 ms | 17.1–17.9 ms |
+
+A p95 of one display refresh means that after a posted key, the frame waits for GPUI's display-paced frame, which a real key press does not. Neither the window being in front nor the key-up's timing explains it. GPUI throttles frames for inactive windows and paces the rest by the display, and something in the real input path draws sooner, but this was not traced further. So SendKeys stays the typing measure of record, and `-Via Messages` prints its result as not comparable. The question it leaves is which of the two a person's typing matches: a typist holds a key for tens of milliseconds, unlike SendKeys.
+
+### Large files
+
+`gpui-prototype/bench-large.ps1` (7 Nov 2026) is the counterpart of `scripts/bench-large.ps1`. It uses the same documents: the app's generator, ported to PowerShell and checked byte for byte against it. It measures:
+
+- cold start with the file open and idle RAM, three runs;
+- a burst of 30 keys, 70 ms apart, and 12 keys that each wait for the preview to catch up;
+- the preview update and its parse time;
+- main-thread stalls over 50 ms, logged by the prototype as frames or parse results that take longer than that.
+
+It types with SendKeys, and checks before every key that the prototype is still in front.
+
+Both scripts ran one after the other in the same session, on the same machine:
+
+| File | Build | Start | Idle RAM | Typing p50 / p95 | Preview after typing (parse) | Stalls with preview (worst) | RAM after typing |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 KB | Marky | 1,188 ms | 156.8 MB | 17.9 / 21.0 ms | 108 ms (30 ms) | 0 | 212.4 MB |
+| | Prototype | 528 ms | 18.9 MB | 3.2 / 5.3 ms | 48 ms (9 ms) | 0 | 19.6 MB |
+| 1 MB | Marky | 983 ms | 487.7 MB | 18.0 / 21.5 ms | 496 ms (284 ms) | 1 (110 ms) | 590.5 MB |
+| | Prototype | 483 ms | 36.1 MB | 3.2 / 5.2 ms | 237 ms (85 ms) | 0 | 37.4 MB |
+| 4 MB | Marky | 1,128 ms | 1,372 MB | 18.3 / 30.5 ms | 1,412 ms (1,127 ms) | 14 (410 ms) | 1,658 MB |
+| | Prototype | 515 ms | 84.0 MB | 3.1 / 6.5 ms | 453 ms (297 ms) | 0 | 85.2 MB |
+| 8 MB | Marky (preview off above 5 MB) | 1,198 ms | 200 MB | 10.6 / 18.4 ms | off | 17 (147 ms) | 73 MB |
+| | Prototype (preview on) | 581 ms | 144.8 MB | 3.5 / 6.4 ms | 746 ms (594 ms) | 12 (67 ms) | 148 MB |
+
+Typing compares loosely. The app's figure runs from `beforeinput` to the frame after the next paint, so it includes waiting for that frame. The prototype's ends when the frame showing the edit has painted, and with SendKeys GPUI draws that frame at once (see "Typing without the window in front"). The app's typing also arrives through the DevTools protocol, not the keyboard.
+
+The prototype keeps its preview at 8 MB, where the app turns its preview off. All 13 of its stalls at that size were parse results being applied: comparing about 90,000 old and new blocks, and walking them to free unused images, took 55–67 ms on the main thread. Doing the comparison on the parse thread would remove them; that is not done yet. No frame took over 50 ms at any size.
 
 ## References
 

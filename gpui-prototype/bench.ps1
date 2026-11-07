@@ -7,13 +7,18 @@
   Same fixture (scripts/fixtures/typical.md), same clock (startup_ms counts from the top of main to the end of
   the first painted frame), same RAM figure (private working set of the process tree, 10 s after launch).
   The release profile matches src-tauri's, so "Program" compares with the README's number.
-  Typing: keystrokes are sent with SendKeys after the RAM sample, and type_ms is the time from the edit
-  arriving to the end of the frame that shows it, like the app's rAF-after-paint measure in bench-large.ts.
+  Typing: 60 keystrokes after the RAM sample, sent with SendKeys, so they take the real keyboard path.
+  type_ms is the time from the edit arriving to the end of the frame that shows it, like the app's
+  rAF-after-paint measure in bench-large.ts. SendKeys types into whatever window is in front, and the
+  script brings the prototype there: leave the machine alone while it runs, or pass -Keys 0.
+  -Via Messages posts the key presses to the window instead, so it can run while you work, but its
+  numbers are not comparable: GPUI draws the frame after a posted key later than after a real one
+  (7 Nov 2026, typical.md: p50 2.5-5.8 ms and p95 16-18 ms, against 1.6 and 2.6 ms with SendKeys;
+  bringing the window to the front or holding the key longer made no difference).
   Preview: preview_ms is the time from the last keystroke to the re-parsed preview being applied.
   The edits are never saved. Compare with Marky only within one session (see AGENTS.md).
-  SendKeys types into whatever window is in front: leave the machine alone while it runs, or pass -Keys 0.
 #>
-param([int]$Runs = 5, [string]$File = '', [int]$Keys = 60, [string]$Exe = '')
+param([int]$Runs = 5, [string]$File = '', [int]$Keys = 60, [string]$Exe = '', [ValidateSet('SendKeys', 'Messages')][string]$Via = 'SendKeys')
 
 $root = Split-Path $PSScriptRoot -Parent
 $exe = if ($Exe) { $Exe } else { Join-Path $PSScriptRoot 'target\release\gpui-prototype.exe' }
@@ -48,6 +53,18 @@ function Get-LogCount([string]$pattern) {
 }
 
 $shell = New-Object -ComObject WScript.Shell
+if (-not ('BenchKeys' -as [type])) { Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class BenchKeys {
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  /// WM_KEYDOWN then WM_KEYUP, as a key press arrives; GPUI's message loop translates the key-down
+  /// into WM_CHAR, so the character takes the keyboard's path (key bindings first, then text input).
+  public static void Press(IntPtr window, int vk, int scan) {
+    PostMessage(window, 0x0100, (IntPtr)vk, (IntPtr)(1 | (scan << 16)));
+    PostMessage(window, 0x0101, (IntPtr)vk, (IntPtr)unchecked((int)(0xC0000001 | (uint)(scan << 16))));
+  }
+}
+'@ }
 $ramMb = @()
 $previewMs = @()
 for ($i = 1; $i -le $Runs; $i++) {
@@ -63,10 +80,12 @@ for ($i = 1; $i -le $Runs; $i++) {
   if ($remaining -gt 0) { Start-Sleep -Milliseconds ([int]($remaining * 1000)) }
   $ramMb += Get-TreeRamMb $app.Id
 
-  if ($Keys -gt 0 -and $shell.AppActivate($app.Id)) {
+  # SendKeys needs the window in front; window messages do not.
+  $canType = $Keys -gt 0 -and $(if ($Via -eq 'SendKeys') { $shell.AppActivate($app.Id) } else { $app.Refresh(); $app.MainWindowHandle -ne 0 })
+  if ($canType) {
     $typedBefore = Get-LogCount 'type_ms='
     for ($k = 0; $k -lt $Keys; $k++) {
-      $shell.SendKeys('a')
+      if ($Via -eq 'SendKeys') { $shell.SendKeys('a') } else { [BenchKeys]::Press($app.MainWindowHandle, 0x41, 0x1E) }
       # Paced like a typist, so each keystroke gets its own frame.
       Start-Sleep -Milliseconds 50
     }
@@ -93,9 +112,9 @@ $typeMs = $lines | Select-String 'type_ms=([\d.]+)' | ForEach-Object { [double]$
 "Cold start     median {0} ms  [{1}]" -f (Get-Median $startupMs), ($startupMs -join ', ')
 "Idle RAM       median {0:N1} MB  [{1}]  (10 s after launch)" -f (Get-Median $ramMb), (($ramMb | ForEach-Object { '{0:N0}' -f $_ }) -join ', ')
 if ($typeMs.Count) {
-  "Typing         p50 {0:N1} ms  p95 {1:N1} ms  ({2} keystrokes)" -f (Get-Median $typeMs), (Get-Percentile $typeMs 0.95), $typeMs.Count
-} else {
-  "Typing         not measured: the window could not be brought to the front for SendKeys"
+  "Typing         p50 {0:N1} ms  p95 {1:N1} ms  ({2} keystrokes, {3})" -f (Get-Median $typeMs), (Get-Percentile $typeMs 0.95), $typeMs.Count, $(if ($Via -eq 'SendKeys') { 'SendKeys' } else { 'window messages, not comparable with SendKeys' })
+} elseif ($Keys -gt 0) {
+  "Typing         not measured: $(if ($Via -eq 'SendKeys') { 'the window could not be brought to the front for SendKeys' } else { 'no keystroke reached the editor' })"
 }
 if ($previewMs.Count) {
   "Preview        median {0} ms after typing stops  [{1}]" -f (Get-Median $previewMs), ($previewMs -join ', ')
