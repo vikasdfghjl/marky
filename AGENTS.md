@@ -42,7 +42,7 @@ Large documents: virtualisation keeps typing and startup independent of file siz
 
 ## Verification
 
-A change is done when these pass:
+A change is done when these pass (the same commands are in the `Makefile`):
 
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings

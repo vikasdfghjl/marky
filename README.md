@@ -82,6 +82,17 @@ cargo build --release --workspace
 ./scripts/e2e.ps1
 ```
 
+The same workflow is in the `Makefile`:
+
+```bash
+make build
+make check
+make installer
+make size
+make e2e
+make release VERSION=0.4.0
+```
+
 | Command | Purpose |
 | --- | --- |
 | `./scripts/build-installer.ps1` | Build the per-user NSIS installer after a release build |
