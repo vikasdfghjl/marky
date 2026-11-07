@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-07
+
 ### Added
 
 - Tabs with independent undo histories, New Tab, Save As, Open Recent, auto-save, and the line ending used by new files.
