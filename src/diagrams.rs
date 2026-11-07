@@ -1,30 +1,22 @@
-//! Mermaid diagrams for the preview. merman draws them in a separate program, marky-diagrams.exe
-//! (`diagrams/`), because it is about 10 MB; it starts only when a document shows a diagram, as the
-//! app loads Mermaid only then. GPUI draws the SVG it returns. DECISION.md has the reasons and sizes.
+//! Mermaid diagrams for the preview. merman renders them in-process; diagrams are drawn on the
+//! background thread only when the preview shows one, and the SVG is rasterised here so unused
+//! bitmaps can be dropped with the rest of the preview's images.
 //!
 //! Only diagrams the preview draws are requested (the preview is a virtualised list), each once per
 //! source and theme: later frames and typing elsewhere reuse the cached result.
-//!
-//! The bitmap is made here, on the background thread, so [`release_unused`] can drop the bitmaps of
-//! diagrams that no open document contains any more (see `bitmaps.rs`).
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use gpui::{App, AppContext, Context, Image, ImageFormat, RenderImage, SvgRenderer};
-use serde::Deserialize;
+use merman::{Engine, MermaidConfig, OperationControl, RenderOutput, RenderRequest, Renderer, SvgRequest};
 
 use crate::{bitmaps, perf};
 
-const HELPER: &str = "marky-diagrams.exe";
-
-/// The helper gives up after 5 s through merman's own deadline; this catches a helper that hangs anyway.
-const TIMEOUT: Duration = Duration::from_secs(10);
+/// merman checks this deadline cooperatively; a diagram that ignores it is reported as failed.
+const DEADLINE: Duration = Duration::from_secs(5);
 
 /// A diagram as a bitmap (at GPUI's 2× SVG scale) and its natural size in pixels.
 pub struct Diagram {
@@ -48,6 +40,12 @@ fn cache() -> &'static Mutex<HashMap<Key, State>> {
     CACHE.get_or_init(Default::default)
 }
 
+thread_local! {
+    /// One renderer per theme per worker thread. Building it parses Mermaid's configuration, so
+    /// keep it for every diagram that thread draws.
+    static RENDERERS: RefCell<[Option<Renderer>; 2]> = const { RefCell::new([None, None]) };
+}
+
 /// The diagram's state for this frame. The first time a source is seen it starts drawing it on a
 /// background thread and redraws the view when it is done; until then it reports `Drawing`.
 pub fn state<V: 'static>(source: &str, dark: bool, cx: &mut Context<V>) -> State {
@@ -65,7 +63,6 @@ pub fn state<V: 'static>(source: &str, dark: bool, cx: &mut Context<V>) -> State
     let drawing = cx.background_spawn(async move { draw(&request.0, request.1, &renderer) });
     cx.spawn(async move |view, cx| {
         let state = drawing.await;
-        // From the request to the bitmap, with the helper's start when it was not running.
         perf::log(&format!("diagram_ms={:.0} at={:.0}", requested.elapsed().as_secs_f64() * 1000.0, perf::since_start_ms()));
         cache().lock().unwrap_or_else(PoisonError::into_inner).insert(key, state);
         let _ = view.update(cx, |_, cx| cx.notify());
@@ -88,65 +85,36 @@ pub fn release_unused(in_use: &HashSet<&str>, dark: bool, cx: &mut App) {
     bitmaps::drop_bitmaps(released, cx);
 }
 
-/// The running helper. One request at a time: callers wait on the mutex.
-fn helper() -> &'static Mutex<Option<Helper>> {
-    static HELPER: Mutex<Option<Helper>> = Mutex::new(None);
-    &HELPER
+/// The app's Mermaid settings: its light or dark theme and `securityLevel: 'strict'` (the source is
+/// untrusted). Labels are SVG text instead of HTML in `<foreignObject>`, which only a browser draws.
+fn renderer(dark: bool) -> Renderer {
+    let config = MermaidConfig::from_value(serde_json::json!({
+        "theme": if dark { "dark" } else { "default" },
+        "securityLevel": "strict",
+        "htmlLabels": false,
+        "flowchart": { "htmlLabels": false },
+    }));
+    Renderer::new().with_engine(Engine::new().with_site_config(config))
 }
 
-/// Asks the helper for one diagram, starting it if needed. A helper that was already running may
-/// have quit after its idle minute or crashed on an earlier diagram, so it gets one restart.
-fn draw(source: &str, dark: bool, renderer: &SvgRenderer) -> State {
-    let Ok(request) = serde_json::to_string(&serde_json::json!({ "source": source, "dark": dark })) else {
-        return failed("could not encode the request");
-    };
-    let reply = {
-        let mut running = helper().lock().unwrap_or_else(PoisonError::into_inner);
-        let mut restarted = running.is_none();
-        loop {
-            if running.is_none() {
-                match Helper::start() {
-                    Ok(started) => *running = Some(started),
-                    Err(err) => return failed(&err),
-                }
-            }
-            let Some(current) = running.as_mut() else { return failed("the diagram helper did not start") };
-            match current.ask(&request) {
-                Ok(reply) => break reply,
-                Err(Stop::TimedOut) => {
-                    *running = None;
-                    return failed(&format!("drawing took longer than {} s", TIMEOUT.as_secs()));
-                }
-                Err(Stop::Exited) if !restarted => {
-                    *running = None;
-                    restarted = true;
-                }
-                Err(Stop::Exited) => {
-                    *running = None;
-                    return failed("the diagram helper stopped while drawing this diagram");
-                }
-            }
-        }
-    };
-    match parse_reply(&reply) {
-        Ok(svg) => rasterize(svg, renderer),
-        Err(err) => State::Failed(err),
+fn draw(source: &str, dark: bool, svg_renderer: &SvgRenderer) -> State {
+    let svg = RENDERERS.with(|renderers| {
+        let mut renderers = renderers.borrow_mut();
+        let renderer = renderers[usize::from(dark)].get_or_insert_with(|| renderer(dark));
+        render_diagram(renderer, source)
+    });
+    match svg {
+        Ok(svg) => rasterize(svg, svg_renderer),
+        Err(err) => State::Failed(Arc::from(err)),
     }
 }
 
-/// The helper's reply line, `{"svg": "..."}` or `{"error": "..."}`.
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Reply {
-    Svg(String),
-    Error(String),
-}
-
-fn parse_reply(line: &str) -> Result<String, Arc<str>> {
-    match serde_json::from_str::<Reply>(line) {
-        Ok(Reply::Svg(svg)) => Ok(svg),
-        Ok(Reply::Error(err)) => Err(Arc::from(err)),
-        Err(err) => Err(Arc::from(format!("unreadable reply from the diagram helper: {err}"))),
+fn render_diagram(renderer: &Renderer, source: &str) -> Result<String, String> {
+    let control = OperationControl::new().with_deadline(DEADLINE);
+    match renderer.render(RenderRequest::svg(source, control, SvgRequest::default())) {
+        Ok(RenderOutput::Svg(Some(svg))) => Ok(svg.svg().to_string()),
+        Ok(_) => Err("not a diagram Mermaid knows".to_string()),
+        Err(err) => Err(err.to_string()),
     }
 }
 
@@ -163,80 +131,6 @@ fn failed(message: &str) -> State {
     State::Failed(Arc::from(message))
 }
 
-enum Stop {
-    Exited,
-    TimedOut,
-}
-
-struct Helper {
-    child: Child,
-    stdin: ChildStdin,
-    /// Reply lines, read on a thread so a hung helper can time out.
-    replies: Receiver<String>,
-}
-
-impl Helper {
-    fn start() -> Result<Self, String> {
-        let program = helper_path().ok_or_else(|| format!("{HELPER} was not found next to the program"))?;
-        let mut command = Command::new(&program);
-        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // No console window flashes up for the helper.
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-        let mut child = command.spawn().map_err(|err| format!("could not start {HELPER}: {err}"))?;
-        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-            let _ = child.kill();
-            return Err(format!("could not connect to {HELPER}"));
-        };
-        let (lines, replies) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                if lines.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(Self { child, stdin, replies })
-    }
-
-    fn ask(&mut self, request: &str) -> Result<String, Stop> {
-        let sent = self.stdin.write_all(request.as_bytes()).and_then(|()| self.stdin.write_all(b"\n")).and_then(|()| self.stdin.flush());
-        if sent.is_err() {
-            return Err(Stop::Exited);
-        }
-        match self.replies.recv_timeout(TIMEOUT) {
-            Ok(reply) => Ok(reply),
-            Err(RecvTimeoutError::Timeout) => Err(Stop::TimedOut),
-            Err(RecvTimeoutError::Disconnected) => Err(Stop::Exited),
-        }
-    }
-}
-
-impl Drop for Helper {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-/// Next to the program. Test binaries live one folder down, in `deps`.
-fn helper_path() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let folder = exe.parent()?;
-    for folder in [Some(folder), folder.parent()].into_iter().flatten() {
-        let path = folder.join(HELPER);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,27 +140,14 @@ mod tests {
     }
 
     #[test]
-    fn replies_become_svgs_or_errors() {
-        let svg = r#"{"svg":"<svg width=\"100%\" viewBox=\"0 0 615.5 185\"></svg>"}"#;
-        assert!(parse_reply(svg).unwrap().contains("615.5"));
-        assert_eq!(&*parse_reply(r#"{"error":"No Mermaid diagram type detected"}"#).unwrap_err(), "No Mermaid diagram type detected");
-        assert!(parse_reply("not json").is_err());
-    }
-
-    #[test]
     fn a_drawn_diagram_keeps_its_natural_size() {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 120 40"><rect width="120" height="40"/></svg>"#;
         let State::Drawn(diagram) = rasterize(svg.to_string(), &renderer()) else { panic!("expected a drawing") };
         assert_eq!((diagram.width, diagram.height), (120.0, 40.0));
     }
 
-    /// Runs when the helper has been built (`cargo build --workspace`), as it is before a release.
     #[test]
-    fn the_helper_draws_and_survives_a_bad_diagram() {
-        if helper_path().is_none() {
-            eprintln!("skipped: {HELPER} is not built");
-            return;
-        }
+    fn draws_known_diagrams_and_reports_unknown_ones() {
         assert!(matches!(draw("flowchart LR\n  A --> B", false, &renderer()), State::Drawn(_)));
         assert!(matches!(draw("not a diagram", true, &renderer()), State::Failed(_)));
         assert!(matches!(draw("pie title P\n  \"a\" : 1", true, &renderer()), State::Drawn(_)));

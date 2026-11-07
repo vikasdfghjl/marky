@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds the per-user NSIS installer for marky.exe and marky-diagrams.exe.
+  Builds the per-user NSIS installer for Marky.
 .DESCRIPTION
   Uses makensis from PATH, or the standard NSIS install folders.
   CI installs NSIS before calling this. The release build must already exist:
@@ -16,9 +16,7 @@ if (-not $Version) { $Version = [regex]::Match($cargo, '(?m)^version = "([^"]+)"
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Installer version must be X.Y.Z (got '$Version')" }
 
 $release = Join-Path $root 'target\release'
-foreach ($exe in 'marky.exe', 'marky-diagrams.exe') {
-  if (-not (Test-Path (Join-Path $release $exe))) { throw "$exe not found; run: cargo build --release --workspace" }
-}
+if (-not (Test-Path (Join-Path $release 'marky.exe'))) { throw 'marky.exe not found; run: cargo build --release --workspace' }
 
 $makensis = if ($env:MAKENSIS) { $env:MAKENSIS } else { (Get-Command makensis -ErrorAction SilentlyContinue).Source }
 if (-not $makensis) {

@@ -2,6 +2,29 @@
 
 Decisions about Marky that are not obvious from the code, with the reasons and the evidence behind them. Newest first. Each entry says what was decided, what else was considered, and what it costs; change one only with new evidence, and add a new entry rather than rewriting an old one.
 
+## 2026-11-07: Mermaid moves into marky.exe
+
+Context: the helper program kept the main executable under the previous 12 MB limit, but it added a second file to build, sign, install and supervise. The limit was raised so one executable can carry every Mermaid diagram type.
+
+### Decision
+
+- `merman` is linked into `marky.exe` with all diagram types and the Cytoscape layout.
+- The `marky-diagrams.exe` helper and its JSON-line protocol are removed. `diagrams.rs` renders on the background thread with a renderer cached per theme per worker thread, and rasterises the SVG itself so unused bitmaps are dropped with the rest of the preview's images.
+- The program budget becomes **22 MB target / 24 MB hard**.
+
+### Evidence
+
+- Release build: `marky.exe` is **21.07 MB**, within the new hard limit.
+- Installer 6.27 MB and portable ZIP 8.78 MB; both are smaller than the two-program builds because the duplicated runtime and metadata are gone.
+- Clippy clean, 84 tests pass, e2e 42 pass / 4 documented skips / 0 fail, including the Mermaid image check.
+- Same session, `scripts/bench.ps1`: start 450 ms, memory 17.5 MB after 10 s, typing p50 1.8 / p95 2.9 ms, preview 31 ms.
+
+### Consequences
+
+- One executable to build, sign, install and run; no helper process to start, time out or restart.
+- Mermaid's roughly 10 MB is always in the program, whether a document has a diagram or not. Idle memory and startup are unchanged within noise (17.5 MB and 450 ms).
+- The 15 MB figure considered first was not enough: all diagram types add about 10 MB to the 11.35 MB program. The measured 21.07 MB sets the 24 MB hard limit.
+
 ## 2026-11-07: The GPUI prototype becomes Marky; the previous shell and webview are removed
 
 Context: step 6 of [docs/gpui-migration.md](docs/gpui-migration.md). Steps 1–5 had brought the prototype to feature parity, but the installer and CI were still the previous shell's. Removing the previous shell without them would have left no shippable path, so the packaging port and the removal were done together.

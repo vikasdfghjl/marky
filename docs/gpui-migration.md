@@ -79,7 +79,7 @@ With no path it opens `scripts/fixtures/typical.md`. The release profile matches
 
 ### Measuring
 
-Build both release binaries, then run both benchmarks in one session on the machine that produced the [README benchmarks](../README.md). Background load moves typing latency by up to 2× between sessions ([AGENTS.md](../AGENTS.md)).
+Build the release binary, then run both benchmarks in one session on the machine that produced the [README benchmarks](../README.md). Background load moves typing latency by up to 2× between sessions ([AGENTS.md](../AGENTS.md)).
 
 ```bash
 cargo build --release --workspace
@@ -191,7 +191,7 @@ Research, 7 Nov 2026. A scratch program rendered the app sample's flowchart and 
 
 Some of it overlaps with what the prototype already links, so the real increase is a little smaller. The prototype is 8.88 MB; the README's program target is 8 MB and its hard limit 12 MB. Linking merman in breaks the hard limit even with seven diagram types. The app loads Mermaid only when a document has a diagram; the native equivalent is a separate helper program, run only then, which keeps the size out of the main program and puts it in the installer.
 
-Decided 7 Nov 2026 (DECISION.md): math is ported with RaTeX in the main program; diagrams are ported with merman in an on-demand helper program.
+Decided 7 Nov 2026 (DECISION.md): math is ported with RaTeX in the main program; diagrams were first ported with merman in an on-demand helper program, then moved into the main program after the size limit was raised to 24 MB.
 
 Math is built in the prototype (7 Nov 2026). pulldown-cmark's math extension finds `$…$` and `$$…$$` with the same rule as the app (prices like `$5 and $10` stay text), and ```` ```math ```` fences are formulas too. RaTeX lays each formula out to SVG in the theme's text colour at KaTeX's 1.21× size, and GPUI draws it as an image. Formulas are laid out only when the preview shows them and cached by size and theme. Display formulas are centred; inline ones sit in the text, which then flows word by word around them. TeX that RaTeX cannot parse shows its source and the error. The program is 10.87 MB with math.
 
@@ -248,16 +248,16 @@ Sub- and superscript at 80% in the editor followed on 7 Nov 2026. IME reconversi
 
 It checks, against a release build:
 
-- opening: the title, the editor's text (no BOM, LF), the rendered preview, CRLF and UTF-8 BOM in the status bar, prices left as text, footnotes at the end, a Mermaid fence sent to the diagram helper;
+- opening: the title, the editor's text (no BOM, LF), the rendered preview, CRLF and UTF-8 BOM in the status bar, prices left as text, footnotes at the end, and a Mermaid fence drawn in the preview;
 - editing and saving: the unsaved marker, Save, the saved bytes (BOM and CRLF kept), Undo and Redo from the Edit menu;
 - find (case-insensitive count, Esc back to the editor), the toolbar's preview, editor and outline toggles, the outline's headings;
 - the settings panel from the File menu, a setting saved to `settings.json`, closing the panel;
 - links: a relative `.md` link opening a tab, closing that tab, a link to a PDF refused;
 - accessibility: focusing the editor from UI Automation, the caret followed through the TextPattern, a screen rectangle for the caret, the preview's TextPattern, Tab staying among the settings controls, Esc then Tab leaving the editor, the right arrow and Enter following a preview link, and the underlined menu key N opening a New Tab;
-- closing: held with unsaved changes, immediate when clean, the diagram helper exiting with the window, and a file over 128 MB refused before it is read;
+- closing: held with unsaved changes, immediate when clean, and a file over 128 MB refused before it is read;
 - the document features added on 7 Nov 2026: New Tab and closing its clean tab, a clean document reloading an external write, a second launch opening a tab, Open Recent listing the file just opened, and auto-save writing about a second after typing stops.
 
-On 7 Nov 2026, after the accessibility work: 43 pass, 4 skipped, in about 15 s. The skipped ones need native input this harness does not drive: restoring recovery snapshots and Save As ask in a native dialog, an OS drag session cannot be started, and IME composition cannot be sent as window messages (`buffer.rs` tests the composition path). Ctrl shortcuts are reached through the menus, because GPUI reads modifier keys from the keyboard's state, which window messages do not set. High-contrast colours are unit-tested, because switching the OS theme is not something the harness does.
+On 7 Nov 2026, after the accessibility work: 42 pass, 4 skipped, in about 15 s. The skipped ones need native input this harness does not drive: restoring recovery snapshots and Save As ask in a native dialog, an OS drag session cannot be started, and IME composition cannot be sent as window messages (`buffer.rs` tests the composition path). Ctrl shortcuts are reached through the menus, because GPUI reads modifier keys from the keyboard's state, which window messages do not set. High-contrast colours are unit-tested, because switching the OS theme is not something the harness does.
 
 The first runs found a real difference from mouse use: pressing a link through UI Automation leaves the focus on the link, as a browser does, so the test moves it back to the editor with UI Automation's SetFocus.
 
@@ -306,11 +306,11 @@ The prototype keeps its preview at 8 MB, where the app turns its preview off. Al
 
 Done 7 Nov 2026, with the packaging port in the same change.
 
-- **Layout.** `gpui-prototype/` became the repository root: `src/`, `diagrams/`, `Cargo.toml`, `Cargo.lock` and the app's icon. The previous shell's Rust layer, the TypeScript frontend, Vite, Vitest, `index.html`, the browser stand-in and its dependencies were deleted. The Rust modules the prototype borrowed by path (`files`, `allowlist`, `diagnostics`, `store`, `watcher`) moved into `src/`; `allowlist::link_target` is now used by the preview's link handler rather than by a webview command gate.
+- **Layout.** `gpui-prototype/` became the repository root: `src/`, `Cargo.toml`, `Cargo.lock` and the app's icon. The previous shell's Rust layer, the TypeScript frontend, Vite, Vitest, `index.html`, the browser stand-in and its dependencies were deleted. The Rust modules the prototype borrowed by path (`files`, `allowlist`, `diagnostics`, `store`, `watcher`) moved into `src/`; `allowlist::link_target` is now used by the preview's link handler rather than by a webview command gate.
 - **Data folders.** Settings, recent files and the single-instance lock are Marky's own (`%APPDATA%\dev.marky.editor`), and recovery and the log use `%LOCALAPPDATA%\dev.marky.editor`. The prototype's old settings folder is read once for a first run and never written.
 - **Window.** GPUI now restores and saves `window.json` itself, replacing the previous shell's geometry handling.
-- **Packaging.** `installer/marky.nsi` plus `scripts/build-installer.ps1` build a per-user NSIS installer for both programs. `package-portable.ps1`, `check-size.ps1`, `build-signed.ps1`, `release.ps1`, `winget-manifest.ps1`, `ci.yml`, `bench.yml` and `release.yml` all point at the root crate. `Cargo.toml` is the version source; Node remains only for the notice generator.
-- **Verification.** Clippy, 85 tests, the release build and the e2e smoke test (43 pass, 4 skipped, 0 fail) passed. Release measurements: start 465 ms, memory 16.9 MB, typing p50 1.8 / p95 2.8 ms, preview 30 ms; `marky.exe` 11.35 MB, helper 10.39 MB, installer 6.53 MB, portable ZIP 9.11 MB. The installer is 0.53 MB over its 6 MB target and under its 10 MB hard limit; `DECISION.md` records it.
+- **Packaging.** `installer/marky.nsi` plus `scripts/build-installer.ps1` build a per-user NSIS installer for Marky. `package-portable.ps1`, `check-size.ps1`, `build-signed.ps1`, `release.ps1`, `winget-manifest.ps1`, `ci.yml`, `bench.yml` and `release.yml` all point at the root crate. `Cargo.toml` is the version source; Node remains only for the notice generator.
+- **Verification.** Clippy, 84 tests, the release build and the e2e smoke test (42 pass, 4 skipped, 0 fail) passed with Mermaid in the main program. Release measurements: start 450 ms, memory 17.5 MB, typing p50 1.8 / p95 2.9 ms, preview 31 ms; `marky.exe` 21.07 MB, installer 6.27 MB, portable ZIP 8.78 MB. The installer is 0.27 MB over its 6 MB target and under its 10 MB hard limit; `DECISION.md` records it.
 
 ## References
 

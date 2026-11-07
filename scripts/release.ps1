@@ -2,8 +2,7 @@
 .SYNOPSIS
   Bumps the version, commits, and creates the annotated tag vX.Y.Z. Does not push.
 .DESCRIPTION
-  Cargo.toml is the version source; diagrams/Cargo.toml, package.json and Cargo.lock are kept in
-  sync. CHANGELOG.md's Unreleased section is stamped with the version and date and must not be
+  Cargo.toml is the version source; package.json and Cargo.lock are kept in sync. CHANGELOG.md's Unreleased section is stamped with the version and date and must not be
   empty. Pushing the tag triggers .github/workflows/release.yml, which runs the full CI workflow on
   the tag and publishes the installer it tested as a GitHub Release.
 .EXAMPLE
@@ -31,11 +30,9 @@ try {
   $changelog = ([regex]'(?m)^## \[Unreleased\][^\n]*').Replace($changelog, $stamped, 1)
   Set-Content CHANGELOG.md $changelog -NoNewline
 
-  foreach ($manifest in 'Cargo.toml', 'diagrams\Cargo.toml') {
-    $text = Get-Content $manifest -Raw
-    $text = [regex]::Replace($text, '(?m)^version = "[^"]+"', "version = `"$Version`"", 1)
-    Set-Content $manifest $text -NoNewline
-  }
+  $cargoManifest = Get-Content Cargo.toml -Raw
+  $cargoManifest = [regex]::Replace($cargoManifest, '(?m)^version = "[^"]+"', "version = `"$Version`"", 1)
+  Set-Content Cargo.toml $cargoManifest -NoNewline
   $package = Get-Content package.json -Raw | ConvertFrom-Json
   $package.version = $Version
   $package | ConvertTo-Json -Depth 10 | Set-Content package.json
@@ -44,10 +41,10 @@ try {
   if ($lock.packages -and $lock.packages['']) { $lock.packages[''].version = $Version }
   $lock | ConvertTo-Json -Depth 100 | Set-Content package-lock.json
 
-  cargo update --offline -p marky -p marky-diagrams --quiet
+  cargo update --offline -p marky --quiet
   if ($LASTEXITCODE -ne 0) { throw 'cargo update failed' }
 
-  git add Cargo.toml Cargo.lock diagrams/Cargo.toml package.json package-lock.json CHANGELOG.md
+  git add Cargo.toml Cargo.lock package.json package-lock.json CHANGELOG.md
   git commit --quiet -m "Release $tag"
   git tag -a $tag -m "Marky $Version"
   Write-Host "Created $tag. Publish it with: git push origin HEAD --follow-tags"

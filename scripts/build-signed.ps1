@@ -2,7 +2,7 @@
 .SYNOPSIS
   Release build with code signing, then verifies every signature.
 .DESCRIPTION
-  Signs marky.exe and marky-diagrams.exe before the installer, and the installer after it.
+  Signs marky.exe before the installer, and the installer after it.
   Requires MARKY_SIGN_COMMAND; see scripts/sign.ps1.
   -SkipVerify is for dry runs with a dummy command that does not really sign.
 #>
@@ -15,9 +15,7 @@ Push-Location $root
 try {
   cargo build --release --workspace
   if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
-  foreach ($exe in 'marky.exe', 'marky-diagrams.exe') {
-    & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $root "target\release\$exe")
-  }
+  & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $root 'target\release\marky.exe')
   $installer = & (Join-Path $PSScriptRoot 'build-installer.ps1')
   & (Join-Path $PSScriptRoot 'sign.ps1') $installer
 }
@@ -27,7 +25,6 @@ if ($SkipVerify) { return }
 $version = [regex]::Match((Get-Content (Join-Path $root 'Cargo.toml') -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
 $artifacts = @(
   (Join-Path $root 'target\release\marky.exe'),
-  (Join-Path $root 'target\release\marky-diagrams.exe'),
   (Join-Path $root "dist\Marky_${version}_x64-setup.exe")
 )
 $unsigned = 0

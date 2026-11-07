@@ -10,10 +10,8 @@ description = "A fast Markdown editor for Windows"
 name = "marky"
 path = "src/main.rs"
 
-# The diagram helper shares this target folder, so `cargo build --release --workspace` puts
-# marky-diagrams.exe next to marky.exe, where the app looks for it.
 [workspace]
-members = ["diagrams"]
+members = []
 
 [dependencies]
 # GPUI from Zed's repository, pinned to one commit of `main`: 9a8ab54, 6 Nov 2026. Unlike the
@@ -45,8 +43,10 @@ ratex-parser = "0.1.15"
 ratex-layout = "0.1.15"
 ratex-types = "0.1.15"
 ratex-svg = { version = "0.1.15", features = ["standalone", "embed-fonts"] }
+# Mermaid in pure Rust. All diagram types and the Cytoscape layout; MIT. About 10 MB.
+merman = { version = "0.9.3", default-features = false, features = ["all-diagrams", "svg", "layout-cytoscape"] }
 # Code highlighting in fences, as Zed does it. All MIT. Each grammar is compiled C that adds to the
-# program, so each is a feature (below) and the default set fits the 8 MB budget.
+# program, so each is a feature (below) and the default set fits the program budget.
 tree-sitter = "0.27"
 tree-sitter-highlight = "0.27"
 tree-sitter-bash = { version = "0.25", optional = true }

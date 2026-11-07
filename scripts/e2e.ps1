@@ -210,8 +210,8 @@ try {
   Write-Check 'status bar shows CRLF and UTF-8 BOM' ([bool](Find $null 'CRLF') -and [bool](Find $null 'UTF-8 BOM'))
   Write-Check 'prices with $ stay plain text' ([bool](Find-Like 'costs \$5 and \$10 stay text'))
   Write-Check 'footnotes are gathered at the end' ([bool](Find-Like '^Footnote 1: The footnote text'))
-  $helper = Wait-Until { Get-CimInstance Win32_Process -Filter "ParentProcessId=$($app.Id) AND Name='marky-diagrams.exe'" } 30
-  Write-Check 'mermaid diagram goes to the diagram helper' ([bool]$helper -and [bool](Find $T::Image 'Mermaid diagram'))
+  $diagram = Wait-Until { Find $T::Image 'Mermaid diagram' } 30
+  Write-Check 'mermaid diagram is drawn in the preview' ([bool]$diagram)
 
   [E2e.Win]::Type($window, 'unsaved ')
   Write-Check 'dirty marker after typing' ((Wait-Until { (Title-Of $app) -eq 'fixture.md • - Marky' }) -as [bool]) (Title-Of $app)
@@ -307,11 +307,8 @@ try {
   $app = Start-Marky $fixture
   $window = Window-Of $app
   $ready = Wait-Until { (Title-Of $app) -eq 'fixture.md - Marky' } 30
-  $helper = Wait-Until { Get-CimInstance Win32_Process -Filter "ParentProcessId=$($app.Id) AND Name='marky-diagrams.exe'" } 30
   if ($ready) { [E2e.Win]::Close($window) }
   Write-Check 'clean window closes without a prompt' ($ready -and $app.WaitForExit(10000))
-  $helperGone = $helper -and (Wait-Until { -not (Get-Process -Id $helper.ProcessId -ErrorAction SilentlyContinue) } 10)
-  Write-Check 'the diagram helper exits with the app' ([bool]$helperGone)
 
   # ----- Run C: files over the size limit are refused before they are read -----
 

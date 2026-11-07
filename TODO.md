@@ -6,8 +6,8 @@ Remaining work after the GPUI migration (`docs/gpui-migration.md`), for the next
 
 Done on 7 Nov 2026:
 
-- [x] Installer that ships both programs (`marky.exe`, `marky-diagrams.exe`), signed through `scripts/sign.ps1`, plus a portable ZIP. `installer/marky.nsi` and `scripts/build-installer.ps1` build it; the installer is 6.53 MB and the ZIP 9.11 MB.
-- [x] CI for the GPUI build: both release binaries, clippy, unit tests (the contrast test included), notices, e2e, installer, program-size budget and the portable ZIP.
+- [x] Installer for `marky.exe`, signed through `scripts/sign.ps1`, plus a portable ZIP. `installer/marky.nsi` and `scripts/build-installer.ps1` build it; the installer is 6.27 MB and the ZIP 8.78 MB.
+- [x] CI for the GPUI build: the release program, clippy, unit tests (the contrast test included), notices, e2e, installer, program-size budget and the portable ZIP.
 - [x] Remove the previous shell: its Rust folder, the TypeScript frontend, Vite, Vitest, the browser mode and `npm run dev` are gone. The Rust file rules and their tests moved to `src/`; release scripts use the new installer.
 
 ## Performance

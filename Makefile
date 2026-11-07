@@ -13,7 +13,7 @@ all: build
 
 help:
 	@echo Marky
-	@echo   make build              Release build of marky.exe and marky-diagrams.exe
+	@echo   make build              Release build of marky.exe
 	@echo   make run [FILE=...]     Run the release build on a document
 	@echo   make test               Run the Rust tests
 	@echo   make clippy             Run clippy with warnings denied
@@ -34,7 +34,6 @@ help:
 build:
 	$(CARGO) build --release --workspace
 	@echo Program: $(CURDIR)/target/release/marky.exe
-	@echo Helper:  $(CURDIR)/target/release/marky-diagrams.exe
 
 run:
 	$(CARGO) run --release -- $(FILE)
