@@ -1,20 +1,23 @@
 <#
 .SYNOPSIS
-  Fails when the release artifacts exceed the PRD hard limits (release-blocking budgets).
+  Fails when the release artifacts exceed the hard limits (release-blocking budgets).
 .EXAMPLE
-  npx tauri build; ./scripts/check-size.ps1
+  cargo build --release --workspace; ./scripts/build-installer.ps1; ./scripts/check-size.ps1
 #>
 $ErrorActionPreference = 'Stop'
-$release = Join-Path (Split-Path $PSScriptRoot -Parent) 'src-tauri\target\release'
+$root = Split-Path $PSScriptRoot -Parent
+$release = Join-Path $root 'target\release'
+$version = [regex]::Match((Get-Content (Join-Path $root 'Cargo.toml') -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
 
 $budgets = @(
-  @{ Name = 'App exe'; Path = Join-Path $release 'marky.exe'; LimitMb = 12 },
-  @{ Name = 'Installer'; Path = (Get-ChildItem (Join-Path $release 'bundle\nsis\*.exe') | Select-Object -First 1).FullName; LimitMb = 10 }
+  @{ Name = 'Marky program'; Path = (Join-Path $release 'marky.exe'); LimitMb = 12 },
+  @{ Name = 'Diagram helper'; Path = (Join-Path $release 'marky-diagrams.exe'); LimitMb = 12 },
+  @{ Name = 'Installer'; Path = (Join-Path $root "dist\Marky_${version}_x64-setup.exe"); LimitMb = 10 }
 )
 
 $overBudget = 0
 foreach ($budget in $budgets) {
-  if (-not $budget.Path -or -not (Test-Path $budget.Path)) { throw "$($budget.Name) not found; run a full 'npx tauri build' first." }
+  if (-not (Test-Path $budget.Path)) { throw "$($budget.Name) not found; run a release build and scripts/build-installer.ps1 first." }
   $sizeMb = (Get-Item $budget.Path).Length / 1MB
   $ok = $sizeMb -le $budget.LimitMb
   if (-not $ok) { $overBudget++ }

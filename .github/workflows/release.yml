@@ -19,14 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Tag matches package.json version
+      - name: Tag matches Cargo.toml version
         id: version
         shell: pwsh
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          if ("v$version" -ne $env:RELEASE_TAG) { throw "Tag $env:RELEASE_TAG does not match package.json version $version" }
+          $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
+          if ("v$version" -ne $env:RELEASE_TAG) { throw "Tag $env:RELEASE_TAG does not match Cargo.toml version $version" }
           "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: CHANGELOG.md has a section for this version

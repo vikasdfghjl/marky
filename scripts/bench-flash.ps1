@@ -4,16 +4,16 @@
 .DESCRIPTION
   Launches the release build repeatedly and samples one pixel inside the window as fast as it can;
   a pixel read costs microseconds, so the app is not slowed. Needs a visible desktop (not for CI).
-  With Windows in dark mode the expected result is "white for 0 ms": window.rs creates the window
-  with the theme's background colour. A config-created window showed about 650 ms of white.
-  Run it with the theme setting on System (or Dark) and Windows in dark mode.
+   With Windows in dark mode the expected result is "white for 0 ms": the GPUI window is created
+   with the theme's background colour. Run it with the theme setting on System (or Dark) and
+   Windows in dark mode.
 .EXAMPLE
-  npx tauri build --no-bundle; ./scripts/bench-flash.ps1
+  cargo build --release --workspace; ./scripts/bench-flash.ps1
 #>
 param(
   [string]$File = (Join-Path (Split-Path $PSScriptRoot -Parent) 'README.md'),
   [int]$Runs = 5,
-  [string]$Exe = (Join-Path (Split-Path $PSScriptRoot -Parent) 'src-tauri\target\release\marky.exe')
+  [string]$Exe = (Join-Path (Split-Path $PSScriptRoot -Parent) 'target\release\marky.exe')
 )
 if (Get-Process marky -ErrorAction SilentlyContinue) { throw 'Close all Marky windows first.' }
 Add-Type -TypeDefinition @'

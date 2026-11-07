@@ -6,7 +6,7 @@
   -InstallerUrl, and writes manifests\<letter>\<Publisher>\<Package>\<Version>\ ready
   for a pull request to microsoft/winget-pkgs. Validates them with `winget validate`.
 .EXAMPLE
-  ./scripts/winget-manifest.ps1 -InstallerUrl https://github.com/<owner>/marky/releases/download/v0.1.0/Marky_0.1.0_x64-setup.exe
+  ./scripts/winget-manifest.ps1 -InstallerUrl https://github.com/<owner>/marky/releases/download/v0.3.3/Marky_0.3.3_x64-setup.exe
 #>
 param(
   [Parameter(Mandatory)][string]$InstallerUrl,
@@ -20,10 +20,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $schema = '1.12.0'
 
-$version = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
-$installer = Get-ChildItem (Join-Path $root "src-tauri\target\release\bundle\nsis\*_${version}_x64-setup.exe") | Select-Object -First 1
-if (-not $installer) { throw "No NSIS installer for version $version; run a full 'npx tauri build' first." }
-$sha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash
+$version = [regex]::Match((Get-Content (Join-Path $root 'Cargo.toml') -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
+$installer = Join-Path $root "dist\Marky_${version}_x64-setup.exe"
+if (-not (Test-Path $installer)) { throw "No installer for version $version; run scripts/build-installer.ps1 first." }
+$sha256 = (Get-FileHash $installer -Algorithm SHA256).Hash
 
 $publisherPart, $packagePart = $PackageIdentifier.Split('.', 2)
 $dir = Join-Path $OutDir "manifests\$($publisherPart.Substring(0,1).ToLower())\$publisherPart\$packagePart\$version"
@@ -39,7 +39,7 @@ ManifestType: version
 ManifestVersion: $schema
 "@)
 
-# Tauri's NSIS installer is per-user (no admin prompt) and supports /S for silent installs.
+# The NSIS installer is per-user (no admin prompt) and supports /S for silent installs.
 Set-Content (Join-Path $dir "$PackageIdentifier.installer.yaml") ((& $header 'installer') + @"
 PackageIdentifier: $PackageIdentifier
 PackageVersion: $version
@@ -69,12 +69,12 @@ Publisher: $Publisher
 PackageName: Marky
 $($packageUrlLine)License: $License
 ShortDescription: A fast, lightweight Markdown editor with live preview.
-Description: Marky opens Markdown files in well under a second, edits them with syntax highlighting and a live side-by-side preview, and idles around 100 MB of RAM by reusing the WebView2 runtime built into Windows.
+Description: Marky opens Markdown files in well under a second, edits them with syntax highlighting and a live side-by-side preview, and uses about 16 MB of RAM.
 Tags:
 - markdown
 - editor
 - text-editor
-- tauri
+- rust
 ManifestType: defaultLocale
 ManifestVersion: $schema
 "@)

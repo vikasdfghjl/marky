@@ -1,42 +1,44 @@
 # Marky
 
-Marky is a Markdown editor for Windows. It pairs a fast text editor with a live preview, and it uses the Windows WebView2 runtime instead of bundling a browser.
+Marky is a fast Markdown editor for Windows, written in Rust with [GPUI](https://gpui.rs/). It has no WebView2 or bundled browser: the window, editor, preview and menus are drawn with DirectX 11, and a typical document idles around 17 MB.
 
 **v0.3.3** · [Download a release](https://github.com/vikasdfghjl/marky/releases) · [Changelog](CHANGELOG.md) · [Contributor guide](AGENTS.md)
 
 ## Features
 
-- **Editing:** syntax highlighting, find and replace, word wrap, up to 20 tabs with separate undo histories, drag-and-drop, opening from Explorer or the command line, up to 10 recent files, and a remembered window size and position. Saves keep the file's encoding and line endings.
-- **Preview:** scrolling stays in step with the editor, and only the changed part is redrawn. Tables, task lists, strikethrough, autolinks, footnotes, definition lists, abbreviations, subscript, superscript, marked text, optional curly quotes and dashes, Mermaid diagrams, and KaTeX math.
-- **File safety:** a save does not leave a half-written file. Prompts before discarding unsaved changes, reload or keep when the file changes on disk, automatic saving, and crash recovery every 30 seconds. Files over 128 MB cannot be opened.
-- **Privacy:** Markdown HTML stays disabled. Remote images do not load. Web and email links open outside the app; relative links are limited to Markdown and text files you opened.
-- **Interface:** light, dark, or system theme; native menus; outline; reading view; and a status bar with line, word, character, encoding, and line-ending details.
+- **Editing:** syntax highlighting, find and replace, word wrap, tabs with separate undo histories, drag and drop, opening from Explorer or the command line, ten recent files, and a remembered window size and position. Saves keep the file's BOM and line endings.
+- **Preview:** scrolling stays in step with the editor, and only changed blocks are replaced. Tables, task lists, strikethrough, autolinks, footnotes, definition lists, abbreviations, subscript, superscript, marked text, curly quotes and dashes, Mermaid diagrams, and math.
+- **File safety:** atomic saves, prompts before discarding unsaved changes, reload or keep when the file changes on disk, auto-save, and crash recovery every 30 seconds. Files over 128 MB are refused before they are read.
+- **Privacy:** Markdown HTML is not rendered. Remote images do not load. Web and mail links open outside the app; relative links open only Markdown and text files next to the document.
+- **Interface:** light, dark or system theme, high-contrast support, drawn menus, outline, reading view, and a status bar with line, word, character, encoding and line-ending details.
+- **Accessibility:** the editor exposes its text and caret to Windows UI Automation; the preview can be read by character, word and line; menus have underlined access keys; the settings panel keeps keyboard focus; links are one preview tab stop rather than many.
+
+Marky ships as two programs: `marky.exe` and `marky-diagrams.exe`. The diagram helper is started only when a document contains a Mermaid fence, which keeps most of Mermaid's 10 MB out of the main program and out of its idle memory.
 
 ## Install
 
-Download the Windows installer (`Marky_<version>_x64-setup.exe`) or portable ZIP from [Releases](https://github.com/vikasdfghjl/marky/releases). The installer runs per-user and does not need administrator access. Windows 10/11 requires the WebView2 Runtime; the installer can fetch it if needed. Releases are unsigned. If SmartScreen appears, choose **More info** → **Run anyway**.
+Download `Marky_<version>_x64-setup.exe` or `marky-<version>-portable-x64.zip` from [Releases](https://github.com/vikasdfghjl/marky/releases). The installer is per-user, needs no administrator access, and installs under `%LOCALAPPDATA%\Programs\Marky`. It registers Marky with **Open with** for `.md`, `.markdown` and `.txt` without taking over the default. Releases are unsigned; if SmartScreen appears, choose **More info** → **Run anyway**.
 
-Marky keeps its log at `%LOCALAPPDATA%\dev.marky.editor\marky.log` and settings under `%APPDATA%\dev.marky.editor\`. The log stays on your machine and can include file paths from errors, but not document text.
+Settings and recent files live in `%APPDATA%\dev.marky.editor\`; recovery snapshots and `marky.log` live in `%LOCALAPPDATA%\dev.marky.editor\`. The log stays on your machine and can include file paths from errors, but not document text.
 
 ## Benchmarks
 
-Release-build measurements on an i5-9300H with 16 GB RAM, using a 5 KB sample (`scripts/fixtures/typical.md`). Values are medians of 5–7 runs. Size, startup, idle memory, and preview are from **9 Oct 2026**; the other rows are from **29 Sep 2026**. Budgets and measurement notes are in the [contributor guide](AGENTS.md).
+Release-build measurements on an i5-9300H with 16 GB RAM, using `scripts/fixtures/typical.md` (5 KB). Values are from **7 Nov 2026**, medians of five runs unless noted. Budgets are release-blocking; the measurement notes are in the [contributor guide](AGENTS.md).
 
 | Metric | Measured | Target | Hard limit |
 | --- | ---: | ---: | ---: |
-| Installer | 4.46 MB | ≤ 6 MB | 10 MB |
-| Program | 6.71 MB | ≤ 8 MB | 12 MB |
-| Window visible in the theme colour | 187 ms | ≤ 300 ms | 500 ms |
-| Dark-mode white flash | 0 ms | 0 ms | 0 ms |
-| Startup, ready to edit | 815 ms | ≤ 900 ms | 1,000 ms |
-| Typing | 11 ms | ≤ 20 ms | 33 ms |
-| Preview after typing stops | 42 ms | ≤ 200 ms | 400 ms |
-| Memory while in use | 99.6 MB | ≤ 105 MB | 120 MB |
-| Memory after 30 seconds idle | 75.3 MB | ≤ 85 MB | 100 MB |
-| First keystroke after idle | 35–38 ms | ≤ 60 ms | 100 ms |
-| Idle CPU | 0.25% | ≈ 0% | < 0.5% |
+| Installer | 6.53 MB | ≤ 6 MB | 10 MB |
+| Program (`marky.exe`) | 11.35 MB | ≤ 8 MB | 12 MB |
+| Diagram helper (`marky-diagrams.exe`) | 10.39 MB | — | 12 MB |
+| Portable ZIP | 9.11 MB | — | — |
+| Startup, ready to edit | 465 ms | ≤ 900 ms | 1,000 ms |
+| Typing | 1.8 ms p50 / 2.8 ms p95 | ≤ 20 ms | 33 ms |
+| Preview after typing stops | 30 ms | ≤ 200 ms | 400 ms |
+| Memory, 10 s after launch | 16.9 MB | ≤ 35 MB | 60 MB |
 
-On a release build, run `npx tauri build --no-bundle`, then `scripts/bench.ps1`. For large files, run `scripts/bench-large.ps1`. Preview turns off automatically above 5 MB.
+The program is over its 8 MB target and under the 12 MB hard limit; the accepted reasons are in [DECISION.md](DECISION.md). The installer is 0.53 MB over its 6 MB target because it carries both programs, and remains under the 10 MB hard limit.
+
+Large-file numbers from the migration prototype (`scripts/bench-large.ps1`, 7 Nov 2026) are in [docs/gpui-migration.md](docs/gpui-migration.md). Re-measure them before changing preview or editor layout.
 
 ## Keyboard shortcuts
 
@@ -55,39 +57,48 @@ On a release build, run `npx tauri build --no-bundle`, then `scripts/bench.ps1`.
 | Alt+Z | Toggle word wrap |
 | Ctrl+, | Settings |
 | Ctrl+F / Ctrl+H | Find / find and replace |
+| F3 / Shift+F3 | Find next / previous |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
+| Alt+F, Alt+E, Alt+V, F10 | Open File, Edit or View menu |
 | Esc, then Tab | Move focus out of the editor; Tab normally indents |
-| Ctrl+M | Toggle whether Tab indents or moves focus |
 
-## Accessibility
-
-The app works from the keyboard, including Tab, arrow keys, Home, End, and Delete. The preview can be focused for scrolling, and the editor exposes its text to assistive technology. Text contrast meets WCAG 2.2 AA. The status bar is not announced as it changes.
+The preview is one tab stop. With it focused, Left/Right select a link, Enter follows it, Up/Down and Page Up/Page Down scroll, and Home/End go to the top or bottom.
 
 ## Development
 
-**Requirements:** Windows, Node.js 20+, Rust with the MSVC toolchain, C++ build tools, and WebView2.
+**Requirements:** Windows 10/11, Rust with the MSVC toolchain, and the C++ build tools. NSIS is needed only to build the installer; CI installs it with Chocolatey. Node.js is needed only to regenerate third-party notices.
 
-Built with [Tauri 2](https://v2.tauri.app/) and [CodeMirror 6](https://codemirror.net/). TypeScript runs the interface; Rust handles files, dialogs, and Windows integration.
+Built with [GPUI](https://gpui.rs/) from Zed's repository, [pulldown-cmark](https://docs.rs/pulldown-cmark), [ropey](https://docs.rs/ropey), [RaTeX](https://github.com/erweixin/RaTeX), [merman](https://github.com/Latias94/merman) and tree-sitter.
 
 ```bash
-npm install
-npm run tauri dev    # Run the native app
-npm run dev          # Run in a browser at localhost:1420
-npm run check        # Type checks, unit tests, shortcut checks, and Rust checks
+cargo run --release -- scripts/fixtures/typical.md
+cargo run --release -- path\to\file.md
+```
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --release --workspace
+./scripts/e2e.ps1
 ```
 
 | Command | Purpose |
 | --- | --- |
-| `npm run build` | Type-check and build the frontend |
-| `npm run tauri build` | Build the Windows installer |
-| `npm run test` | Run Vitest (`src/**/*.test.ts`) |
-| `npx tsx scripts/third-party-notices.ts` | Regenerate notices after dependency changes |
-| `scripts/e2e.ps1` | Run the smoke test (build the release app first) |
-| `scripts/check-size.ps1` | Check executable and installer size budgets |
-| `scripts/bench.ps1` | Measure startup, typing, preview, and memory |
+| `./scripts/build-installer.ps1` | Build the per-user NSIS installer after a release build |
+| `./scripts/package-portable.ps1` | Build the portable ZIP |
+| `./scripts/check-size.ps1` | Enforce program, helper and installer size budgets |
+| `./scripts/bench.ps1` | Measure startup, typing, preview and memory |
+| `./scripts/bench-large.ps1` | Measure 100 KB to 8 MB documents |
+| `npm run notices` | Regenerate notices after dependency changes |
 
-Browser mode keeps files in memory. Dialogs, file watching, and local images in the preview need the native app.
+`scripts/e2e.ps1` drives the release build through Windows UI Automation and uses temporary `APPDATA`/`LOCALAPPDATA`, so it does not read or change your settings.
+
+## Known limitations
+
+- IME reconversion is blocked upstream: GPUI's Windows backend at the pinned commit does not handle `WM_IME_REQUEST`. The app answers GPUI's point-to-character request, so the remaining fix belongs in GPUI.
+- Menus are drawn in the window, not native Windows menus.
+- Releases are unsigned until a signing command is configured.
 
 ## License
 
-[MIT](LICENSE). [Third-party notices](THIRD_PARTY_NOTICES.txt) ship with the app.
+[MIT](LICENSE). [Third-party notices](THIRD_PARTY_NOTICES.txt) ship with the installer and portable ZIP.
