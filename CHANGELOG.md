@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-08
+
 ### Changed
 
 - The open file's path, and any open or save error, now show in the status bar at the bottom of the window instead of a row above the editor.
