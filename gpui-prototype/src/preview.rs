@@ -2,13 +2,15 @@
 //! lists, code, tables, footnotes, definition lists, images, display math and Mermaid fences, with
 //! inline emphasis, strikethrough, code, links, `~sub~`, `^sup^` and `==mark==`.
 //! Math is TeX for RaTeX to lay out (math.rs): inline and display formulas, and math fences.
-//! A diagram is the Mermaid source: this window does not run Mermaid.
+//! Diagrams are Mermaid fences for the diagram helper (diagrams.rs). Abbreviations, bare links,
+//! the typographer and the app's math rule for `$…$` come from extras.rs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
+use crate::extras::{self, Abbreviations};
 use crate::syntax::{self, Span};
 
 /// The syntax the app renders that pulldown-cmark knows: CommonMark, GFM tables, task lists and
@@ -43,6 +45,8 @@ pub enum Kind {
     /// A definition list's term, and one of its definitions.
     Term,
     Definition,
+    /// A thematic break (`---`), and the rule markdown-it puts above the footnotes.
+    Rule,
     /// A paragraph that is only an image. The path or URL is in `Block::src`, the alt text in `text`.
     Image,
 }
@@ -73,6 +77,8 @@ pub struct RunStyle {
     /// The run is TeX: inline `$…$`, or `$$…$$` (display) inside a paragraph.
     pub math: bool,
     pub display: bool,
+    /// An abbreviation's title (`*[HTML]: Hyper Text Markup Language`).
+    pub abbr: Option<Arc<str>>,
     /// The link's destination, as written: a URL, a relative path, or `#fn:N` for a footnote reference.
     pub link: Option<Arc<str>>,
 }
@@ -135,6 +141,18 @@ struct Parse {
     footnote: Option<u32>,
     /// The image being read: its destination, and where its alt text starts in `runs`.
     image: Option<(String, usize)>,
+    /// Footnote numbers that something refers to; markdown-it shows only those footnotes.
+    referenced: HashSet<u32>,
+    abbreviations: Abbreviations,
+    typographer: bool,
+    /// The open paragraph is only abbreviation definitions, which the app does not show.
+    hidden: bool,
+}
+
+/// What the preview's parse depends on besides the text: the app's `typographer` setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Flavor {
+    pub typographer: bool,
 }
 
 /// Line numbers for block starts. Blocks start in document order, so each lookup counts only the
@@ -158,7 +176,19 @@ impl LineCounter {
     }
 }
 
+/// The blocks without smart punctuation, for tests.
+#[cfg(test)]
 pub fn blocks(markdown: &str) -> Vec<Block> {
+    blocks_with(markdown, Flavor::default())
+}
+
+pub fn blocks_with(markdown: &str, flavor: Flavor) -> Vec<Block> {
+    let mut options = options();
+    // Quotes, dashes and ellipses; extras::replacements adds (c), (r), (tm) and +-.
+    if flavor.typographer {
+        options |= Options::ENABLE_SMART_PUNCTUATION;
+    }
+    let abbreviations = if markdown.contains("*[") { extras::collect_abbreviations(markdown) } else { Abbreviations::default() };
     let mut out = Vec::new();
     let mut parse = Parse {
         open: None,
@@ -173,13 +203,24 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
         footnotes: HashMap::new(),
         footnote: None,
         image: None,
+        referenced: HashSet::new(),
+        abbreviations,
+        typographer: flavor.typographer,
+        hidden: false,
     };
 
-    for (event, range) in Parser::new_ext(markdown, options()).into_offset_iter() {
+    for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
         match event {
             Event::Start(Tag::Heading { level, .. }) => parse.begin(Open::Heading(level as u8), markdown, range.start, &mut out),
             Event::Start(Tag::Paragraph) if !parse.open.is_some_and(Open::holds_paragraphs) => {
                 parse.begin(Open::Paragraph, markdown, range.start, &mut out);
+                let source = &markdown[range.clone()];
+                parse.hidden = !parse.abbreviations.is_empty() && extras::only_definitions(source);
+            }
+            Event::Rule => {
+                parse.finish(&mut out);
+                let line = parse.lines.line_at(markdown, range.start);
+                out.push(Block { kind: Kind::Rule, text: String::new(), runs: Vec::new(), line, table: None, code: None, src: None });
             }
             Event::Start(Tag::BlockQuote(_)) => parse.quote += 1,
             Event::End(TagEnd::BlockQuote(_)) => parse.quote = parse.quote.saturating_sub(1),
@@ -229,6 +270,7 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
             Event::End(TagEnd::Image) => parse.end_image(),
             Event::FootnoteReference(label) if parse.open.is_some() => {
                 let number = parse.footnote_number(&label);
+                parse.referenced.insert(number);
                 let style = RunStyle { sup: true, link: Some(Arc::from(format!("#fn:{number}"))), ..RunStyle::default() };
                 parse.runs.push(Run { text: format!("[{number}]"), style });
             }
@@ -254,7 +296,8 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
             }
             Event::Start(Tag::TableCell) => parse.runs.clear(),
             Event::End(TagEnd::TableCell) => {
-                let cell = inline_extensions(std::mem::take(&mut parse.runs));
+                let runs = std::mem::take(&mut parse.runs);
+                let cell = parse.inline(runs);
                 if let Some(row) = parse.table.as_mut().and_then(|table| table.rows.last_mut()) {
                     row.push(cell);
                 }
@@ -263,10 +306,17 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
                 parse.finish(&mut out);
             }
             Event::End(TagEnd::Paragraph) => {
-                // A paragraph that is only `$$…$$` is a display formula block, as in the app.
-                if let [run] = parse.runs.as_slice() {
-                    if run.style.display && matches!(parse.open, Some(Open::Paragraph)) {
-                        parse.runs = vec![Run { text: run.text.clone(), style: RunStyle::default() }];
+                // A paragraph that is only `$$…$$` is a display formula block, as in the app, also
+                // when pulldown-cmark did not take it as math (the app's rule does not need
+                // balanced braces, so broken TeX shows its error).
+                if matches!(parse.open, Some(Open::Paragraph)) {
+                    let tex = match parse.runs.as_slice() {
+                        [run] if run.style.display => Some(run.text.clone()),
+                        runs if runs.iter().all(|run| run.style == RunStyle::default()) => extras::display_math(&plain_text(runs)).map(str::to_string),
+                        _ => None,
+                    };
+                    if let Some(tex) = tex {
+                        parse.runs = vec![Run { text: tex, style: RunStyle::default() }];
                         parse.open = Some(Open::Math);
                     }
                 }
@@ -284,7 +334,38 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
             _ => {}
         }
     }
-    out
+    parse.finish(&mut out);
+    gather_footnotes(out, &parse.referenced)
+}
+
+/// markdown-it-footnote shows the footnotes at the end of the document, under a rule, in the order
+/// of their numbers, each ending with a link back to its reference; footnotes nothing refers to are
+/// left out. Their blocks keep their own source lines, so the editor can still find them.
+fn gather_footnotes(blocks: Vec<Block>, referenced: &HashSet<u32>) -> Vec<Block> {
+    if !blocks.iter().any(|block| matches!(block.kind, Kind::Footnote(_))) {
+        return blocks;
+    }
+    let (mut notes, mut body): (Vec<Block>, Vec<Block>) = blocks.into_iter().partition(|block| matches!(block.kind, Kind::Footnote(_)));
+    notes.retain(|block| matches!(block.kind, Kind::Footnote(number) if referenced.contains(&number)));
+    if notes.is_empty() {
+        return body;
+    }
+    notes.sort_by_key(|block| match block.kind {
+        Kind::Footnote(number) => number,
+        _ => 0,
+    });
+    for index in 0..notes.len() {
+        let Kind::Footnote(number) = notes[index].kind else { continue };
+        let last_of_note = notes.get(index + 1).is_none_or(|next| next.kind != notes[index].kind);
+        if last_of_note {
+            let back = RunStyle { link: Some(Arc::from(format!("#fnref:{number}"))), ..RunStyle::default() };
+            notes[index].runs.push(Run { text: " ↩".to_string(), style: back });
+        }
+    }
+    let line = notes[0].line;
+    body.push(Block { kind: Kind::Rule, text: String::new(), runs: Vec::new(), line, table: None, code: None, src: None });
+    body.extend(notes);
+    body
 }
 
 impl Parse {
@@ -295,6 +376,13 @@ impl Parse {
         self.open = Some(open);
         self.runs.clear();
         self.line = self.lines.line_at(markdown, byte);
+    }
+
+    /// Everything that happens to a block's text after pulldown-cmark: the app's `$…$` rule, then
+    /// `~sub~`, `^sup^` and `==mark==`, then bare links, the typographer and abbreviations.
+    fn inline(&self, runs: Vec<Run>) -> Vec<Run> {
+        let runs = inline_extensions(extras::apply_math(runs));
+        extras::apply_text(runs, &self.abbreviations, self.typographer)
     }
 
     fn footnote_number(&mut self, label: &str) -> u32 {
@@ -318,7 +406,9 @@ impl Parse {
         }
         let mut style = self.style.clone();
         style.code = code;
-        if let Some(last) = self.runs.last_mut() {
+        // An image's alt text starts a run of its own, so `end_image` finds all of it.
+        let image_starts = self.image.as_ref().is_some_and(|(_, start)| *start == self.runs.len());
+        if let Some(last) = self.runs.last_mut().filter(|_| !image_starts) {
             if last.style == style {
                 last.text.push_str(text);
                 return;
@@ -345,8 +435,11 @@ impl Parse {
             return;
         }
         let mut runs = std::mem::take(&mut self.runs);
+        if std::mem::take(&mut self.hidden) {
+            return;
+        }
         if !matches!(open, Open::Code | Open::Math | Open::Diagram) {
-            runs = inline_extensions(runs);
+            runs = self.inline(runs);
         }
         // A paragraph that is only an image is drawn as the image.
         if let (Open::Paragraph, [run]) = (open, runs.as_slice()) {
@@ -662,6 +755,10 @@ mod tests {
         assert_eq!(blocks[1].src.as_deref(), Some("img/flow.png"));
         assert_eq!(blocks[1].text, "Diagram");
         assert_eq!(blocks[2].kind, Kind::Paragraph);
+        // An image inside a paragraph keeps its own run, with its alt text and path.
+        let image = blocks[2].runs.iter().find(|run| run.style.link.as_deref() == Some("image:y.png")).unwrap();
+        assert_eq!(image.text, "x");
+        assert_eq!(plain_text(&blocks[2].runs), "Inline x image.");
     }
 
     #[test]
@@ -724,5 +821,43 @@ mod tests {
         assert_eq!(block_at_line(&blocks, 1), 0);
         assert_eq!(block_at_line(&blocks, 4), 1);
         assert_eq!(block_at_line(&blocks, 5), 2);
+    }
+
+    #[test]
+    fn footnotes_are_gathered_at_the_end_under_a_rule() {
+        let markdown = "One[^b] and two[^a].\n\n[^a]: First note.\n\nMiddle.\n\n[^b]: Second note.\n\n[^unused]: Never shown.\n";
+        let blocks = blocks(markdown);
+        let kinds: Vec<Kind> = blocks.iter().map(|block| block.kind).collect();
+        assert_eq!(kinds, vec![Kind::Paragraph, Kind::Paragraph, Kind::Rule, Kind::Footnote(1), Kind::Footnote(2)]);
+        // Numbered by first reference, each with a link back to it, at its own source line.
+        assert_eq!(blocks[3].text, "Second note.");
+        assert_eq!(blocks[3].line, 7);
+        assert_eq!(blocks[3].runs.last().and_then(|run| run.style.link.as_deref()), Some("#fnref:1"));
+    }
+
+    #[test]
+    fn rules_abbreviations_and_display_math_follow_the_app() {
+        let markdown = "Above\n\n---\n\n*[HTML]: Hyper Text Markup Language\n\nHTML here.\n\n$$\n\\frac{1}{\n$$\n";
+        let blocks = blocks(markdown);
+        let kinds: Vec<Kind> = blocks.iter().map(|block| block.kind).collect();
+        assert_eq!(kinds, vec![Kind::Paragraph, Kind::Rule, Kind::Paragraph, Kind::Math]);
+        assert_eq!(blocks[2].runs[0].style.abbr.as_deref(), Some("Hyper Text Markup Language"));
+        assert_eq!(blocks[3].text, r"\frac{1}{");
+    }
+
+    #[test]
+    fn the_typographer_setting_changes_punctuation() {
+        let plain = blocks_with("\"Quotes\" -- and (c) 2026...", Flavor { typographer: false });
+        let smart = blocks_with("\"Quotes\" -- and (c) 2026...", Flavor { typographer: true });
+        assert_eq!(plain[0].text, "\"Quotes\" -- and (c) 2026...");
+        assert_eq!(smart[0].text, "“Quotes” – and © 2026…");
+    }
+
+    #[test]
+    fn bare_links_and_unbalanced_inline_math_become_runs() {
+        let blocks = blocks(r"Visit https://example.com today, $\frac{1}{$ stays math.");
+        let runs = &blocks[0].runs;
+        assert!(runs.iter().any(|run| run.style.link.as_deref() == Some("https://example.com")));
+        assert!(runs.iter().any(|run| run.style.math && run.text == r"\frac{1}{"));
     }
 }

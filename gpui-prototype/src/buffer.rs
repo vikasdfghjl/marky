@@ -352,10 +352,15 @@ fn joins_group(last: &Transaction, edit: &Edit, kind: EditKind, now: Instant) ->
     }
 }
 
-/// Every match of `query` in `text`, ASCII letters compared without case. Matches do not overlap.
+/// Every match of `query` in `text`, without case, as CodeMirror's search compares (`toLowerCase`
+/// on both sides, so `É` finds `é` and `Straße` finds `STRASSE` only where lower-casing makes them
+/// equal). Matches do not overlap and, like the find field, never cross a line.
 pub fn find_all(text: &str, query: &str) -> Vec<Range<usize>> {
     if query.is_empty() {
         return Vec::new();
+    }
+    if !query.is_ascii() {
+        return find_all_unicode(text, &query.to_lowercase());
     }
     let haystack = text.as_bytes();
     let needle = query.as_bytes();
@@ -372,9 +377,53 @@ pub fn find_all(text: &str, query: &str) -> Vec<Range<usize>> {
     matches
 }
 
+/// The non-ASCII query path. A lower-cased non-ASCII query cannot match a line of ASCII text, so
+/// only lines with other characters are lower-cased, each with a map from its lower-cased bytes back
+/// to the original ones. A match must start and end on whole original characters.
+fn find_all_unicode(text: &str, folded_query: &str) -> Vec<Range<usize>> {
+    let mut matches = Vec::new();
+    let mut line_start = 0;
+    for line in text.split_inclusive('\n') {
+        if !line.is_ascii() {
+            let mut folded = String::with_capacity(line.len());
+            // origin[i]: where in `line` the character that produced folded byte i starts.
+            let mut origin = Vec::with_capacity(line.len() + 1);
+            for (at, ch) in line.char_indices() {
+                for lower in ch.to_lowercase() {
+                    folded.push(lower);
+                    origin.resize(folded.len(), at);
+                }
+            }
+            origin.push(line.len());
+            let starts_char = |i: usize| i == 0 || i == folded.len() || origin[i] != origin[i - 1];
+            let mut from = 0;
+            while let Some(found) = folded[from..].find(folded_query) {
+                let start = from + found;
+                let end = start + folded_query.len();
+                if starts_char(start) && starts_char(end) {
+                    matches.push(line_start + origin[start]..line_start + origin[end]);
+                    from = end;
+                } else {
+                    from = start + folded[start..].chars().next().map_or(1, char::len_utf8);
+                }
+            }
+        }
+        line_start += line.len();
+    }
+    matches
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_ignores_case_beyond_ascii() {
+        let text = "Éclair éCLAIR\nΣΟΦΙΑ σοφια\nİstanbul";
+        assert_eq!(find_all(text, "éclair"), vec![0..7, 8..15]);
+        assert_eq!(find_all(text, "ΣΟΦΙΑ"), vec![16..26, 27..37]);
+        assert_eq!(find_all("x\nÉ", "é"), vec![2..4]);
+    }
 
     #[test]
     fn typing_groups_into_one_undo_step_and_a_new_line_starts_another() {
@@ -476,10 +525,10 @@ mod tests {
     }
 
     #[test]
-    fn find_all_ignores_ascii_case_and_does_not_overlap() {
+    fn find_all_ignores_case_and_does_not_overlap() {
         assert_eq!(find_all("Aaa aA", "aa"), vec![0..2, 4..6]);
-        // Only ASCII letters fold: "É" is not "é".
-        assert_eq!(find_all("café CAFÉ Café", "café"), vec![0..5, 12..17]);
+        // Every letter folds, as in CodeMirror's search: "CAFÉ" is "café".
+        assert_eq!(find_all("café CAFÉ Café", "café"), vec![0..5, 6..11, 12..17]);
         assert!(find_all("abc", "").is_empty());
     }
 }

@@ -14,7 +14,7 @@ use gpui::{
     AnyElement, App, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, FocusHandle, Focusable, HighlightStyle,
     IntoElement, ListAlignment, ListOffset, ListScrollEvent, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
     PromptLevel, SharedString, StyledText, Subscription, Task, TextLayout, UTF16Selection, Window, actions, canvas,
-    deferred, div, fill, list, prelude::*, px, rgb, size, svg,
+    deferred, div, fill, list, point, prelude::*, px, rgb, size, svg,
 };
 
 use crate::buffer::{self, Buffer, EditKind, LineSplice};
@@ -68,8 +68,18 @@ actions!(
         SelectDocumentEnd,
         DeleteWordLeft,
         DeleteWordRight,
+        Indent,
+        Outdent,
     ]
 );
+
+mod a11y;
+mod chrome;
+
+pub use chrome::*;
+
+/// CodeMirror's default indent unit, which Tab adds and Shift+Tab removes (the app binds `indentWithTab`).
+const INDENT: &str = "  ";
 
 const CARET: u32 = 0x2563eb;
 
@@ -126,6 +136,31 @@ struct Document {
     block_list: ListState,
     followed_cursor_line: Option<usize>,
     synced_source_line: Option<usize>,
+    /// Words and UTF-16 characters, counted with each background parse, for the status bar.
+    counts: Counts,
+    /// The last update's time from keystroke to preview, and its parse time, for the status bar.
+    last_preview: Option<(f64, f64)>,
+}
+
+/// The status bar's counts: words as the app counts them (`/\S+/g`), characters as JavaScript's `length`.
+/// What a background parse hands back to the window.
+struct Parsed {
+    blocks: Vec<Block>,
+    spans: Vec<Vec<Span>>,
+    longest: usize,
+    counts: Counts,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Counts {
+    words: usize,
+    chars: usize,
+}
+
+impl Counts {
+    fn of(text: &str) -> Self {
+        Self { words: text.split_whitespace().count(), chars: text.encode_utf16().count() }
+    }
 }
 
 impl Document {
@@ -153,6 +188,8 @@ impl Document {
             block_list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
             followed_cursor_line: None,
             synced_source_line: None,
+            counts: Counts::default(),
+            last_preview: None,
         }
     }
 
@@ -219,6 +256,25 @@ pub struct Prototype {
     last_cursor: Option<(u64, usize)>,
     /// The monospace font's character width at the current size.
     char_width: Pixels,
+    /// One per menu item, so the arrows can move the focus through an open menu.
+    menu_focus: Vec<FocusHandle>,
+    /// The open menu itself, focused when it was opened with the mouse, so the arrows work without an item highlighted.
+    menu_root: FocusHandle,
+    /// The outline is one tab stop; the arrows move this highlight through its headings.
+    outline_focus: FocusHandle,
+    outline_cursor: Option<usize>,
+    preview_focus: FocusHandle,
+    settings_focus: FocusHandle,
+    settings_open: bool,
+    /// Esc was pressed in the editor: the next Tab moves the focus instead of indenting, as with
+    /// CodeMirror's `indentWithTab`, so a keyboard user can always leave the editor.
+    tab_leaves: bool,
+    /// Where the pointer is while a drag selection is outside the source pane, and the task that
+    /// keeps scrolling towards it.
+    drag_outside: Option<Point<Pixels>>,
+    drag_scroll: Option<Task<()>>,
+    /// Source lines painted in the last frame, with their layouts.
+    painted_lines: Vec<(usize, TextLayout)>,
     _appearance: Subscription,
 }
 
@@ -231,7 +287,7 @@ impl Prototype {
         let mono = mono_family(cx);
         perf::mark("fonts");
         let mut this = Self {
-            focus: cx.focus_handle(),
+            focus: cx.focus_handle().tab_stop(true),
             documents: vec![document],
             active: 0,
             next_document_id: 1,
@@ -253,6 +309,17 @@ impl Prototype {
             follow_x: false,
             last_cursor: None,
             char_width: px(9.),
+            menu_focus: (0..MENU_ITEMS).map(|_| cx.focus_handle()).collect(),
+            menu_root: cx.focus_handle(),
+            outline_focus: cx.focus_handle().tab_stop(true),
+            outline_cursor: None,
+            preview_focus: cx.focus_handle().tab_stop(true),
+            settings_focus: cx.focus_handle(),
+            settings_open: false,
+            tab_leaves: false,
+            drag_outside: None,
+            drag_scroll: None,
+            painted_lines: Vec::new(),
             _appearance: appearance,
         };
         // The source paints first; the preview follows when the background parse is done, like the app.
@@ -277,6 +344,7 @@ impl Prototype {
 
     /// Every change to the text goes through here: the buffer, its undo history, the source list and the preview.
     fn edit(&mut self, range: Range<usize>, text: &str, kind: EditKind, cx: &mut Context<Self>) {
+        self.tab_leaves = false;
         if range.is_empty() && text.is_empty() {
             return;
         }
@@ -304,6 +372,7 @@ impl Prototype {
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else { return };
         let rope = doc.buffer.snapshot();
         let version = doc.buffer.version();
+        let flavor = preview::Flavor { typographer: self.settings.typographer };
         doc.parse_task = Some(cx.spawn(async move |this, cx| {
             if !pause.is_zero() {
                 cx.background_executor().timer(pause).await;
@@ -311,30 +380,33 @@ impl Prototype {
             let started = Instant::now();
             // Both panes from one snapshot: the preview's blocks and the editor's colours. Code in
             // fences is highlighted once; the second call finds it in the tree-sitter cache.
-            let (blocks, spans, longest) = cx
+            let parsed = cx
                 .background_executor()
                 .spawn(async move {
                     let text = rope.to_string();
                     let longest = text.lines().map(|line| line.chars().count()).max().unwrap_or(0);
-                    (preview::blocks(&text), syntax::source_spans(&text), longest)
+                    Parsed { blocks: preview::blocks_with(&text, flavor), spans: syntax::source_spans(&text), longest, counts: Counts::of(&text) }
                 })
                 .await;
             let parse_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let _ = this.update(cx, |this, cx| this.apply_parse(id, version, (blocks, spans, longest), parse_ms, cx));
+            let _ = this.update(cx, |this, cx| this.apply_parse(id, version, parsed, parse_ms, cx));
         }));
     }
 
     /// Replaces only the blocks that changed, so the preview keeps its measured heights and scroll position.
-    fn apply_parse(&mut self, id: u64, version: u64, parsed: (Vec<Block>, Vec<Vec<Span>>, usize), parse_ms: f64, cx: &mut Context<Self>) {
-        let (blocks, spans, longest) = parsed;
+    fn apply_parse(&mut self, id: u64, version: u64, parsed: Parsed, parse_ms: f64, cx: &mut Context<Self>) {
+        let Parsed { blocks, spans, longest, counts } = parsed;
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else { return };
         if doc.buffer.version() != version {
             return;
         }
         doc.last_parse_ms = parse_ms;
+        doc.counts = counts;
         // From the last keystroke to the preview showing it: the pause, the parse and this update.
         if let Some(edited_at) = doc.edited_at.take() {
-            perf::log(&format!("preview_ms={:.0} parse_ms={parse_ms:.1}", edited_at.elapsed().as_secs_f64() * 1000.0));
+            let latency = edited_at.elapsed().as_secs_f64() * 1000.0;
+            perf::log(&format!("preview_ms={latency:.0} parse_ms={parse_ms:.1}"));
+            doc.last_preview = Some((latency, parse_ms));
         }
         let (changed, count) = preview_view::changed_blocks(&doc.blocks, &blocks);
         doc.block_list.splice(changed, count);
@@ -492,14 +564,12 @@ impl Prototype {
     }
 
     fn select_line_start(&mut self, _: &SelectLineStart, _: &mut Window, cx: &mut Context<Self>) {
-        let doc = self.doc();
-        let start = doc.buffer.line_start(doc.buffer.line_of(doc.cursor()));
+        let start = self.home_target();
         self.select_to(start, cx);
     }
 
     fn select_line_end(&mut self, _: &SelectLineEnd, _: &mut Window, cx: &mut Context<Self>) {
-        let doc = self.doc();
-        let end = doc.buffer.line_range(doc.buffer.line_of(doc.cursor())).end;
+        let end = self.end_target();
         self.select_to(end, cx);
     }
 
@@ -554,6 +624,74 @@ impl Prototype {
         self.edit(range, "", EditKind::Other, cx);
     }
 
+    /// Tab indents the lines the selection touches, as CodeMirror's `indentMore` does; after Esc it
+    /// moves the focus on instead.
+    fn indent(&mut self, _: &Indent, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.tab_leaves) {
+            window.focus_next(cx);
+            return;
+        }
+        self.reindent(|line| Some(format!("{INDENT}{line}")), cx);
+    }
+
+    /// Shift+Tab removes one indent unit (or a tab) from each line, as `indentLess` does.
+    fn outdent(&mut self, _: &Outdent, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.tab_leaves) {
+            window.focus_prev(cx);
+            return;
+        }
+        self.reindent(
+            |line| {
+                let removed = line.strip_prefix(INDENT).or_else(|| line.strip_prefix('\t')).or_else(|| line.strip_prefix(' '))?;
+                Some(removed.to_string())
+            },
+            cx,
+        );
+    }
+
+    /// Rewrites each line the selection touches with `change` (None leaves it), as one undo step,
+    /// and keeps the selection on the same text.
+    fn reindent(&mut self, change: impl Fn(&str) -> Option<String>, cx: &mut Context<Self>) {
+        let doc = self.doc();
+        let selected = doc.selected.clone();
+        let first = doc.buffer.line_of(selected.start);
+        let mut last = doc.buffer.line_of(selected.end);
+        // A selection that ends at the start of a line does not touch that line.
+        if last > first && doc.buffer.line_start(last) == selected.end {
+            last -= 1;
+        }
+        let span = doc.buffer.line_start(first)..doc.buffer.line_range(last).end;
+        let old = doc.buffer.slice(span.clone());
+        let mut new = String::with_capacity(old.len() + (last - first + 1) * INDENT.len());
+        let (mut shift_start, mut shift_end) = (0isize, 0isize);
+        let mut line_start = span.start;
+        for (index, line) in old.split('\n').enumerate() {
+            if index > 0 {
+                new.push('\n');
+            }
+            let changed = change(line).unwrap_or_else(|| line.to_string());
+            let delta = changed.len() as isize - line.len() as isize;
+            if line_start <= selected.start {
+                shift_start += delta.max(line_start as isize - selected.start as isize);
+            }
+            if line_start <= selected.end {
+                shift_end += delta.max(line_start as isize - selected.end as isize);
+            }
+            new.push_str(&changed);
+            line_start += line.len() + 1;
+        }
+        if new == old {
+            return;
+        }
+        let reversed = doc.selection_reversed;
+        self.edit(span, &new, EditKind::Other, cx);
+        let doc = self.doc_mut();
+        let start = (selected.start as isize + shift_start).max(0) as usize;
+        let end = (selected.end as isize + shift_end).max(start as isize) as usize;
+        doc.selected = doc.buffer.boundary(start)..doc.buffer.boundary(end);
+        doc.selection_reversed = reversed;
+    }
+
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         let doc = self.doc_mut();
         doc.selected = 0..doc.buffer.len();
@@ -563,19 +701,18 @@ impl Prototype {
     }
 
     fn line_start(&mut self, _: &LineStart, _: &mut Window, cx: &mut Context<Self>) {
-        let doc = self.doc();
-        let start = doc.buffer.line_start(doc.buffer.line_of(doc.cursor()));
+        let start = self.home_target();
         self.move_to(start, cx);
     }
 
     fn line_end(&mut self, _: &LineEnd, _: &mut Window, cx: &mut Context<Self>) {
-        let doc = self.doc();
-        let end = doc.buffer.line_range(doc.buffer.line_of(doc.cursor())).end;
+        let end = self.end_target();
         self.move_to(end, cx);
     }
 
     /// A caret move also ends the current typing group, so the next keystroke is a new undo step.
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.tab_leaves = false;
         let doc = self.doc_mut();
         let offset = doc.buffer.boundary(offset);
         doc.selected = offset..offset;
@@ -585,6 +722,7 @@ impl Prototype {
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.tab_leaves = false;
         let doc = self.doc_mut();
         let offset = doc.buffer.boundary(offset);
         if doc.selection_reversed {
@@ -653,6 +791,72 @@ impl Prototype {
         if offset != self.doc().cursor() {
             self.select_to(offset, cx);
         }
+    }
+
+    /// A drag selection that leaves the source pane keeps going, as in CodeMirror: beside the pane it
+    /// extends to the start or end of the line level with the pointer; above or below it the pane
+    /// scrolls towards the pointer, faster the further away it is, until the button comes up.
+    fn drag_anywhere(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if !self.dragging || !self.settings.show_editor {
+            return;
+        }
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.dragging = false;
+            self.drag_outside = None;
+            return;
+        }
+        let pane = self.doc().lines.viewport_bounds();
+        let position = event.position;
+        if position.y >= pane.top() && position.y < pane.bottom() {
+            self.drag_outside = None;
+            let beside = position.x < pane.left() || position.x >= pane.right();
+            if let Some(line) = beside.then(|| self.visible_line_at(position.y)).flatten() {
+                let range = self.doc().buffer.line_range(line);
+                self.select_to(if position.x < pane.left() { range.start } else { range.end }, cx);
+            }
+            return;
+        }
+        let started = self.drag_outside.is_none();
+        self.drag_outside = Some(position);
+        if started {
+            self.drag_scroll = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(16)).await;
+                    if !this.update(cx, |this, cx| this.drag_scroll_step(cx)).unwrap_or(false) {
+                        break;
+                    }
+                }
+            }));
+        }
+    }
+
+    /// One frame of scrolling while a drag is above or below the pane. Returns whether to go on.
+    fn drag_scroll_step(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(pointer) = self.drag_outside.filter(|_| self.dragging) else { return false };
+        let doc = self.doc();
+        let pane = doc.lines.viewport_bounds();
+        let up = pointer.y < pane.top();
+        let distance = if up { pane.top() - pointer.y } else { pointer.y - pane.bottom() };
+        let step = (distance * 0.5).clamp(px(4.), px(80.));
+        doc.lines.scroll_by(if up { -step } else { step });
+        let target = if up {
+            doc.buffer.line_start(doc.lines.logical_scroll_top().item_ix)
+        } else {
+            let last = self.visible_line_at(pane.bottom() - px(1.)).unwrap_or(doc.buffer.line_count().saturating_sub(1));
+            doc.buffer.line_range(last).end
+        };
+        self.select_to(target, cx);
+        // The caret is meant to be at the edge, so the follow-the-caret scroll must not undo the drag.
+        let line = self.doc().buffer.line_of(self.doc().cursor());
+        self.doc_mut().followed_cursor_line = Some(line);
+        true
+    }
+
+    /// The source line drawn at height `y`, among the lines laid out in the last frame.
+    fn visible_line_at(&self, y: Pixels) -> Option<usize> {
+        let lines = &self.doc().lines;
+        let top = lines.logical_scroll_top().item_ix;
+        (top..lines.item_count()).take(400).map_while(|line| lines.bounds_for_item(line).map(|bounds| (line, bounds))).find(|(_, bounds)| bounds.bottom() > y).map(|(line, _)| line)
     }
 
     /// A click below the last line puts the caret at the end.
@@ -727,12 +931,24 @@ impl Prototype {
     }
 
     /// Esc closes the find bar, or an open menu.
+    /// Esc closes what is open, innermost first: a menu, the settings panel, the find bar. With
+    /// nothing open, in the editor, it lets the next Tab leave the editor instead of indenting.
     fn find_close(&mut self, _: &FindClose, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_menu = None;
-        if self.find.take().is_some() {
-            window.focus(&self.focus, cx);
-        }
         cx.notify();
+        if self.open_menu.is_some() {
+            self.close_menus(window, cx);
+            return;
+        }
+        if self.close_settings(window, cx) {
+            return;
+        }
+        if self.find.take().is_some() {
+            self.focus_editor(window, cx);
+            return;
+        }
+        if self.focus.is_focused(window) {
+            self.tab_leaves = true;
+        }
     }
 
     /// Searches again only when the query, the document or its text changed.
@@ -841,11 +1057,7 @@ impl Prototype {
         self.write_active(cx);
     }
 
-    fn save_clicked(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.write_active(cx);
-    }
-
-    fn open_file(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn open_file(&mut self, cx: &mut Context<Self>) {
         self.open_menu = None;
         cx.notify();
         let Some(path) = rfd::FileDialog::new().add_filter("Markdown", files::MARKDOWN_EXTS).pick_file() else {
@@ -885,6 +1097,18 @@ impl Prototype {
         if let Some(number) = link.strip_prefix("#fn:").and_then(|number| number.parse::<u32>().ok()) {
             let doc = self.doc();
             if let Some(index) = doc.blocks.iter().position(|block| block.kind == Kind::Footnote(number)) {
+                doc.block_list.scroll_to(ListOffset { item_ix: index, offset_in_item: px(0.) });
+                cx.notify();
+            }
+            return;
+        }
+        // A footnote's ↩ scrolls back to the block that refers to it.
+        if let Some(number) = link.strip_prefix("#fnref:") {
+            let target = format!("#fn:{number}");
+            let doc = self.doc();
+            let refers = |runs: &[preview::Run]| runs.iter().any(|run| run.style.link.as_deref() == Some(target.as_str()));
+            let found = doc.blocks.iter().position(|block| refers(&block.runs) || block.table.as_ref().is_some_and(|table| table.rows.iter().flatten().any(|cell| refers(cell))));
+            if let Some(index) = found {
                 doc.block_list.scroll_to(ListOffset { item_ix: index, offset_in_item: px(0.) });
                 cx.notify();
             }
@@ -997,43 +1221,12 @@ impl Prototype {
 
     // ----- Menus and view settings -----
 
-    fn toggle_menu(&mut self, menu: OpenMenu, cx: &mut Context<Self>) {
-        self.open_menu = if self.open_menu == Some(menu) { None } else { Some(menu) };
-        cx.notify();
-    }
-
     fn close_menu(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.open_menu.is_none() {
             return;
         }
         self.open_menu = None;
         cx.notify();
-    }
-
-    /// Hiding the editor never changes `showPreview`; the preview shows anyway, as in the app.
-    fn toggle_editor(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.show_editor = !self.settings.show_editor;
-        self.keep_settings(cx);
-    }
-
-    fn toggle_preview(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.show_preview = !self.settings.show_preview;
-        self.keep_settings(cx);
-    }
-
-    fn toggle_word_wrap(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.word_wrap = !self.settings.word_wrap;
-        self.keep_settings(cx);
-    }
-
-    fn toggle_theme(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.theme = self.settings.theme.next();
-        self.keep_settings(cx);
-    }
-
-    fn toggle_outline(&mut self, _: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.show_outline = !self.settings.show_outline;
-        self.keep_settings(cx);
     }
 
     fn step_font(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -1154,217 +1347,6 @@ impl Prototype {
 // ----- Drawing -----
 
 impl Prototype {
-    fn menu_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .bg(tone(self.dark, 0x27272a, 0xf4f4f5))
-            .text_size(px(13.))
-            .child(self.menu_button("File", OpenMenu::File, cx))
-            .child(self.menu_button("Edit", OpenMenu::Edit, cx))
-            .child(self.menu_button("View", OpenMenu::View, cx))
-    }
-
-    fn menu_button(&mut self, label: &'static str, menu: OpenMenu, cx: &mut Context<Self>) -> gpui::Div {
-        let opened = self.open_menu == Some(menu);
-        let dark = self.dark;
-        let button = div()
-            .px_3()
-            .py_1()
-            .when(opened, |button| button.bg(tone(dark, 0x3f3f46, 0xe4e4e7)))
-            .child(label.to_string())
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| this.toggle_menu(menu, cx)));
-        if !opened {
-            return button;
-        }
-        // The list is taken out of the bar's height and painted after the panes, so it covers the tab instead of pushing it down.
-        button.child(deferred(self.menu_items(menu, cx).absolute().top_full().left_0().occlude()))
-    }
-
-    fn menu_items(&mut self, menu: OpenMenu, cx: &mut Context<Self>) -> gpui::Div {
-        let dark = self.dark;
-        let column = div()
-            .flex()
-            .flex_col()
-            .py_1()
-            .bg(tone(dark, 0x3f3f46, 0xffffff))
-            .border_1()
-            .border_color(tone(dark, 0x52525b, 0xd4d4d8));
-        // Each item closes the menu and runs the same handler as its shortcut.
-        let item = |label: &str, shortcut: &str| command(label, shortcut, dark);
-        match menu {
-            OpenMenu::File => column
-                .child(item("Open", "").on_mouse_down(MouseButton::Left, cx.listener(Self::open_file)))
-                .child(item("Save", "Ctrl+S").on_mouse_down(MouseButton::Left, cx.listener(Self::save_clicked)))
-                .child(item("Quit", "").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.quit(&Quit, window, cx)))),
-            OpenMenu::Edit => column
-                .child(item("Undo", "Ctrl+Z").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                    this.open_menu = None;
-                    this.undo(&Undo, window, cx);
-                })))
-                .child(item("Redo", "Ctrl+Y").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                    this.open_menu = None;
-                    this.redo(&Redo, window, cx);
-                })))
-                .child(item("Cut", "Ctrl+X").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                    this.open_menu = None;
-                    this.cut(&Cut, window, cx);
-                })))
-                .child(item("Copy", "Ctrl+C").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                    this.open_menu = None;
-                    this.copy(&Copy, window, cx);
-                })))
-                .child(item("Paste", "Ctrl+V").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                    this.open_menu = None;
-                    this.paste(&Paste, window, cx);
-                })))
-                .child(item("Select all", "Ctrl+A").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                    this.open_menu = None;
-                    this.select_all(&SelectAll, window, cx);
-                })))
-                .child(item("Find", "Ctrl+F").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.open_find(false, window, cx))))
-                .child(item("Replace", "Ctrl+H").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.open_find(true, window, cx)))),
-            OpenMenu::View => {
-                let editor = if self.settings.show_editor { "Hide editor" } else { "Show editor" };
-                let preview = if self.settings.show_preview { "Hide preview" } else { "Show preview" };
-                let wrap = if self.settings.word_wrap { "Word wrap on" } else { "Word wrap off" };
-                let theme = self.settings.theme.label();
-                let outline = if self.settings.show_outline { "Hide outline" } else { "Show outline" };
-                column
-                    .child(item(editor, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_editor)))
-                    .child(item(preview, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_preview)))
-                    .child(item(outline, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_outline)))
-                    .child(item(wrap, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_word_wrap)))
-                    .child(item(theme, "").on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_theme)))
-                    .child(item("Larger text", "").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.step_font(1, cx))))
-                    .child(item("Smaller text", "").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.step_font(-1, cx))))
-            }
-        }
-    }
-
-    fn toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let dark = self.dark;
-        let dirty = self.doc().buffer.is_dirty();
-        let read_only = self.doc().read_only;
-        let editor = self.settings.show_editor;
-        let preview = self.settings.preview_visible();
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .py_1()
-            .bg(tone(dark, 0x27272a, 0xe4e4e7))
-            .text_size(px(13.))
-            .child(tool("Open", "icons/open.svg", false, true, dark).on_mouse_down(MouseButton::Left, cx.listener(Self::open_file)))
-            .child(
-                tool(if read_only { "Read-only" } else { "Save" }, "icons/save.svg", dirty, dirty, dark)
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::save_clicked)),
-            )
-            .child(
-                tool("Editor", if editor { "icons/editor.svg" } else { "icons/editor-off.svg" }, editor, editor, dark)
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_editor)),
-            )
-            .child(
-                tool("Preview", if preview { "icons/preview.svg" } else { "icons/preview-off.svg" }, preview, preview, dark)
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_preview)),
-            )
-            .child(
-                tool("Outline", "icons/outline.svg", self.settings.show_outline, self.settings.show_outline, dark)
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_outline)),
-            )
-    }
-
-    fn tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.active;
-        let dark = self.dark;
-        let tabs: Vec<(String, bool)> = self.documents.iter().map(|doc| (file_name(&doc.path), doc.buffer.is_dirty())).collect();
-        div().flex().flex_row().bg(tone(dark, 0x27272a, 0xe4e4e7)).children(tabs.into_iter().enumerate().map(|(index, (name, dirty))| {
-            let name = if dirty { format!("{name} •") } else { name };
-            let current = index == active;
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .px_2()
-                .py_1()
-                .bg(if current { tone(dark, 0x3f3f46, 0xffffff) } else { tone(dark, 0x27272a, 0xe4e4e7) })
-                .child(
-                    div()
-                        .child(name)
-                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| this.activate_tab(index, cx))),
-                )
-                .child(
-                    div()
-                        .pl_2()
-                        .child("×")
-                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| this.close_tab(index, window, cx))),
-                )
-        }))
-    }
-
-    fn path_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let dark = self.dark;
-        let bar = div()
-            .flex()
-            .flex_row()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .text_size(px(12.))
-            .text_color(tone(dark, 0xa1a1aa, 0x52525b))
-            .bg(tone(dark, 0x27272a, 0xe4e4e7))
-            .child(self.doc().path.clone())
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::close_menu));
-        match &self.status {
-            Some(status) => bar.child(div().text_color(tone(dark, 0xfca5a5, 0xb91c1c)).child(status.clone())),
-            None => bar,
-        }
-    }
-
-    fn find_bar(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let dark = self.dark;
-        let find = self.find.as_ref()?;
-        for field in [&find.query, &find.replacement] {
-            field.update(cx, |field, _| field.dark = dark);
-        }
-        let selected = self.doc().selected.clone();
-        let count = match (find.matches.len(), find.matches.iter().position(|found| *found == selected)) {
-            (0, _) if find.query.read(cx).text().is_empty() => String::new(),
-            (0, _) => "No results".to_string(),
-            (total, Some(current)) => format!("{} of {total}", current + 1),
-            (total, None) => format!("{total} matches"),
-        };
-        let button = |label: &str| {
-            div().px_2().py(px(3.)).bg(tone(dark, 0x3f3f46, 0xe4e4e7)).text_color(tone(dark, 0xfafafa, 0x18181b)).child(label.to_string())
-        };
-        Some(
-            div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap_2()
-                .px_3()
-                .py_1()
-                .text_size(px(13.))
-                .bg(tone(dark, 0x27272a, 0xe4e4e7))
-                .text_color(tone(dark, 0xa1a1aa, 0x52525b))
-                .child(find.query.clone())
-                .child(div().min_w(px(80.)).child(count))
-                .child(button("Previous").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.find_step(-1, cx))))
-                .child(button("Next").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.find_step(1, cx))))
-                .when(find.show_replace, |bar| {
-                    bar.child(find.replacement.clone())
-                        .child(button("Replace").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.replace_current(cx))))
-                        .child(button("Replace all").on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.replace_all(cx))))
-                })
-                .child(button("×").on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.find_close(&FindClose, window, cx)))),
-        )
-    }
-
     /// One source line, laid out only when the list needs it. Syntax colours, find matches and the
     /// selection are layered highlights on the line's own `StyledText`, whose layout also maps clicks
     /// and places the caret.
@@ -1420,19 +1402,23 @@ impl Prototype {
                 }),
             )
             .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| this.drag_line(ix, &drag_layout, event, cx)));
-        if !selected.is_empty() || !(line.start..=line.end).contains(&cursor) {
-            return row.into_any_element();
-        }
-        let column = cursor - line.start;
+        let caret_column = (selected.is_empty() && (line.start..=line.end).contains(&cursor)).then(|| cursor - line.start);
+        let line_text = doc.buffer.line(ix);
+        let caret_next = caret_column.and_then(|column| line_text.get(column..)?.chars().next().map(|ch| column + ch.len_utf8()));
         let view = cx.entity();
+        // Paints the caret, and records the line's layout once it has been painted: Home and End on
+        // wrapped rows and the IME's point-to-character lookup may only use painted layouts.
         row.child(
             canvas(
                 |_, _, _| {},
                 move |_, _, window, cx| {
-                    let Some(origin) = layout.position_for_index(column) else { return };
-                    let caret = Bounds::new(origin, size(px(1.5), layout.line_height()));
-                    window.paint_quad(fill(caret, rgb(CARET)));
+                    let caret = caret_column.and_then(|column| caret_origin(&layout, column, caret_next)).map(|origin| Bounds::new(origin, size(px(1.5), layout.line_height())));
+                    if let Some(caret) = caret {
+                        window.paint_quad(fill(caret, rgb(CARET)));
+                    }
                     view.update(cx, |view, cx| {
+                        view.painted_lines.push((ix, layout.clone()));
+                        let Some(caret) = caret else { return };
                         view.caret_bounds = Some(caret);
                         view.caret_painted = Some((cursor, caret));
                         // Painted where it moved to: one more frame scrolls sideways to it.
@@ -1448,8 +1434,138 @@ impl Prototype {
         .into_any_element()
     }
 
-    fn editor_column(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The layout of source line `line` if it was painted in the last frame.
+    fn painted_layout(&self, line: usize) -> Option<&TextLayout> {
+        self.painted_lines.iter().find(|(painted, _)| *painted == line).map(|(_, layout)| layout)
+    }
+
+    /// The visual row the caret is on, as byte offsets into its line, when word wrap has split the
+    /// line into several rows on screen.
+    fn caret_row(&self) -> Option<Range<usize>> {
+        if !self.settings.word_wrap {
+            return None;
+        }
+        let doc = self.doc();
+        let cursor = doc.cursor();
+        let line = doc.buffer.line_of(cursor);
+        let layout = self.painted_layout(line)?;
+        let column = cursor - doc.buffer.line_start(line);
+        let text = doc.buffer.line(line);
+        let next = text.get(column..).and_then(|rest| rest.chars().next()).map(|ch| column + ch.len_utf8());
+        let caret = caret_origin(layout, column, next)?;
+        let bounds = layout.bounds();
+        let y = caret.y + layout.line_height() / 2.;
+        let (Ok(start) | Err(start)) = layout.index_for_position(point(bounds.left(), y));
+        let (Ok(end) | Err(end)) = layout.index_for_position(point(bounds.right() - px(1.), y));
+        let length = doc.buffer.line_range(line).len();
+        (start > 0 || end < length).then(|| start.min(length)..end.min(length))
+    }
+
+    /// Home, as CodeMirror's `cursorLineBoundaryBackward`: the start of the visual row; from there
+    /// (or on the first row), the end of the indentation, then the start of the line.
+    fn home_target(&self) -> usize {
+        let doc = self.doc();
+        let cursor = doc.cursor();
+        let line = doc.buffer.line_of(cursor);
+        let start = doc.buffer.line_start(line);
+        if let Some(row) = self.caret_row().filter(|row| row.start > 0 && start + row.start != cursor) {
+            return start + row.start;
+        }
+        let text = doc.buffer.line(line);
+        let indent = text.len() - text.trim_start().len();
+        if indent > 0 && cursor != start + indent { start + indent } else { start }
+    }
+
+    /// End: the end of the visual row, then the end of the line. Without caret affinity the end of
+    /// a wrapped row is drawn at the start of the next one, so the caret stops before the space the
+    /// row was broken at (or its last character).
+    fn end_target(&self) -> usize {
+        let doc = self.doc();
+        let cursor = doc.cursor();
+        let line = doc.buffer.line_of(cursor);
+        let range = doc.buffer.line_range(line);
+        let Some(row) = self.caret_row().filter(|row| row.end < range.len()) else { return range.end };
+        let text = doc.buffer.line(line);
+        let mut end = row.end;
+        while end > row.start && !text.is_char_boundary(end - 1) {
+            end -= 1;
+        }
+        let target = range.start + floor_boundary(&text, end.saturating_sub(1)).max(row.start);
+        if target == cursor { range.end } else { target }
+    }
+
+    /// The editor's lines and selection for assistive technology (`a11y.rs`). Nothing is gathered
+    /// while no screen reader or other client is listening.
+    fn describe_text(&self, window: &Window) -> Option<(Vec<a11y::Line>, a11y::Point, a11y::Point)> {
+        if !window.is_a11y_active() {
+            return None;
+        }
+        let doc = self.doc();
+        let buffer = &doc.buffer;
+        let point_of = |offset: usize| {
+            let line = buffer.line_of(offset);
+            let start = buffer.line_start(line);
+            a11y::Point { line, char_index: buffer.slice(start..offset).chars().count() }
+        };
+        let anchor_offset = if doc.selection_reversed { doc.selected.end } else { doc.selected.start };
+        let (focus, anchor) = (point_of(doc.cursor()), point_of(anchor_offset));
+        let last = buffer.line_count().saturating_sub(1);
+        let lines = a11y::lines_to_describe(doc.lines.logical_scroll_top().item_ix, buffer.line_count(), focus.line, anchor.line)
+            .into_iter()
+            .map(|index| {
+                let mut text = buffer.line(index);
+                if index < last {
+                    text.push('\n');
+                }
+                a11y::Line { index, text }
+            })
+            .collect();
+        let lines = a11y::within_budget(lines, [focus.line, anchor.line]);
+        Some((lines, anchor, focus))
+    }
+
+    /// The editing keys, which act only while the editor has the focus, so Enter and Space can press
+    /// a focused button and the arrows can move through a menu.
+    fn editor_actions<E: InteractiveElement>(&self, element: E, cx: &mut Context<Self>) -> E {
+        element
+            .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::left))
+            .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
+            .on_action(cx.listener(Self::select_line_start))
+            .on_action(cx.listener(Self::select_line_end))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
+            .on_action(cx.listener(Self::document_start))
+            .on_action(cx.listener(Self::document_end))
+            .on_action(cx.listener(Self::select_document_start))
+            .on_action(cx.listener(Self::select_document_end))
+            .on_action(cx.listener(Self::delete_word_left))
+            .on_action(cx.listener(Self::delete_word_right))
+            .on_action(cx.listener(Self::line_start))
+            .on_action(cx.listener(Self::line_end))
+            .on_action(cx.listener(Self::enter))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
+            .on_action(cx.listener(Self::indent))
+            .on_action(cx.listener(Self::outdent))
+    }
+
+    fn editor_column(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
+        let described = self.describe_text(window);
         let lines = self.doc().lines.clone();
         let source = list(lines, cx.processor(|this, ix, _window, cx| this.render_line(ix, cx))).size_full();
         // Without word wrap, long lines scroll sideways: the list is as wide as the longest line.
@@ -1473,9 +1589,18 @@ impl Prototype {
             .bg(tone(dark, 0x18181b, 0xfafafa))
             .text_color(tone(dark, 0xfafafa, 0x18181b))
             .child(InputLayer { view: cx.entity(), focus: self.focus.clone() })
-            .child(
+            .child(self.editor_actions(
                 div()
                     .id("source")
+                    .key_context("Editor")
+                    .track_focus(&self.focus)
+                    .role(gpui::Role::MultilineTextInput)
+                    .aria_label("Editor")
+                    .a11y_synthetic_children(move |builder| {
+                        if let Some((lines, anchor, focus)) = described {
+                            a11y::describe(builder, lines, anchor, focus);
+                        }
+                    })
                     .size_full()
                     // The I-beam over the whole pane, including the space past the end of short lines.
                     .cursor_text()
@@ -1483,13 +1608,26 @@ impl Prototype {
                     .font_family(self.mono.clone())
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::click_source))
                     .child(source),
-            )
+                cx,
+            ))
     }
 
     fn preview_column(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
         let blocks = self.doc().block_list.clone();
-        div()
+        let focused_ring = chrome::ring(dark);
+        self.preview_keys(
+            div()
+                .id("preview")
+                .key_context("Preview")
+                .track_focus(&self.preview_focus)
+                .role(gpui::Role::Document)
+                .aria_label("Preview")
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .focus_visible(move |style| style.border_color(focused_ring)),
+            cx,
+        )
             .flex_1()
             .min_w(px(0.))
             .h_full()
@@ -1509,37 +1647,6 @@ impl Prototype {
                 )
                 .size_full(),
             )
-    }
-
-    fn outline_column(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let headings: Vec<(usize, u8, String)> = self
-            .doc()
-            .blocks
-            .iter()
-            .filter_map(|block| match block.kind {
-                Kind::Heading(level) => Some((block.line, level, block.text.clone())),
-                _ => None,
-            })
-            .collect();
-        let column = div()
-            .id("outline")
-            .w(px(220.))
-            .h_full()
-            .overflow_y_scroll()
-            .bg(tone(self.dark, 0x18181b, 0xf4f4f5))
-            .px_2()
-            .py_2()
-            .text_size(px(13.));
-        if headings.is_empty() {
-            return column.child("No headings");
-        }
-        column.children(headings.into_iter().map(|(line, level, text)| {
-            div()
-                .py_1()
-                .pl(px(4. + (level.saturating_sub(1) as f32) * 12.))
-                .child(text)
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| this.jump_to_line(line, cx)))
-        }))
     }
 }
 
@@ -1607,9 +1714,14 @@ impl EntityInputHandler for Prototype {
         Some(self.caret_bounds.unwrap_or_else(|| Bounds::new(element_bounds.origin, size(px(1.5), window.line_height()))))
     }
 
-    /// Only used for IME reconversion by mouse. Not supported in the prototype; GPUI accepts `None`.
-    fn character_index_for_point(&mut self, _point: Point<Pixels>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
-        None
+    /// The character under a point, in UTF-16 units, for IME reconversion by mouse. Only lines painted
+    /// in the last frame can answer. (GPUI's Windows backend does not yet ask: it handles no
+    /// `WM_IME_REQUEST`, so Windows' reconversion key cannot reach any GPUI view, at 9a8ab54 either.)
+    fn character_index_for_point(&mut self, position: Point<Pixels>, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
+        let line = self.visible_line_at(position.y)?;
+        let layout = self.painted_layout(line)?;
+        let offset = self.offset_at(line, layout, position);
+        Some(self.doc().buffer.utf16_of(offset))
     }
 }
 
@@ -1640,6 +1752,7 @@ impl Render for Prototype {
             self.release_unused_images(cx);
         }
         self.caret_bounds = None;
+        self.painted_lines.clear();
         self.update_title(window);
         self.refresh_matches(cx);
         self.sync_scroll();
@@ -1665,11 +1778,12 @@ impl Render for Prototype {
             .min_h_0()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::close_menu))
             .when(show_outline, |row| row.child(self.outline_column(cx)))
-            .when(show_editor, |row| row.child(self.editor_column(cx)))
-            .when(show_preview, |row| row.child(self.preview_column(cx)));
+            .when(show_editor, |row| row.child(self.editor_column(window, cx)))
+            .when(show_preview, |row| row.child(self.preview_column(cx)))
+            .when(self.settings_open, |row| row.child(self.settings_panel(cx)));
         let find_bar = self.find_bar(cx);
 
-        div()
+        let root = div()
             .size_full()
             .relative()
             .flex()
@@ -1678,40 +1792,15 @@ impl Render for Prototype {
             .text_size(px(font_size))
             .text_color(tone(dark, 0xfafafa, 0x18181b))
             .key_context("Prototype")
-            .track_focus(&self.focus)
             // Wherever the button comes up, a drag selection ends.
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, _| this.dragging = false))
-            .on_action(cx.listener(Self::backspace))
-            .on_action(cx.listener(Self::delete))
-            .on_action(cx.listener(Self::left))
-            .on_action(cx.listener(Self::right))
-            .on_action(cx.listener(Self::up))
-            .on_action(cx.listener(Self::down))
-            .on_action(cx.listener(Self::select_left))
-            .on_action(cx.listener(Self::select_right))
-            .on_action(cx.listener(Self::select_all))
-            .on_action(cx.listener(Self::select_up))
-            .on_action(cx.listener(Self::select_down))
-            .on_action(cx.listener(Self::select_line_start))
-            .on_action(cx.listener(Self::select_line_end))
-            .on_action(cx.listener(Self::word_left))
-            .on_action(cx.listener(Self::word_right))
-            .on_action(cx.listener(Self::select_word_left))
-            .on_action(cx.listener(Self::select_word_right))
-            .on_action(cx.listener(Self::document_start))
-            .on_action(cx.listener(Self::document_end))
-            .on_action(cx.listener(Self::select_document_start))
-            .on_action(cx.listener(Self::select_document_end))
-            .on_action(cx.listener(Self::delete_word_left))
-            .on_action(cx.listener(Self::delete_word_right))
-            .on_action(cx.listener(Self::line_start))
-            .on_action(cx.listener(Self::line_end))
-            .on_action(cx.listener(Self::enter))
-            .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(Self::cut))
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::undo))
-            .on_action(cx.listener(Self::redo))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| {
+                    this.dragging = false;
+                    this.drag_outside = None;
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| this.drag_anywhere(event, cx)))
             .on_action(cx.listener(Self::find))
             .on_action(cx.listener(Self::find_replace))
             .on_action(cx.listener(Self::find_next))
@@ -1725,42 +1814,15 @@ impl Render for Prototype {
             .child(self.path_bar(cx))
             .children(find_bar)
             .child(panes)
+            .child(self.status_bar())
             // Last child, so it paints after the panes.
-            .child(self.frame_timer())
+            .child(self.frame_timer());
+        self.command_actions(root, cx)
     }
 }
 
 fn file_name(path: &str) -> String {
     Path::new(path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
-}
-
-fn tool(label: &str, icon: &'static str, pressed: bool, bright: bool, dark: bool) -> gpui::Div {
-    let color = if bright { tone(dark, 0xfafafa, 0x18181b) } else { tone(dark, 0xa1a1aa, 0x71717a) };
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .px_2()
-        .py_1()
-        .bg(if pressed { tone(dark, 0x3f3f46, 0xffffff) } else { tone(dark, 0x27272a, 0xe4e4e7) })
-        .text_color(color)
-        .child(svg().path(icon).w(px(16.)).h(px(16.)).text_color(color))
-        .child(label.to_string())
-}
-
-fn command(label: &str, shortcut: &str, dark: bool) -> gpui::Div {
-    div()
-        .flex()
-        .flex_row()
-        .justify_between()
-        .gap_4()
-        .px_3()
-        .py_1()
-        .w(px(200.))
-        .text_color(tone(dark, 0xfafafa, 0x18181b))
-        .child(label.to_string())
-        .child(div().text_color(tone(dark, 0xa1a1aa, 0x71717a)).child(shortcut.to_string()))
 }
 
 /// The nearest char boundary at or before `offset`, within `text`.
@@ -1781,4 +1843,14 @@ fn utf16_to_byte(text: &str, utf16_offset: usize) -> usize {
         utf16 += ch.len_utf16();
     }
     text.len()
+}
+
+/// Where the caret is drawn for `column` in a painted line. A wrap point is both the end of one
+/// visual row and the start of the next; GPUI places it at the end, but a caret there belongs at the
+/// start of the next row (CodeMirror's forward association), where typing will put the text.
+/// `next` is the offset after the character at `column`, if there is one.
+fn caret_origin(layout: &TextLayout, column: usize, next: Option<usize>) -> Option<Point<Pixels>> {
+    let here = layout.position_for_index(column)?;
+    let Some(after) = next.and_then(|next| layout.position_for_index(next)) else { return Some(here) };
+    if after.y > here.y { Some(point(layout.bounds().left(), after.y)) } else { Some(here) }
 }

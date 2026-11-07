@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui::{Context, FontWeight, IntoElement, MouseButton, Pixels, SharedString, StyledText, SvgRenderer, div, img, prelude::*, px, rgb};
+use gpui::{AppContext, ClickEvent, Context, FontWeight, IntoElement, Pixels, Role, SharedString, StyledText, SvgRenderer, div, img, prelude::*, px, rgb};
 
-use crate::editor::Prototype;
+use crate::editor::{self, Prototype};
 use crate::{diagrams, math};
 use crate::preview::{self, Align, Block, Kind, Run, Table};
 use crate::syntax::Span;
@@ -42,8 +42,55 @@ pub fn tone(dark: bool, dark_value: u32, light_value: u32) -> gpui::Rgba {
 }
 
 /// One list item: the block with the pane's side padding, and the top padding on the first block.
+/// Each block is a node for assistive technology with its role and its text, as the app's HTML is.
 pub fn preview_item(block: &Block, index: usize, look: &Look, cx: &mut Context<Prototype>) -> gpui::AnyElement {
-    div().px_4().when(index == 0, |item| item.pt_3()).child(preview_block(block, look, cx)).into_any_element()
+    div()
+        .id(("block", index))
+        .role(block_role(block.kind))
+        .aria_label(SharedString::from(block_label(block)))
+        .when_some(heading_level(block.kind), |item, level| item.aria_level(level))
+        .px_4()
+        .when(index == 0, |item| item.pt_3())
+        .child(preview_block(block, look, cx))
+        .into_any_element()
+}
+
+fn block_role(kind: Kind) -> Role {
+    match kind {
+        Kind::Heading(_) => Role::Heading,
+        Kind::Paragraph => Role::Paragraph,
+        Kind::Quote => Role::Blockquote,
+        Kind::Item { .. } => Role::ListItem,
+        Kind::Code => Role::Code,
+        Kind::Math => Role::Math,
+        Kind::Diagram | Kind::Image => Role::Image,
+        Kind::Table => Role::Table,
+        Kind::Footnote(_) => Role::DocFootnote,
+        Kind::Term => Role::Term,
+        Kind::Definition => Role::Definition,
+        Kind::Rule => Role::Splitter,
+    }
+}
+
+fn heading_level(kind: Kind) -> Option<usize> {
+    match kind {
+        Kind::Heading(level) => Some(level as usize),
+        _ => None,
+    }
+}
+
+/// What a screen reader reads for a block: its text, with a task's state, an image's alt text and
+/// a formula's TeX (KaTeX's MathML would say more; RaTeX has no MathML).
+fn block_label(block: &Block) -> String {
+    match block.kind {
+        Kind::Item { checked: Some(done), .. } => format!("{} {}", if done { "Done:" } else { "To do:" }, block.text),
+        Kind::Image => format!("Image: {}", if block.text.is_empty() { "no description" } else { &block.text }),
+        Kind::Diagram => "Mermaid diagram".to_string(),
+        Kind::Math => format!("Formula: {}", block.text),
+        Kind::Footnote(number) => format!("Footnote {number}: {}", block.text),
+        Kind::Rule => String::new(),
+        _ => block.text.clone(),
+    }
 }
 
 fn preview_block(block: &Block, look: &Look, cx: &mut Context<Prototype>) -> gpui::Div {
@@ -104,6 +151,8 @@ fn preview_block(block: &Block, look: &Look, cx: &mut Context<Prototype>) -> gpu
         Kind::Term => div().mt_1().font_weight(FontWeight::BOLD).child(body),
         Kind::Definition => div().mb_2().pl_6().child(body),
         Kind::Paragraph => div().mb_3().child(body),
+        // The app's `hr`: a 1px line with the block spacing around it.
+        Kind::Rule => div().mt_1().mb_4().h(px(1.)).bg(look.border()),
         Kind::Table | Kind::Image | Kind::Math | Kind::Diagram => div(),
     }
 }
@@ -259,73 +308,135 @@ fn table_block(table: &Table, look: &Look, cx: &mut Context<Prototype>) -> gpui:
 
 fn styled_runs(runs: &[Run], size: Pixels, look: &Look, cx: &mut Context<Prototype>) -> gpui::Div {
     let count = runs.len();
-    // Each piece is its own box in a wrapping row. Next to a formula, a long text run as one box
-    // would drop below it whole, so in paragraphs with math the text goes in word by word.
-    let has_math = runs.iter().any(|run| run.style.math);
-    let mut pieces = Vec::with_capacity(count);
-    for run in runs {
+    // Each piece is a box in a wrapping row, and a box wraps whole. So when a paragraph has more than
+    // one piece (styles, links, formulas, images), plain text goes in word by word and flows like
+    // text; a link or an abbreviation stays one piece, one node for assistive technology.
+    let has_boxes = runs.iter().any(|run| run.style.math || image_source(run).is_some());
+    let by_word = has_boxes || count > 1;
+    let mut pieces: Vec<gpui::AnyElement> = Vec::with_capacity(count);
+    for (index, run) in runs.iter().enumerate() {
         if run.style.math {
-            pieces.push(inline_formula(run, look));
-        } else if has_math {
-            pieces.extend(run.text.split_inclusive(' ').map(|word| styled_piece(word, run, size, look, true, cx)));
+            pieces.push(inline_formula(run, look).into_any_element());
+        } else if let Some(source) = image_source(run) {
+            pieces.push(inline_image(run, source, look).into_any_element());
+        } else if by_word && run.style.link.is_none() && run.style.abbr.is_none() {
+            for (word, text) in run.text.split_inclusive(' ').enumerate() {
+                pieces.push(styled_piece(text, run, size, look, Some(word), index, cx));
+            }
         } else {
-            pieces.push(styled_piece(&run.text, run, size, look, false, cx));
+            pieces.push(styled_piece(&run.text, run, size, look, None, index, cx));
         }
     }
-    if count <= 1 && !has_math {
+    if count <= 1 && !has_boxes {
         return div().w_full().children(pieces);
     }
-    // Formulas are taller than the text around them; centre each line's pieces on one another.
-    div().w_full().flex().flex_row().flex_wrap().when(has_math, |row| row.items_center()).children(pieces)
+    // Formulas and images are taller than the text around them; centre each line's pieces on one another.
+    div().w_full().flex().flex_row().flex_wrap().when(has_boxes, |row| row.items_center()).children(pieces)
 }
 
-/// One run of text, or one word of it, with the run's style.
-fn styled_piece(text: &str, run: &Run, size: Pixels, look: &Look, word: bool, cx: &mut Context<Prototype>) -> gpui::Div {
-    let dark = look.dark;
-    let style = &run.style;
-    {
-        // Sub- and superscript are smaller and shifted, like the app's 80% and ±0.3em.
-        let run_size = if style.sub || style.sup { size * 0.8 } else { size };
-        let mut text = div()
-            .map(|piece| if word { piece.whitespace_nowrap() } else { piece.whitespace_normal() })
-            .text_size(run_size)
-            .child(text.to_string());
-        if style.bold {
-            text = text.font_weight(FontWeight::BOLD);
-        }
-        if style.italic {
-            text = text.italic();
-        }
-        if style.strike {
-            text = text.line_through();
-        }
-        if style.sup {
-            text = text.relative().top(-size * 0.3);
-        }
-        if style.sub {
-            text = text.relative().top(size * 0.25);
-        }
-        if style.mark {
-            // The app's --mark.
-            text = text.bg(tone(dark, 0x4b3218, 0xffeed8));
-        }
-        if style.code {
-            text = text.font_family(look.mono.clone()).text_size(look.code_size()).bg(tone(dark, 0x3f3f46, 0xe4e4e7)).px_1();
-        }
-        // Image alt text inside a paragraph is not a link; everything else with a destination is.
-        if let Some(link) = style.link.clone().filter(|link| !link.starts_with("image:")) {
-            text = clickable(text, link, dark, cx);
-        }
-        text
+/// An image inside a paragraph: its path when the run is one (`image:` destinations).
+fn image_source(run: &Run) -> Option<&str> {
+    run.style.link.as_deref()?.strip_prefix("image:")
+}
+
+/// An image in the flow of a paragraph, from the document's folder only, never wider than the pane.
+/// Anything else shows its alt text, as the image blocks do.
+fn inline_image(run: &Run, source: &str, look: &Look) -> gpui::Div {
+    match local_image(source, look.folder.as_deref()) {
+        Some(path) => div().max_w_full().child(img(path).max_w_full()),
+        None => div().italic().text_color(look.muted()).child(format!("[{}]", if run.text.is_empty() { "image" } else { &run.text })),
     }
 }
 
-/// A link in the app's link colour. Clicks go to `Prototype::follow_link`, which applies the app's rules.
-fn clickable(text: gpui::Div, link: Arc<str>, dark: bool, cx: &mut Context<Prototype>) -> gpui::Div {
-    text.text_color(tone(dark, 0x58a6ff, 0x0969da))
+/// One run of text, or one word of it (`word`), with the run's style. Links and abbreviations are
+/// nodes of their own for assistive technology; `index` keeps their ids apart within the block.
+#[allow(clippy::too_many_arguments)]
+fn styled_piece(text: &str, run: &Run, size: Pixels, look: &Look, word: Option<usize>, index: usize, cx: &mut Context<Prototype>) -> gpui::AnyElement {
+    let dark = look.dark;
+    let style = &run.style;
+    // Sub- and superscript are smaller and shifted, like the app's 80% and ±0.3em.
+    let run_size = if style.sub || style.sup { size * 0.8 } else { size };
+    let mut piece = div()
+        .map(|piece| if word.is_some() { piece.whitespace_nowrap() } else { piece.whitespace_normal() })
+        .text_size(run_size)
+        .child(text.to_string());
+    if style.bold {
+        piece = piece.font_weight(FontWeight::BOLD);
+    }
+    if style.italic {
+        piece = piece.italic();
+    }
+    if style.strike {
+        piece = piece.line_through();
+    }
+    if style.sup {
+        piece = piece.relative().top(-size * 0.3);
+    }
+    if style.sub {
+        piece = piece.relative().top(size * 0.25);
+    }
+    if style.mark {
+        // The app's --mark.
+        piece = piece.bg(tone(dark, 0x4b3218, 0xffeed8));
+    }
+    if style.code {
+        piece = piece.font_family(look.mono.clone()).text_size(look.code_size()).bg(tone(dark, 0x3f3f46, 0xe4e4e7)).px_1();
+    }
+    let id = ("piece", index << 16 | word.unwrap_or(0));
+    if let Some(link) = style.link.clone() {
+        return clickable(piece.id(id), text, link, dark, cx).into_any_element();
+    }
+    if let Some(title) = style.abbr.clone() {
+        return abbreviation(piece.id(id), text, title, look).into_any_element();
+    }
+    piece.into_any_element()
+}
+
+/// A link in the app's link colour, reachable with Tab like the app's `<a>`. Clicks, Enter and a
+/// screen reader's "click" go to `Prototype::follow_link`, which applies the app's rules.
+fn clickable(piece: gpui::Stateful<gpui::Div>, text: &str, link: Arc<str>, dark: bool, cx: &mut Context<Prototype>) -> gpui::Stateful<gpui::Div> {
+    let ring = editor::ring(dark);
+    piece
+        .role(Role::Link)
+        .aria_label(SharedString::from(text.trim().to_string()))
+        .focusable()
+        .tab_stop(true)
+        .focus_visible(move |style| style.border_1().border_color(ring))
+        .text_color(tone(dark, 0x58a6ff, 0x0969da))
         .underline()
         .cursor_pointer()
-        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| this.follow_link(&link, window, cx)))
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.follow_link(&link, window, cx)))
+}
+
+/// An abbreviation, underlined, with its title on hover and for screen readers (the app's `<abbr title>`).
+fn abbreviation(piece: gpui::Stateful<gpui::Div>, text: &str, title: Arc<str>, look: &Look) -> gpui::Stateful<gpui::Div> {
+    let dark = look.dark;
+    let label = SharedString::from(format!("{} ({title})", text.trim()));
+    let tip: SharedString = SharedString::from(title.to_string());
+    piece.role(Role::Abbr).aria_label(label).underline().text_decoration_color(look.muted()).tooltip(move |_, cx| {
+        let tip = tip.clone();
+        cx.new(|_| TitleTip { text: tip, dark }).into()
+    })
+}
+
+/// The hover tooltip for an abbreviation's title.
+struct TitleTip {
+    text: SharedString,
+    dark: bool,
+}
+
+impl gpui::Render for TitleTip {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .text_size(px(12.))
+            .bg(tone(self.dark, 0x3f3f46, 0xffffff))
+            .text_color(tone(self.dark, 0xfafafa, 0x18181b))
+            .border_1()
+            .border_color(tone(self.dark, 0x52525b, 0xd4d4d8))
+            .child(self.text.clone())
+    }
 }
 
 /// The range of blocks a re-parse changed, found like the app's preview-blocks.ts: the common prefix and

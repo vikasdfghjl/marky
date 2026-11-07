@@ -16,20 +16,17 @@ path = "src/main.rs"
 members = ["diagrams"]
 
 [dependencies]
-# GPUI from Zed's repository, pinned to one commit of `main`: b77ec90, 3 Jul 2026. Unlike the
+# GPUI from Zed's repository, pinned to one commit of `main`: 9a8ab54, 6 Nov 2026. Unlike the
 # crates.io 0.2.2 it creates one Direct3D device instead of two (Zed #49001, ~185 ms of start-up),
 # has AccessKit (#56065) and the gpui/gpui_platform split. Move the pin on purpose: GPUI is pre-1.0
-# and its API changes between commits; both crates must use the same commit.
-#
-# Why not a newer commit: the next one (#58496) added tooling/lints/test_fixture, a workspace with
-# stub packages also named `gpui` and `gpui_shared_string`. Cargo then resolves gpui_platform's
-# `gpui` to the stub and fails ("gpui does not have feature windows-manifest"; the version and
-# feature list it prints belong to usvg). Every later commit has the fixture; see DECISION.md.
+# and its API changes between commits; both crates must use the same commit. Moving it needs a
+# build, the tests (one checks that every key binding parses) and a start-up measurement, and an
+# entry in DECISION.md.
 #
 # gpui_platform turns on gpui's `windows-manifest` itself; its default `multithreaded` feature
 # is only for the web backend.
-gpui = { git = "https://github.com/zed-industries/zed", rev = "b77ec90b2e6585622099235d9fb7d708d22ad956", default-features = false }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "b77ec90b2e6585622099235d9fb7d708d22ad956", default-features = false }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "9a8ab54db4f9f9af4dc6efb42b304c55c6a62bd3", default-features = false }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "9a8ab54db4f9f9af4dc6efb42b304c55c6a62bd3", default-features = false }
 pulldown-cmark = "0.13"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }

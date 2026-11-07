@@ -37,22 +37,6 @@ impl ThemeChoice {
             Self::System => "system",
         }
     }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Light => "Theme: light",
-            Self::Dark => "Theme: dark",
-            Self::System => "Theme: system",
-        }
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            Self::Light => Self::Dark,
-            Self::Dark => Self::System,
-            Self::System => Self::Light,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +47,8 @@ pub struct ViewSettings {
     pub show_editor: bool,
     pub show_preview: bool,
     pub show_outline: bool,
+    /// Smart quotes, dashes and ellipses in the preview (markdown-it's `typographer`). On by default, as in the app.
+    pub typographer: bool,
     /// Keys this window does not use, written back unchanged.
     rest: Map<String, Value>,
     /// An oversized or malformed own file is shown with defaults and not overwritten.
@@ -78,6 +64,7 @@ impl Default for ViewSettings {
             show_editor: true,
             show_preview: true,
             show_outline: false,
+            typographer: true,
             rest: Map::new(),
             save: true,
         }
@@ -130,6 +117,7 @@ pub fn load(app_dir: &Path, own_dir: &Path) -> ViewSettings {
         show_editor: root.get("showEditor").and_then(Value::as_bool).unwrap_or(defaults.show_editor),
         show_preview: root.get("showPreview").and_then(Value::as_bool).unwrap_or(defaults.show_preview),
         show_outline: root.get("showOutline").and_then(Value::as_bool).unwrap_or(defaults.show_outline),
+        typographer: root.get("typographer").and_then(Value::as_bool).unwrap_or(defaults.typographer),
         rest: root,
         save: true,
     }
@@ -147,6 +135,7 @@ pub fn save(own_dir: &Path, settings: &ViewSettings) -> Result<(), String> {
     root.insert("showEditor".into(), Value::Bool(settings.show_editor));
     root.insert("showPreview".into(), Value::Bool(settings.show_preview));
     root.insert("showOutline".into(), Value::Bool(settings.show_outline));
+    root.insert("typographer".into(), Value::Bool(settings.typographer));
     let bytes = serde_json::to_vec_pretty(&Value::Object(root)).map_err(|err| format!("could not encode settings: {err}"))?;
     fs::create_dir_all(own_dir).map_err(|err| format!("could not create {}: {err}", own_dir.display()))?;
     files::write_atomically(&own_dir.join(FILE_NAME), &bytes).map_err(|err| format!("could not save settings: {err}"))

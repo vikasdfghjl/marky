@@ -9,8 +9,10 @@ mod files;
 
 mod bitmaps;
 mod buffer;
+mod contrast;
 mod diagrams;
 mod editor;
+mod extras;
 mod icons;
 mod math;
 mod perf;
@@ -106,48 +108,105 @@ fn plain_path(path: PathBuf) -> PathBuf {
     })
 }
 
+/// Shortcuts by where the focus is. Editing keys act in the editor and the find fields only, so
+/// Enter and Space can press a focused button; the arrows move through a menu, the outline or the
+/// preview when one of them has the focus. The app's `SHORTCUTS` table and menu hints are the model.
 fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("backspace", editor::Backspace, None),
-        KeyBinding::new("delete", editor::Delete, None),
-        KeyBinding::new("left", editor::Left, None),
-        KeyBinding::new("right", editor::Right, None),
-        KeyBinding::new("up", editor::Up, None),
-        KeyBinding::new("down", editor::Down, None),
-        KeyBinding::new("shift-left", editor::SelectLeft, None),
-        KeyBinding::new("shift-right", editor::SelectRight, None),
-        KeyBinding::new("secondary-a", editor::SelectAll, None),
-        KeyBinding::new("home", editor::LineStart, None),
-        KeyBinding::new("end", editor::LineEnd, None),
-        KeyBinding::new("enter", editor::Enter, None),
-        KeyBinding::new("secondary-v", editor::Paste, None),
-        KeyBinding::new("secondary-c", editor::Copy, None),
-        KeyBinding::new("secondary-x", editor::Cut, None),
-        KeyBinding::new("secondary-s", editor::Save, None),
-        KeyBinding::new("shift-up", editor::SelectUp, None),
-        KeyBinding::new("shift-down", editor::SelectDown, None),
-        KeyBinding::new("shift-home", editor::SelectLineStart, None),
-        KeyBinding::new("shift-end", editor::SelectLineEnd, None),
-        KeyBinding::new("ctrl-left", editor::WordLeft, None),
-        KeyBinding::new("ctrl-right", editor::WordRight, None),
-        KeyBinding::new("ctrl-shift-left", editor::SelectWordLeft, None),
-        KeyBinding::new("ctrl-shift-right", editor::SelectWordRight, None),
-        KeyBinding::new("ctrl-home", editor::DocumentStart, None),
-        KeyBinding::new("ctrl-end", editor::DocumentEnd, None),
-        KeyBinding::new("ctrl-shift-home", editor::SelectDocumentStart, None),
-        KeyBinding::new("ctrl-shift-end", editor::SelectDocumentEnd, None),
-        KeyBinding::new("ctrl-backspace", editor::DeleteWordLeft, None),
-        KeyBinding::new("ctrl-delete", editor::DeleteWordRight, None),
-        KeyBinding::new("secondary-z", editor::Undo, None),
-        KeyBinding::new("secondary-y", editor::Redo, None),
-        KeyBinding::new("secondary-shift-z", editor::Redo, None),
-        KeyBinding::new("secondary-f", editor::Find, None),
-        KeyBinding::new("secondary-h", editor::FindReplace, None),
+    cx.bind_keys(key_bindings());
+}
+
+fn key_bindings() -> Vec<KeyBinding> {
+    // Ctrl, not `secondary-`: since July GPUI resolves `secondary` only when told the OS, and
+    // `KeyBinding::new` is not, so it panics. Marky is Windows-only, where `secondary` was Ctrl.
+    const TEXT: Option<&str> = Some("Editor || TextField");
+    vec![
+        KeyBinding::new("backspace", editor::Backspace, TEXT),
+        KeyBinding::new("delete", editor::Delete, TEXT),
+        KeyBinding::new("left", editor::Left, TEXT),
+        KeyBinding::new("right", editor::Right, TEXT),
+        KeyBinding::new("up", editor::Up, TEXT),
+        KeyBinding::new("down", editor::Down, TEXT),
+        KeyBinding::new("shift-left", editor::SelectLeft, TEXT),
+        KeyBinding::new("shift-right", editor::SelectRight, TEXT),
+        KeyBinding::new("ctrl-a", editor::SelectAll, TEXT),
+        KeyBinding::new("home", editor::LineStart, TEXT),
+        KeyBinding::new("end", editor::LineEnd, TEXT),
+        KeyBinding::new("enter", editor::Enter, TEXT),
+        KeyBinding::new("ctrl-v", editor::Paste, TEXT),
+        KeyBinding::new("ctrl-c", editor::Copy, TEXT),
+        KeyBinding::new("ctrl-x", editor::Cut, TEXT),
+        KeyBinding::new("shift-up", editor::SelectUp, TEXT),
+        KeyBinding::new("shift-down", editor::SelectDown, TEXT),
+        KeyBinding::new("shift-home", editor::SelectLineStart, TEXT),
+        KeyBinding::new("shift-end", editor::SelectLineEnd, TEXT),
+        KeyBinding::new("ctrl-left", editor::WordLeft, TEXT),
+        KeyBinding::new("ctrl-right", editor::WordRight, TEXT),
+        KeyBinding::new("ctrl-shift-left", editor::SelectWordLeft, TEXT),
+        KeyBinding::new("ctrl-shift-right", editor::SelectWordRight, TEXT),
+        KeyBinding::new("ctrl-home", editor::DocumentStart, TEXT),
+        KeyBinding::new("ctrl-end", editor::DocumentEnd, TEXT),
+        KeyBinding::new("ctrl-shift-home", editor::SelectDocumentStart, TEXT),
+        KeyBinding::new("ctrl-shift-end", editor::SelectDocumentEnd, TEXT),
+        KeyBinding::new("ctrl-backspace", editor::DeleteWordLeft, TEXT),
+        KeyBinding::new("ctrl-delete", editor::DeleteWordRight, TEXT),
+        KeyBinding::new("ctrl-z", editor::Undo, TEXT),
+        KeyBinding::new("ctrl-y", editor::Redo, TEXT),
+        KeyBinding::new("ctrl-shift-z", editor::Redo, TEXT),
+        // Shift+Enter is a new line in the editor and "previous match" in the find field.
+        KeyBinding::new("shift-enter", editor::Enter, Some("Editor")),
+        KeyBinding::new("shift-enter", editor::FindPrevious, Some("TextField")),
+        // Tab indents in the editor, as the app's `indentWithTab`; elsewhere it moves the focus. GPUI
+        // lets the later of two matching bindings win, so the window-wide pair comes first.
+        KeyBinding::new("tab", editor::FocusNext, None),
+        KeyBinding::new("shift-tab", editor::FocusPrevious, None),
+        KeyBinding::new("tab", editor::Indent, Some("Editor")),
+        KeyBinding::new("shift-tab", editor::Outdent, Some("Editor")),
+        // Anywhere in the window.
+        KeyBinding::new("ctrl-o", editor::OpenFile, None),
+        KeyBinding::new("ctrl-s", editor::Save, None),
+        KeyBinding::new("ctrl-w", editor::CloseTab, None),
+        KeyBinding::new("ctrl-,", editor::OpenSettings, None),
+        KeyBinding::new("ctrl-f", editor::Find, None),
+        KeyBinding::new("ctrl-h", editor::FindReplace, None),
         KeyBinding::new("f3", editor::FindNext, None),
         KeyBinding::new("shift-f3", editor::FindPrevious, None),
         KeyBinding::new("escape", editor::FindClose, None),
-        // Shift+Enter is a new line in the editor and "previous match" in the find field.
-        KeyBinding::new("shift-enter", editor::Enter, None),
-        KeyBinding::new("shift-enter", editor::FindPrevious, Some("TextField")),
-    ]);
+        KeyBinding::new("ctrl-shift-e", editor::ToggleEditor, None),
+        KeyBinding::new("ctrl-shift-v", editor::TogglePreview, None),
+        KeyBinding::new("ctrl-shift-o", editor::ToggleOutline, None),
+        KeyBinding::new("alt-z", editor::ToggleWordWrap, None),
+        KeyBinding::new("ctrl-tab", editor::NextTab, None),
+        KeyBinding::new("ctrl-shift-tab", editor::PreviousTab, None),
+        KeyBinding::new("alt-f", editor::OpenFileMenu, None),
+        KeyBinding::new("f10", editor::OpenFileMenu, None),
+        KeyBinding::new("alt-e", editor::OpenEditMenu, None),
+        KeyBinding::new("alt-v", editor::OpenViewMenu, None),
+        // An open menu.
+        KeyBinding::new("down", editor::MenuNext, Some("Menu")),
+        KeyBinding::new("up", editor::MenuPrevious, Some("Menu")),
+        KeyBinding::new("left", editor::MenuLeft, Some("Menu")),
+        KeyBinding::new("right", editor::MenuRight, Some("Menu")),
+        // The outline.
+        KeyBinding::new("down", editor::OutlineNext, Some("Outline")),
+        KeyBinding::new("up", editor::OutlinePrevious, Some("Outline")),
+        KeyBinding::new("enter", editor::OutlineOpen, Some("Outline")),
+        // The preview scrolls from the keyboard when it has the focus.
+        KeyBinding::new("up", editor::PreviewLineUp, Some("Preview")),
+        KeyBinding::new("down", editor::PreviewLineDown, Some("Preview")),
+        KeyBinding::new("pageup", editor::PreviewPageUp, Some("Preview")),
+        KeyBinding::new("pagedown", editor::PreviewPageDown, Some("Preview")),
+        KeyBinding::new("space", editor::PreviewPageDown, Some("Preview")),
+        KeyBinding::new("home", editor::PreviewTop, Some("Preview")),
+        KeyBinding::new("end", editor::PreviewBottom, Some("Preview")),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    /// `KeyBinding::new` panics on a keystroke GPUI cannot parse, which in a release build closes the
+    /// window before it opens. Moving the GPUI pin to 9a8ab54 did exactly that (`secondary-` changed).
+    #[test]
+    fn every_key_binding_parses() {
+        assert!(super::key_bindings().len() > 60);
+    }
 }

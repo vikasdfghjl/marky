@@ -2,6 +2,36 @@
 
 Decisions about Marky that are not obvious from the code, with the reasons and the evidence behind them. Newest first. Each entry says what was decided, what else was considered, and what it costs; change one only with new evidence, and add a new entry rather than rewriting an old one.
 
+## 2026-11-07: GPUI moves to Zed's main at 9a8ab54
+
+Context: the 6 Nov entry below pinned GPUI at `b77ec90` because Cargo seemed to resolve `gpui_platform`'s `gpui` to the stub package in Zed's `tooling/lints/test_fixture` on every later commit. On 7 Nov 2026, while a report to Zed about that was being drafted, the failure did not come back. This entry supersedes the 6 Nov one's choice of commit; its reasons for using Zed's repository at all still hold.
+
+### Decision
+
+- `gpui` and `gpui_platform` come from Zed's repository at **`9a8ab54`**, `main` on 6 Nov 2026 (four months after `b77ec90`).
+- No report to Zed: it would have described a failure that cannot be shown.
+
+### Evidence
+
+- A new project depending on both crates resolves them to the real `gpui` 0.2.2, not the 0.0.0 stub, at `78fde14` (the commit that failed on 6 Nov) and at `9a8ab54`; so does the prototype's whole manifest. The 6 Nov failure had another cause, perhaps the prototype's existing lockfile. The fixture is still in Zed's repository.
+- The port took one change: key bindings written `secondary-…` now panic in `KeyBinding::new`, because GPUI resolves `secondary` only when told the host OS. They are `ctrl-…` now (Marky is Windows-only, where `secondary` was Ctrl), and a test builds every binding so a change like it fails a test instead of the release build, which closed before showing its window.
+- Clippy is clean and all 66 tests pass. In the window, the editor, preview, math, diagrams, menus, settings, keyboard focus and the UI Automation tree (including the editor's text pattern) behave as on `b77ec90`.
+- Same session, `typical.md`, two rounds of five runs:
+
+| Build | Start (median) | Memory | Program |
+| --- | ---: | ---: | ---: |
+| `b77ec90` | 506 / 500 ms | 16.6 / 16.6 MB | 11.04 MB |
+| **`9a8ab54`** | 499 / 512 ms | 16.2 / 16.3 MB | 11.21 MB |
+
+  Typing was not measured: the benchmark types into whatever window is in front.
+
+### Consequences
+
+- **Program size 11.21 MB** with step 4's chrome and accessibility, the rest of the preview's syntax and this GPUI: under the README's 12 MB hard limit, 3.2 MB over its 8 MB target. The diagram helper is 10.39 MB.
+- Cascadia Code's ligatures now show in the editor (`-->` as an arrow). The app shows them too: Chromium enables them and its CSS does not turn them off.
+- Still no `WM_IME_REQUEST` handling in GPUI's Windows backend, so IME reconversion stays out of reach.
+- The pin moves again only with a build, the tests, a start-up measurement and an entry here.
+
 ## 2026-11-07: Math is ported with RaTeX; Mermaid diagrams move to an on-demand helper with merman
 
 Context: step 3 of [docs/gpui-migration.md](docs/gpui-migration.md), whose "Step 3: math and diagrams without JavaScript" section has the full research. Both were built on 7 Nov 2026.
