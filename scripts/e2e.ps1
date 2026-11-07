@@ -220,8 +220,8 @@ try {
   Write-Check 'dirty marker after typing' ((Wait-Until { (Title-Of $app) -eq 'fixture.md • - Marky' }) -as [bool]) (Title-Of $app)
   Write-Check 'typed text reaches the editor' ((Wait-Until { (Editor-Text) -eq "unsaved $text" } 10) -as [bool])
 
-  Press (Find $T::Button 'Save') | Out-Null
-  Write-Check 'clean after Save' ((Wait-Until { (Title-Of $app) -eq 'fixture.md - Marky' }) -as [bool]) (Title-Of $app)
+  Run-Menu 'File' 'Save' | Out-Null
+  Write-Check 'clean after File > Save' ((Wait-Until { (Title-Of $app) -eq 'fixture.md - Marky' }) -as [bool]) (Title-Of $app)
   $expected = [byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes("unsaved $text".Replace("`n", "`r`n"))
   $onDisk = [IO.File]::ReadAllBytes($fixture)
   Write-Check 'saved bytes keep BOM and CRLF' ([Convert]::ToBase64String($onDisk) -eq [Convert]::ToBase64String($expected)) "$($onDisk.Length) bytes, expected $($expected.Length)"
