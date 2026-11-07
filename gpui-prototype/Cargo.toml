@@ -32,6 +32,12 @@ rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-segmentation = "1"
+# External changes, and the single-instance request file. Same version as the app.
+notify = "8.2"
+# A watcher callback runs on notify's thread; this hands its event to the GPUI task that owns the view.
+async-channel = "2"
+# Windows high-contrast themes: the system colours the user chose, read once a second.
+windows-sys = { version = "0.61", features = ["Win32_Graphics_Gdi", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }
 # The editor buffer. MIT.
 ropey = "1.6"
 # Math: RaTeX lays out TeX like KaTeX, in pure Rust, with KaTeX's fonts embedded. MIT. ~3 MB.

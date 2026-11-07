@@ -15,6 +15,10 @@ actions!(
     [
         OpenFile,
         OpenSettings,
+        NewTab,
+        SaveAs,
+        OpenRecent,
+        ToggleAutoSave,
         CloseTab,
         NextTab,
         PreviousTab,
@@ -34,6 +38,11 @@ actions!(
         OutlineNext,
         OutlinePrevious,
         OutlineOpen,
+        SettingsNext,
+        SettingsPrevious,
+        PreviewLinkNext,
+        PreviewLinkPrevious,
+        PreviewLinkOpen,
         PreviewLineUp,
         PreviewLineDown,
         PreviewPageUp,
@@ -43,11 +52,21 @@ actions!(
     ]
 );
 
+/// An underlined menu letter. It is an action, not a key listener, so GPUI consumes the key-down
+/// and Windows does not also translate it into a character that would be typed into the editor.
+#[derive(Clone, PartialEq, Default, Debug, gpui::Action)]
+#[action(namespace = prototype, no_json)]
+pub struct MenuAccessKey(pub char);
+
 /// What a menu item, toolbar button or shortcut does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Command {
+    NewTab,
     Open,
+    OpenRecent,
     Save,
+    SaveAs,
+    ToggleAutoSave,
     Settings,
     CloseTab,
     Quit,
@@ -73,49 +92,54 @@ impl Command {
     /// Commands that put the focus somewhere of their own; the others hand it back to the editor
     /// when they come from a menu.
     fn moves_focus(self) -> bool {
-        matches!(self, Self::Find | Self::Replace | Self::Settings | Self::Open)
+        matches!(self, Self::Find | Self::Replace | Self::Settings | Self::Open | Self::OpenRecent)
     }
 }
 
 struct Entry {
     label: &'static str,
     shortcut: &'static str,
+    /// The underlined letter that activates the item while its menu is open, as on Windows.
+    access: char,
     command: Command,
 }
 
-const fn entry(label: &'static str, shortcut: &'static str, command: Command) -> Entry {
-    Entry { label, shortcut, command }
+const fn entry(label: &'static str, shortcut: &'static str, access: char, command: Command) -> Entry {
+    Entry { label, shortcut, access, command }
 }
 
-/// The app's menus (`menu.rs`) with their shortcut hints, less what the prototype does not have
-/// (New Tab, Open Recent, Save As, Auto Save). Larger and Smaller text are the prototype's own.
+/// The app's menus (`menu.rs`) with their shortcut hints. Larger and Smaller text are the prototype's own.
 fn entries(menu: OpenMenu) -> &'static [Entry] {
-    const FILE: [Entry; 5] = [
-        entry("Open…", "Ctrl+O", Command::Open),
-        entry("Save", "Ctrl+S", Command::Save),
-        entry("Settings…", "Ctrl+,", Command::Settings),
-        entry("Close Tab", "Ctrl+W", Command::CloseTab),
-        entry("Quit", "", Command::Quit),
+    const FILE: [Entry; 9] = [
+        entry("New Tab", "Ctrl+N", 'n', Command::NewTab),
+        entry("Open…", "Ctrl+O", 'o', Command::Open),
+        entry("Open Recent…", "Ctrl+R", 'r', Command::OpenRecent),
+        entry("Save", "Ctrl+S", 's', Command::Save),
+        entry("Save As…", "Ctrl+Shift+S", 'a', Command::SaveAs),
+        entry("Auto Save", "", 'u', Command::ToggleAutoSave),
+        entry("Settings…", "Ctrl+,", 't', Command::Settings),
+        entry("Close Tab", "Ctrl+W", 'c', Command::CloseTab),
+        entry("Quit", "", 'q', Command::Quit),
     ];
     const EDIT: [Entry; 8] = [
-        entry("Undo", "Ctrl+Z", Command::Undo),
-        entry("Redo", "Ctrl+Y", Command::Redo),
-        entry("Cut", "Ctrl+X", Command::Cut),
-        entry("Copy", "Ctrl+C", Command::Copy),
-        entry("Paste", "Ctrl+V", Command::Paste),
-        entry("Select All", "Ctrl+A", Command::SelectAll),
-        entry("Find", "Ctrl+F", Command::Find),
-        entry("Replace", "Ctrl+H", Command::Replace),
+        entry("Undo", "Ctrl+Z", 'u', Command::Undo),
+        entry("Redo", "Ctrl+Y", 'r', Command::Redo),
+        entry("Cut", "Ctrl+X", 'c', Command::Cut),
+        entry("Copy", "Ctrl+C", 'o', Command::Copy),
+        entry("Paste", "Ctrl+V", 'p', Command::Paste),
+        entry("Select All", "Ctrl+A", 'a', Command::SelectAll),
+        entry("Find", "Ctrl+F", 'f', Command::Find),
+        entry("Replace", "Ctrl+H", 'e', Command::Replace),
     ];
     const VIEW: [Entry; 8] = [
-        entry("Editor", "Ctrl+Shift+E", Command::ToggleEditor),
-        entry("Preview", "Ctrl+Shift+V", Command::TogglePreview),
-        entry("Outline", "Ctrl+Shift+O", Command::ToggleOutline),
-        entry("Word Wrap", "Alt+Z", Command::ToggleWordWrap),
-        entry("Next Tab", "Ctrl+Tab", Command::NextTab),
-        entry("Previous Tab", "Ctrl+Shift+Tab", Command::PreviousTab),
-        entry("Larger Text", "", Command::LargerText),
-        entry("Smaller Text", "", Command::SmallerText),
+        entry("Editor", "Ctrl+Shift+E", 'e', Command::ToggleEditor),
+        entry("Preview", "Ctrl+Shift+V", 'p', Command::TogglePreview),
+        entry("Outline", "Ctrl+Shift+O", 'o', Command::ToggleOutline),
+        entry("Word Wrap", "Alt+Z", 'w', Command::ToggleWordWrap),
+        entry("Next Tab", "Ctrl+Tab", 'n', Command::NextTab),
+        entry("Previous Tab", "Ctrl+Shift+Tab", 'v', Command::PreviousTab),
+        entry("Larger Text", "", 'l', Command::LargerText),
+        entry("Smaller Text", "", 'm', Command::SmallerText),
     ];
     match menu {
         OpenMenu::File => &FILE,
@@ -125,7 +149,7 @@ fn entries(menu: OpenMenu) -> &'static [Entry] {
 }
 
 /// Room for the longest menu: one focus handle per item, so the arrows can move between them.
-pub const MENU_ITEMS: usize = 8;
+pub const MENU_ITEMS: usize = 9;
 
 const MENUS: [(OpenMenu, &str); 3] = [(OpenMenu::File, "File"), (OpenMenu::Edit, "Edit"), (OpenMenu::View, "View")];
 
@@ -148,8 +172,15 @@ impl Prototype {
     pub fn run(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         self.open_menu = None;
         match command {
+            Command::NewTab => self.new_tab(cx),
             Command::Open => self.open_file(cx),
+            Command::OpenRecent => self.toggle_recent(window, cx),
             Command::Save => self.write_active(cx),
+            Command::SaveAs => self.save_as_document(self.doc().id, cx),
+            Command::ToggleAutoSave => {
+                self.settings.auto_save = !self.settings.auto_save;
+                self.keep_settings(cx);
+            }
             Command::Settings => self.toggle_settings(window, cx),
             Command::CloseTab => self.close_tab(self.active, window, cx),
             Command::Quit => self.quit(&Quit, window, cx),
@@ -189,7 +220,11 @@ impl Prototype {
     /// The shortcuts for commands that have no action of their own in `editor.rs`.
     pub fn command_actions<E: InteractiveElement>(&self, element: E, cx: &mut Context<Self>) -> E {
         element
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.run(Command::NewTab, window, cx)))
             .on_action(cx.listener(|this, _: &OpenFile, window, cx| this.run(Command::Open, window, cx)))
+            .on_action(cx.listener(|this, _: &OpenRecent, window, cx| this.run(Command::OpenRecent, window, cx)))
+            .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.run(Command::SaveAs, window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleAutoSave, window, cx| this.run(Command::ToggleAutoSave, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.run(Command::Settings, window, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| this.run(Command::CloseTab, window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| this.run(Command::NextTab, window, cx)))
@@ -239,7 +274,7 @@ impl Prototype {
             .px_3()
             .py_1()
             .when(opened, |button| button.bg(tone(dark, 0x3f3f46, 0xe4e4e7)))
-            .child(label)
+            .child(menu_label(label, label.chars().next().unwrap_or(' ')))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if this.open_menu == Some(menu) {
                     this.close_menus(window, cx);
@@ -303,12 +338,24 @@ impl Prototype {
         self.open_menu_at(next, true, window, cx);
     }
 
+    /// A letter pressed in an open menu runs the item whose underlined key it is.
+    fn menu_access_key(&mut self, key: char, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.open_menu else { return };
+        let Some(entry) = entries(menu).iter().find(|entry| entry.access.eq_ignore_ascii_case(&key)) else { return };
+        let command = entry.command;
+        self.run(command, window, cx);
+        if !command.moves_focus() {
+            self.focus_editor(window, cx);
+        }
+    }
+
     fn checked(&self, command: Command) -> Option<bool> {
         match command {
             Command::ToggleEditor => Some(self.settings.show_editor),
             Command::TogglePreview => Some(self.settings.preview_visible()),
             Command::ToggleOutline => Some(self.settings.show_outline),
             Command::ToggleWordWrap => Some(self.settings.word_wrap),
+            Command::ToggleAutoSave => Some(self.settings.auto_save),
             _ => None,
         }
     }
@@ -330,7 +377,9 @@ impl Prototype {
             .on_action(cx.listener(|this, _: &MenuNext, window, cx| this.menu_step(1, window, cx)))
             .on_action(cx.listener(|this, _: &MenuPrevious, window, cx| this.menu_step(-1, window, cx)))
             .on_action(cx.listener(|this, _: &MenuLeft, window, cx| this.menu_switch(-1, window, cx)))
-            .on_action(cx.listener(|this, _: &MenuRight, window, cx| this.menu_switch(1, window, cx)));
+            .on_action(cx.listener(|this, _: &MenuRight, window, cx| this.menu_switch(1, window, cx)))
+            // The underlined letter of an item activates it while the menu is open.
+            .on_action(cx.listener(|this, action: &MenuAccessKey, window, cx| this.menu_access_key(action.0, window, cx)));
         let items = entries(menu).iter().enumerate().map(|(index, entry)| {
             let command = entry.command;
             let checked = self.checked(command);
@@ -348,7 +397,7 @@ impl Prototype {
                         this.focus_editor(window, cx);
                     }
                 }))
-                .child(menu_row(entry.label, entry.shortcut, checked, dark))
+                .child(menu_row(entry.label, entry.shortcut, entry.access, checked, dark))
         });
         column.children(items.collect::<Vec<_>>())
     }
@@ -357,7 +406,7 @@ impl Prototype {
 
     pub fn toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
-        let dirty = self.doc().buffer.is_dirty();
+        let dirty = self.doc().is_dirty();
         let read_only = self.doc().read_only;
         let editor = self.settings.show_editor;
         let preview = self.settings.preview_visible();
@@ -423,7 +472,7 @@ impl Prototype {
     pub fn tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active;
         let dark = self.dark;
-        let tabs: Vec<(String, bool)> = self.documents.iter().map(|doc| (file_name(&doc.path), doc.buffer.is_dirty())).collect();
+        let tabs: Vec<(String, bool)> = self.documents.iter().map(|doc| (doc.display_name(), doc.is_dirty())).collect();
         let count = tabs.len();
         div().id("tabs").role(Role::TabList).aria_label("Open files").flex().flex_row().bg(tone(dark, 0x27272a, 0xe4e4e7)).children(
             tabs.into_iter().enumerate().map(|(index, (name, dirty))| {
@@ -691,10 +740,28 @@ impl Prototype {
     fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_open = !self.settings_open;
         if self.settings_open {
-            window.focus(&self.settings_focus, cx);
+            self.recent_open = false;
+            window.focus(&self.settings_controls[0], cx);
         } else {
             self.focus_editor(window, cx);
         }
+        cx.notify();
+    }
+
+    /// Tab and Shift+Tab cycle the settings controls and wrap at either end, so the focus stays in
+    /// the open panel.
+    fn settings_step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.settings_controls.len() as isize;
+        if count == 0 {
+            return;
+        }
+        let current = self.settings_controls.iter().position(|handle| handle.is_focused(window)).map_or(-1, |index| index as isize);
+        let next = if current < 0 {
+            if delta > 0 { 0 } else { count - 1 }
+        } else {
+            (current + delta).rem_euclid(count)
+        };
+        window.focus(&self.settings_controls[next as usize], cx);
         cx.notify();
     }
 
@@ -713,20 +780,21 @@ impl Prototype {
         let dark = self.dark;
         let settings = self.settings.clone();
         let heading = |text: &'static str| div().pt_3().pb_1().font_weight(gpui::FontWeight::BOLD).child(text);
-        let theme_choice = |id: &'static str, label: &'static str, choice: settings::ThemeChoice, cx: &mut Context<Self>| {
+        let theme_choice = |id: &'static str, label: &'static str, choice: settings::ThemeChoice, focus: FocusHandle, cx: &mut Context<Self>| {
             choice_row(id, label, Role::RadioButton, settings.theme == choice, dark)
+                .track_focus(&focus)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.settings.theme = choice;
                     this.keep_settings(cx);
                 }))
         };
-        let flag = |id: &'static str, label: &'static str, on: bool, change: fn(&mut ViewSettings), cx: &mut Context<Self>| {
-            choice_row(id, label, Role::CheckBox, on, dark).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        let flag = |id: &'static str, label: &'static str, on: bool, change: fn(&mut ViewSettings), focus: FocusHandle, cx: &mut Context<Self>| {
+            choice_row(id, label, Role::CheckBox, on, dark).track_focus(&focus).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 change(&mut this.settings);
                 this.keep_settings(cx);
             }))
         };
-        let size_button = |id: &'static str, label: &'static str, name: &'static str, delta: isize, cx: &mut Context<Self>| {
+        let size_button = |id: &'static str, label: &'static str, name: &'static str, delta: isize, focus: FocusHandle, cx: &mut Context<Self>| {
             focus_ring(
                 div()
                     .id(id)
@@ -734,6 +802,7 @@ impl Prototype {
                     .aria_label(name)
                     .focusable()
                     .tab_stop(true)
+                    .track_focus(&focus)
                     .px_2()
                     .bg(tone(dark, 0x3f3f46, 0xffffff))
                     .child(label)
@@ -767,7 +836,15 @@ impl Prototype {
                     .child(div().id("settings-title").role(Role::Heading).aria_level(2).aria_label("Settings").font_weight(gpui::FontWeight::BOLD).child("Settings"))
                     .child(
                         focus_ring(
-                            div().id("settings-close").role(Role::Button).aria_label("Close settings").focusable().tab_stop(true).px_2().child("×"),
+                            div()
+                                .id("settings-close")
+                                .role(Role::Button)
+                                .aria_label("Close settings")
+                                .focusable()
+                                .tab_stop(true)
+                                .track_focus(&self.settings_controls[13])
+                                .px_2()
+                                .child("×"),
                             dark,
                         )
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
@@ -781,9 +858,9 @@ impl Prototype {
                     .id("theme-group")
                     .role(Role::RadioGroup)
                     .aria_label("Theme")
-                    .child(theme_choice("theme-system", "System", settings::ThemeChoice::System, cx))
-                    .child(theme_choice("theme-light", "Light", settings::ThemeChoice::Light, cx))
-                    .child(theme_choice("theme-dark", "Dark", settings::ThemeChoice::Dark, cx)),
+                    .child(theme_choice("theme-system", "System", settings::ThemeChoice::System, self.settings_controls[0].clone(), cx))
+                    .child(theme_choice("theme-light", "Light", settings::ThemeChoice::Light, self.settings_controls[1].clone(), cx))
+                    .child(theme_choice("theme-dark", "Dark", settings::ThemeChoice::Dark, self.settings_controls[2].clone(), cx)),
             )
             .child(heading("Editor font size"))
             .child(
@@ -810,20 +887,141 @@ impl Prototype {
                     .flex_row()
                     .items_center()
                     .gap_2()
-                    .child(size_button("font-smaller", "−", "Smaller text", -1, cx))
+                    .child(size_button("font-smaller", "−", "Smaller text", -1, self.settings_controls[3].clone(), cx))
                     .child(format!("{size} px"))
-                    .child(size_button("font-larger", "+", "Larger text", 1, cx)),
+                    .child(size_button("font-larger", "+", "Larger text", 1, self.settings_controls[4].clone(), cx)),
             )
             .child(heading("Editor and preview"))
-            .child(flag("set-wrap", "Word wrap", settings.word_wrap, |s| s.word_wrap = !s.word_wrap, cx))
+            .child(flag("set-wrap", "Word wrap", settings.word_wrap, |s| s.word_wrap = !s.word_wrap, self.settings_controls[5].clone(), cx))
             .child(
                 choice_row("set-typographer", "Smart quotes and dashes in the preview", Role::CheckBox, typographer, dark)
+                    .track_focus(&self.settings_controls[6])
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_typographer(!typographer, cx))),
             )
+            .child(heading("Saving"))
+            .child(flag("set-autosave", "Auto save", settings.auto_save, |s| s.auto_save = !s.auto_save, self.settings_controls[7].clone(), cx))
+            .child(
+                choice_row(
+                    "line-lf",
+                    "LF for new files",
+                    Role::RadioButton,
+                    settings.new_file_line_ending == crate::files::LineEnding::Lf,
+                    dark,
+                )
+                .track_focus(&self.settings_controls[8])
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_line_ending(crate::files::LineEnding::Lf, cx))),
+            )
+            .child(
+                choice_row(
+                    "line-crlf",
+                    "CRLF for new files",
+                    Role::RadioButton,
+                    settings.new_file_line_ending == crate::files::LineEnding::Crlf,
+                    dark,
+                )
+                .track_focus(&self.settings_controls[9])
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_line_ending(crate::files::LineEnding::Crlf, cx))),
+            )
             .child(heading("Panes"))
-            .child(flag("set-editor", "Show editor", settings.show_editor, |s| s.show_editor = !s.show_editor, cx))
-            .child(flag("set-preview", "Show preview", settings.show_preview, |s| s.show_preview = !s.show_preview, cx))
-            .child(flag("set-outline", "Show outline", settings.show_outline, |s| s.show_outline = !s.show_outline, cx))
+            .child(flag("set-editor", "Show editor", settings.show_editor, |s| s.show_editor = !s.show_editor, self.settings_controls[10].clone(), cx))
+            .child(flag("set-preview", "Show preview", settings.show_preview, |s| s.show_preview = !s.show_preview, self.settings_controls[11].clone(), cx))
+            .child(flag("set-outline", "Show outline", settings.show_outline, |s| s.show_outline = !s.show_outline, self.settings_controls[12].clone(), cx))
+            .on_action(cx.listener(|this, _: &SettingsNext, window, cx| this.settings_step(1, window, cx)))
+            .on_action(cx.listener(|this, _: &SettingsPrevious, window, cx| this.settings_step(-1, window, cx)))
+    }
+
+    fn set_line_ending(&mut self, ending: crate::files::LineEnding, cx: &mut Context<Self>) {
+        self.settings.new_file_line_ending = ending;
+        self.keep_settings(cx);
+    }
+
+    // ----- Recent files -----
+
+    fn toggle_recent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.recent_open = !self.recent_open;
+        if self.recent_open {
+            self.settings_open = false;
+            self.recent = store::load_recent(&self.config_dir).into_iter().filter(|path| path.is_file()).collect();
+            window.focus(&self.recent_focus, cx);
+        } else {
+            self.focus_editor(window, cx);
+        }
+        cx.notify();
+    }
+
+    pub fn close_recent(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.recent_open {
+            return false;
+        }
+        self.recent_open = false;
+        self.focus_editor(window, cx);
+        true
+    }
+
+    /// The app's Open Recent list. A side panel, like the settings: Esc or Close puts it away.
+    pub fn recent_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let dark = self.dark;
+        let entries = self.recent.clone();
+        let rows = entries.into_iter().enumerate().map(|(index, path)| {
+            let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().into_owned());
+            let folder = path.parent().map(|folder| folder.to_string_lossy().into_owned()).unwrap_or_default();
+            let outcome = path.clone();
+            focus_ring(
+                div()
+                    .id(("recent", index))
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(path.to_string_lossy().into_owned()))
+                    .focusable()
+                    .tab_stop(true)
+                    .flex()
+                    .flex_col()
+                    .px_2()
+                    .py_1()
+                    .cursor_pointer()
+                    .child(div().child(name))
+                    .child(div().text_size(px(11.)).text_color(quiet(dark)).child(folder))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.recent_open = false;
+                        this.open_path(&outcome, cx);
+                        this.focus_editor(window, cx);
+                    })),
+                dark,
+            )
+        });
+        div()
+            .id("recent")
+            .key_context("Recent")
+            .track_focus(&self.recent_focus)
+            .role(Role::Group)
+            .aria_label("Recent files")
+            .w(px(300.))
+            .h_full()
+            .overflow_y_scroll()
+            .px_3()
+            .py_2()
+            .text_size(px(13.))
+            .bg(tone(dark, 0x18181b, 0xf4f4f5))
+            .border_l_1()
+            .border_color(tone(dark, 0x3f3f46, 0xd4d4d8))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .items_center()
+                    .child(div().id("recent-title").role(Role::Heading).aria_level(2).aria_label("Recent files").font_weight(gpui::FontWeight::BOLD).child("Recent files"))
+                    .child(
+                        focus_ring(
+                            div().id("recent-close").role(Role::Button).aria_label("Close recent files").focusable().tab_stop(true).px_2().child("×"),
+                            dark,
+                        )
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.close_recent(window, cx);
+                        })),
+                    ),
+            )
+            .children(rows.collect::<Vec<_>>())
+            .when(self.recent.is_empty(), |panel| panel.child("No recent files"))
     }
 
     /// Smart punctuation changes what the preview shows, so every open document is parsed again.
@@ -841,6 +1039,9 @@ impl Prototype {
     pub fn preview_keys<E: InteractiveElement>(&self, element: E, cx: &mut Context<Self>) -> E {
         let line = px(40.);
         element
+            .on_action(cx.listener(|this, _: &PreviewLinkNext, _, cx| this.preview_link_step(1, cx)))
+            .on_action(cx.listener(|this, _: &PreviewLinkPrevious, _, cx| this.preview_link_step(-1, cx)))
+            .on_action(cx.listener(|this, _: &PreviewLinkOpen, window, cx| this.preview_link_open(window, cx)))
             .on_action(cx.listener(move |this, _: &PreviewLineUp, _, cx| this.scroll_preview(line, cx)))
             .on_action(cx.listener(move |this, _: &PreviewLineDown, _, cx| this.scroll_preview(-line, cx)))
             .on_action(cx.listener(|this, _: &PreviewPageUp, _, cx| {
@@ -859,6 +1060,32 @@ impl Prototype {
                 this.doc().block_list.scroll_to_end();
                 cx.notify();
             }))
+    }
+
+    /// Left and right move through the preview's links, and scroll the chosen one into view. The
+    /// preview itself is the tab stop, so a document with many links does not fill the Tab order.
+    fn preview_link_step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let links = self.preview_links();
+        if links.is_empty() {
+            self.preview_link = None;
+            cx.notify();
+            return;
+        }
+        let count = links.len() as isize;
+        let next = match self.preview_link {
+            Some(index) => (index as isize + delta).rem_euclid(count),
+            None if delta > 0 => 0,
+            None => count - 1,
+        } as usize;
+        self.preview_link = Some(next);
+        let block = links[next].1;
+        self.doc().block_list.scroll_to(ListOffset { item_ix: block, offset_in_item: px(0.) });
+        cx.notify();
+    }
+
+    fn preview_link_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((link, _)) = self.preview_link.and_then(|index| self.preview_links().get(index).cloned()) else { return };
+        self.follow_link(&link, window, cx);
     }
 
     /// Positive `by` scrolls up, like a wheel turned away from you.
@@ -902,7 +1129,21 @@ fn choice_row(id: &'static str, label: &'static str, role: Role, on: bool, dark:
     )
 }
 
-fn menu_row(label: &str, shortcut: &str, checked: Option<bool>, dark: bool) -> gpui::Div {
+/// A label with its access key underlined, as a Windows menu shows it.
+fn menu_label(label: &str, access: char) -> gpui::Div {
+    let Some((start, matched)) = label.char_indices().find(|(_, ch)| ch.eq_ignore_ascii_case(&access)) else {
+        return div().child(label.to_string());
+    };
+    let end = start + matched.len_utf8();
+    div()
+        .flex()
+        .flex_row()
+        .child(label[..start].to_string())
+        .child(div().underline().child(label[start..end].to_string()))
+        .child(label[end..].to_string())
+}
+
+fn menu_row(label: &str, shortcut: &str, access: char, checked: Option<bool>, dark: bool) -> gpui::Div {
     let check = match checked {
         Some(true) => "✓",
         _ => "",
@@ -916,7 +1157,7 @@ fn menu_row(label: &str, shortcut: &str, checked: Option<bool>, dark: bool) -> g
         .w(px(240.))
         .text_color(tone(dark, 0xfafafa, 0x18181b))
         .child(div().w(px(12.)).child(check))
-        .child(div().flex_1().child(label.to_string()))
+        .child(menu_label(label, access).flex_1())
         // Lighter than `quiet` in the dark theme: the menu's background is lighter than the bars'.
         .child(div().text_color(tone(dark, 0xd4d4d8, 0x52525b)).child(shortcut.to_string()))
 }

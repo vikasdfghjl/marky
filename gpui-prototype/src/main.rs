@@ -6,6 +6,15 @@
 #[allow(dead_code)]
 #[path = "../../src-tauri/src/files.rs"]
 mod files;
+#[allow(dead_code)]
+#[path = "../../src-tauri/src/diagnostics.rs"]
+mod diagnostics;
+#[allow(dead_code)]
+#[path = "../../src-tauri/src/store.rs"]
+mod store;
+#[allow(dead_code)]
+#[path = "../../src-tauri/src/watcher.rs"]
+mod watcher;
 
 mod bitmaps;
 mod buffer;
@@ -13,7 +22,9 @@ mod contrast;
 mod diagrams;
 mod editor;
 mod extras;
+mod high_contrast;
 mod icons;
+mod instance;
 mod math;
 mod perf;
 mod preview;
@@ -32,7 +43,25 @@ use gpui::{
 fn main() {
     // The app's startup_ms also counts from the top of main, so the two numbers compare.
     perf::start();
-    let path = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
+    // A second launch forwards its file to the first window and exits, as the app's single instance does.
+    let config_dir = settings::own_config_dir();
+    let local_dir = settings::own_local_dir();
+    let startup_arg = std::env::args().skip(1).find(|arg| !arg.starts_with('-')).map(PathBuf::from);
+    let instance_lock = match instance::start(&config_dir) {
+        Ok(instance::Start::Primary(file)) => Some(file),
+        Ok(instance::Start::Secondary) => {
+            let _ = instance::forward(&config_dir, startup_arg.as_deref());
+            return;
+        }
+        Err(err) => {
+            eprintln!("single instance unavailable: {err}");
+            None
+        }
+    };
+    diagnostics::init(&local_dir, "gpui-prototype");
+    high_contrast::refresh();
+    let recovery = store::read_snapshots(&local_dir);
+    let path = startup_arg.unwrap_or_else(|| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/fixtures/typical.md")
     });
     let path = plain_path(path);
@@ -48,7 +77,6 @@ fn main() {
     };
     perf::mark("read");
     let app_dir = settings::app_config_dir();
-    let own_dir = settings::own_config_dir();
 
     // The platform (Win32 windows, DirectWrite text, DirectX 11) comes from gpui_platform.
     let application = gpui_platform::application().with_assets(icons::IconAssets);
@@ -77,8 +105,10 @@ fn main() {
                 },
                 move |window, cx| {
                     perf::mark("os-window");
-                    let settings = settings::load(&app_dir, &own_dir);
-                    cx.new(|cx| Prototype::new(opened, settings, own_dir.clone(), window, cx))
+                    let settings = settings::load(&app_dir, &config_dir);
+                    cx.new(|cx| {
+                        Prototype::new(opened, settings, config_dir.clone(), local_dir.clone(), recovery, instance_lock, window, cx)
+                    })
                 },
             )
             .unwrap();
@@ -161,9 +191,15 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-tab", editor::FocusPrevious, None),
         KeyBinding::new("tab", editor::Indent, Some("Editor")),
         KeyBinding::new("shift-tab", editor::Outdent, Some("Editor")),
+        // While the settings panel is open, Tab stays among its controls.
+        KeyBinding::new("tab", editor::SettingsNext, Some("Settings")),
+        KeyBinding::new("shift-tab", editor::SettingsPrevious, Some("Settings")),
         // Anywhere in the window.
+        KeyBinding::new("ctrl-n", editor::NewTab, None),
         KeyBinding::new("ctrl-o", editor::OpenFile, None),
+        KeyBinding::new("ctrl-r", editor::OpenRecent, None),
         KeyBinding::new("ctrl-s", editor::Save, None),
+        KeyBinding::new("ctrl-shift-s", editor::SaveAs, None),
         KeyBinding::new("ctrl-w", editor::CloseTab, None),
         KeyBinding::new("ctrl-,", editor::OpenSettings, None),
         KeyBinding::new("ctrl-f", editor::Find, None),
@@ -186,6 +222,24 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("up", editor::MenuPrevious, Some("Menu")),
         KeyBinding::new("left", editor::MenuLeft, Some("Menu")),
         KeyBinding::new("right", editor::MenuRight, Some("Menu")),
+        // The underlined access keys. Registering them as actions means GPUI consumes the key-down,
+        // so Windows does not turn it into a character the focused editor would type.
+        KeyBinding::new("a", editor::MenuAccessKey('a'), Some("Menu")),
+        KeyBinding::new("c", editor::MenuAccessKey('c'), Some("Menu")),
+        KeyBinding::new("e", editor::MenuAccessKey('e'), Some("Menu")),
+        KeyBinding::new("f", editor::MenuAccessKey('f'), Some("Menu")),
+        KeyBinding::new("l", editor::MenuAccessKey('l'), Some("Menu")),
+        KeyBinding::new("m", editor::MenuAccessKey('m'), Some("Menu")),
+        KeyBinding::new("n", editor::MenuAccessKey('n'), Some("Menu")),
+        KeyBinding::new("o", editor::MenuAccessKey('o'), Some("Menu")),
+        KeyBinding::new("p", editor::MenuAccessKey('p'), Some("Menu")),
+        KeyBinding::new("q", editor::MenuAccessKey('q'), Some("Menu")),
+        KeyBinding::new("r", editor::MenuAccessKey('r'), Some("Menu")),
+        KeyBinding::new("s", editor::MenuAccessKey('s'), Some("Menu")),
+        KeyBinding::new("t", editor::MenuAccessKey('t'), Some("Menu")),
+        KeyBinding::new("u", editor::MenuAccessKey('u'), Some("Menu")),
+        KeyBinding::new("v", editor::MenuAccessKey('v'), Some("Menu")),
+        KeyBinding::new("w", editor::MenuAccessKey('w'), Some("Menu")),
         // The outline.
         KeyBinding::new("down", editor::OutlineNext, Some("Outline")),
         KeyBinding::new("up", editor::OutlinePrevious, Some("Outline")),
@@ -193,6 +247,9 @@ fn key_bindings() -> Vec<KeyBinding> {
         // The preview scrolls from the keyboard when it has the focus.
         KeyBinding::new("up", editor::PreviewLineUp, Some("Preview")),
         KeyBinding::new("down", editor::PreviewLineDown, Some("Preview")),
+        KeyBinding::new("right", editor::PreviewLinkNext, Some("Preview")),
+        KeyBinding::new("left", editor::PreviewLinkPrevious, Some("Preview")),
+        KeyBinding::new("enter", editor::PreviewLinkOpen, Some("Preview")),
         KeyBinding::new("pageup", editor::PreviewPageUp, Some("Preview")),
         KeyBinding::new("pagedown", editor::PreviewPageDown, Some("Preview")),
         KeyBinding::new("space", editor::PreviewPageDown, Some("Preview")),

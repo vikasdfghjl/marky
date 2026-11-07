@@ -18,8 +18,11 @@
   Keys go in with SendKeys, the typing measure of record (see bench.ps1): the prototype is brought to
   the front, and the script checks before every key that it still is, so it never types elsewhere.
   Leave the machine alone while it types. The edits are never saved.
+  -Via Messages posts the key presses to the window instead, so the script can run while you work
+  (or on a desktop that cannot bring the window forward). Arrival is not the real keyboard path, so
+  type_ms is not comparable with SendKeys; stall_ms and preview_ms measure the same work either way.
 #>
-param([int[]]$SizesKb = @(100, 1024, 4096, 8192), [int]$StartupRuns = 3, [string]$Exe = '')
+param([int[]]$SizesKb = @(100, 1024, 4096, 8192), [int]$StartupRuns = 3, [string]$Exe = '', [ValidateSet('SendKeys', 'Messages')][string]$Via = 'SendKeys')
 
 $root = Split-Path $PSScriptRoot -Parent
 $exe = if ($Exe) { $Exe } else { Join-Path $PSScriptRoot 'target\release\gpui-prototype.exe' }
@@ -32,6 +35,19 @@ $log = Join-Path $env:TEMP 'marky-gpui-bench-large.log'
 $shell = New-Object -ComObject WScript.Shell
 if (-not ('BenchLargeWin' -as [type])) {
   Add-Type -Name BenchLargeWin -Namespace '' -MemberDefinition '[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();'
+}
+if (-not ('BenchLargeKeys' -as [type])) {
+  Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class BenchLargeKeys {
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  /// WM_KEYDOWN then WM_KEYUP, as bench.ps1 posts them; GPUI's message loop turns the key-down into WM_CHAR.
+  public static void Press(IntPtr window, int vk, int scan) {
+    PostMessage(window, 0x0100, (IntPtr)vk, (IntPtr)(1 | (scan << 16)));
+    PostMessage(window, 0x0101, (IntPtr)vk, (IntPtr)unchecked((int)(0xC0000001 | (uint)(scan << 16))));
+  }
+}
+'@
 }
 
 # ----- The app's document generator (scripts/bench-large.ts), byte for byte -----
@@ -97,9 +113,15 @@ function Start-Prototype([string]$File) {
   try { Start-Process $exe -ArgumentList "`"$File`"" -PassThru } finally { Remove-Item Env:MARKY_PERF_LOG -ErrorAction SilentlyContinue }
 }
 
-# One key, only if the prototype is still the window in front.
-function Send-Key($App, [string]$Key) {
+# One key. SendKeys needs the prototype in front and is skipped when it is not; window messages need
+# no focus, because appearance and frame pacing do not depend on it.
+function Send-Key($App, [string]$Key, [int]$Vk = 0x41, [int]$Scan = 0x1E) {
   $App.Refresh()
+  if ($Via -eq 'Messages') {
+    if ($App.MainWindowHandle -eq 0) { return $false }
+    [BenchLargeKeys]::Press($App.MainWindowHandle, $Vk, $Scan)
+    return $true
+  }
   if ([BenchLargeWin]::GetForegroundWindow() -ne $App.MainWindowHandle) { return $false }
   $shell.SendKeys($Key)
   $true
@@ -132,12 +154,18 @@ foreach ($kb in $SizesKb) {
   Wait-Until { Read-Log | Select-String 'startup_ms=' } 60 | Out-Null
   Start-Sleep -Seconds 8
   $untouched = Get-TreeRamMb $app.Id
-  if (-not $shell.AppActivate($app.Id) -or -not (Wait-Until { $app.Refresh(); [BenchLargeWin]::GetForegroundWindow() -eq $app.MainWindowHandle } 5)) {
+  $ready = if ($Via -eq 'Messages') {
+    [bool](Wait-Until { $app.Refresh(); $app.MainWindowHandle -ne 0 } 10)
+  } else {
+    [bool]($shell.AppActivate($app.Id)) -and [bool](Wait-Until { $app.Refresh(); [BenchLargeWin]::GetForegroundWindow() -eq $app.MainWindowHandle } 5)
+  }
+  if (-not $ready) {
     "typing not measured: the prototype could not be brought to the front"
     Stop-ProcessTree $app.Id
     continue
   }
-  Send-Key $app '^{HOME}' | Out-Null
+  # Home (not Ctrl+Home: window messages cannot set the modifier) puts the caret on line 1.
+  Send-Key $app '^{HOME}' 0x24 0x47 | Out-Null
   Start-Sleep -Seconds 6
   "idle RAM $untouched MB untouched, $(Get-TreeRamMb $app.Id) MB after waking"
 

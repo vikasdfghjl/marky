@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use gpui::WindowAppearance;
 use serde_json::{Map, Value};
 
-use crate::files;
+use crate::files::{self, LineEnding};
 
 const FILE_NAME: &str = "settings.json";
 const MAX_BYTES: u64 = 16 * 1024;
@@ -49,6 +49,10 @@ pub struct ViewSettings {
     pub show_outline: bool,
     /// Smart quotes, dashes and ellipses in the preview (markdown-it's `typographer`). On by default, as in the app.
     pub typographer: bool,
+    /// Save a document about a second after typing stops. Off by default (PRD F13).
+    pub auto_save: bool,
+    /// The line ending of New Tab documents. Existing files keep their own.
+    pub new_file_line_ending: LineEnding,
     /// Keys this window does not use, written back unchanged.
     rest: Map<String, Value>,
     /// An oversized or malformed own file is shown with defaults and not overwritten.
@@ -65,6 +69,8 @@ impl Default for ViewSettings {
             show_preview: true,
             show_outline: false,
             typographer: true,
+            auto_save: false,
+            new_file_line_ending: LineEnding::Crlf,
             rest: Map::new(),
             save: true,
         }
@@ -100,6 +106,11 @@ pub fn own_config_dir() -> PathBuf {
     roaming().join("dev.marky.gpui-prototype")
 }
 
+/// Crash-recovery snapshots and the log, as Tauri's local data folder would be. Kept apart from the app's.
+pub fn own_local_dir() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")).join("dev.marky.gpui-prototype")
+}
+
 pub fn load(app_dir: &Path, own_dir: &Path) -> ViewSettings {
     let root = match read_object(&own_dir.join(FILE_NAME)) {
         Read::Object(root) => root,
@@ -118,6 +129,12 @@ pub fn load(app_dir: &Path, own_dir: &Path) -> ViewSettings {
         show_preview: root.get("showPreview").and_then(Value::as_bool).unwrap_or(defaults.show_preview),
         show_outline: root.get("showOutline").and_then(Value::as_bool).unwrap_or(defaults.show_outline),
         typographer: root.get("typographer").and_then(Value::as_bool).unwrap_or(defaults.typographer),
+        auto_save: root.get("autoSave").and_then(Value::as_bool).unwrap_or(defaults.auto_save),
+        new_file_line_ending: match root.get("newFileLineEnding").and_then(Value::as_str) {
+            Some("lf") => LineEnding::Lf,
+            Some("crlf") => LineEnding::Crlf,
+            _ => defaults.new_file_line_ending,
+        },
         rest: root,
         save: true,
     }
@@ -136,6 +153,15 @@ pub fn save(own_dir: &Path, settings: &ViewSettings) -> Result<(), String> {
     root.insert("showPreview".into(), Value::Bool(settings.show_preview));
     root.insert("showOutline".into(), Value::Bool(settings.show_outline));
     root.insert("typographer".into(), Value::Bool(settings.typographer));
+    root.insert("autoSave".into(), Value::Bool(settings.auto_save));
+    root.insert(
+        "newFileLineEnding".into(),
+        Value::String(match settings.new_file_line_ending {
+            LineEnding::Lf => "lf",
+            LineEnding::Crlf => "crlf",
+        }
+        .into()),
+    );
     let bytes = serde_json::to_vec_pretty(&Value::Object(root)).map_err(|err| format!("could not encode settings: {err}"))?;
     fs::create_dir_all(own_dir).map_err(|err| format!("could not create {}: {err}", own_dir.display()))?;
     files::write_atomically(&own_dir.join(FILE_NAME), &bytes).map_err(|err| format!("could not save settings: {err}"))
@@ -182,11 +208,13 @@ mod tests {
     fn starts_from_the_app_file_and_saves_only_to_its_own() {
         let app = scratch("app");
         let own = scratch("own");
-        let app_json = br#"{"theme":"light","autoSave":true,"fontSize":15}"#;
+        let app_json = br#"{"theme":"light","autoSave":true,"newFileLineEnding":"lf","fontSize":15}"#;
         fs::write(app.join(FILE_NAME), app_json).unwrap();
 
         let mut settings = load(&app, &own);
         assert_eq!(settings.theme, ThemeChoice::Light);
+        assert!(settings.auto_save);
+        assert_eq!(settings.new_file_line_ending, LineEnding::Lf);
         assert!(!settings.is_dark(WindowAppearance::Dark));
         settings.theme = ThemeChoice::Dark;
         settings.show_outline = true;
@@ -196,6 +224,7 @@ mod tests {
         let saved: Value = serde_json::from_slice(&fs::read(own.join(FILE_NAME)).unwrap()).unwrap();
         assert_eq!(saved["theme"], "dark");
         assert_eq!(saved["autoSave"], true);
+        assert_eq!(saved["newFileLineEnding"], "lf");
         assert_eq!(saved["showOutline"], true);
         assert_eq!(load(&app, &own).theme, ThemeChoice::Dark);
         let _ = fs::remove_dir_all(&app);

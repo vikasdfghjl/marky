@@ -20,6 +20,8 @@ pub struct Look {
     pub folder: Option<PathBuf>,
     /// GPUI's SVG renderer, which draws formulas into bitmaps the preview owns (see `bitmaps.rs`).
     pub svg: SvgRenderer,
+    /// The link the arrow keys have selected in the preview, which is one tab stop (the pane).
+    pub selected_link: Option<Arc<str>>,
 }
 
 impl Look {
@@ -38,6 +40,9 @@ impl Look {
 }
 
 pub fn tone(dark: bool, dark_value: u32, light_value: u32) -> gpui::Rgba {
+    if let Some(color) = crate::high_contrast::color(dark_value, light_value) {
+        return color;
+    }
     if dark { rgb(dark_value) } else { rgb(light_value) }
 }
 
@@ -81,6 +86,10 @@ fn heading_level(kind: Kind) -> Option<usize> {
 
 /// What a screen reader reads for a block: its text, with a task's state, an image's alt text and
 /// a formula's TeX (KaTeX's MathML would say more; RaTeX has no MathML).
+pub fn accessible_text(block: &Block) -> String {
+    block_label(block)
+}
+
 fn block_label(block: &Block) -> String {
     match block.kind {
         Kind::Item { checked: Some(done), .. } => format!("{} {}", if done { "Done:" } else { "To do:" }, block.text),
@@ -384,7 +393,8 @@ fn styled_piece(text: &str, run: &Run, size: Pixels, look: &Look, word: Option<u
     }
     let id = ("piece", index << 16 | word.unwrap_or(0));
     if let Some(link) = style.link.clone() {
-        return clickable(piece.id(id), text, link, dark, cx).into_any_element();
+        let selected = look.selected_link.as_deref() == Some(link.as_ref());
+        return clickable(piece.id(id), text, link, selected, dark, cx).into_any_element();
     }
     if let Some(title) = style.abbr.clone() {
         return abbreviation(piece.id(id), text, title, look).into_any_element();
@@ -392,15 +402,17 @@ fn styled_piece(text: &str, run: &Run, size: Pixels, look: &Look, word: Option<u
     piece.into_any_element()
 }
 
-/// A link in the app's link colour, reachable with Tab like the app's `<a>`. Clicks, Enter and a
-/// screen reader's "click" go to `Prototype::follow_link`, which applies the app's rules.
-fn clickable(piece: gpui::Stateful<gpui::Div>, text: &str, link: Arc<str>, dark: bool, cx: &mut Context<Prototype>) -> gpui::Stateful<gpui::Div> {
+/// A link in the app's link colour. The preview is one tab stop and the left and right arrows select
+/// its links, so a long document does not fill the Tab order; `selected` draws the same ring a
+/// focused control gets. Clicks, Enter and a screen reader's "click" go to `Prototype::follow_link`,
+/// which applies the app's rules.
+fn clickable(piece: gpui::Stateful<gpui::Div>, text: &str, link: Arc<str>, selected: bool, dark: bool, cx: &mut Context<Prototype>) -> gpui::Stateful<gpui::Div> {
     let ring = editor::ring(dark);
     piece
         .role(Role::Link)
         .aria_label(SharedString::from(text.trim().to_string()))
         .focusable()
-        .tab_stop(true)
+        .when(selected, |piece| piece.border_1().border_color(ring))
         .focus_visible(move |style| style.border_1().border_color(ring))
         .text_color(tone(dark, 0x58a6ff, 0x0969da))
         .underline()

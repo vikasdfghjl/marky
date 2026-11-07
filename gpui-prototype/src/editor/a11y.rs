@@ -11,7 +11,7 @@
 use std::hash::Hash;
 
 use gpui::A11ySubtreeBuilder;
-use gpui::accesskit::{Node, NodeId, Role, TextDirection, TextPosition, TextSelection};
+use gpui::accesskit::{Node, NodeId, Rect, Role, TextDirection, TextPosition, TextSelection};
 
 /// AccessKit stores word starts as `u8` offsets into a run, so a run holds at most this many characters.
 const RUN_CHARS: usize = 255;
@@ -26,6 +26,13 @@ const CHARS_DESCRIBED: usize = 60_000;
 pub struct Line {
     pub index: usize,
     pub text: String,
+    /// The line's painted box, in physical pixels. A screen magnifier uses it to follow the caret;
+    /// a line that was not painted this frame has none.
+    pub bounds: Option<Rect>,
+    /// Each character's x offset from the line's left edge and its advance, in physical pixels.
+    /// AccessKit needs both to turn a caret position into a screen rectangle.
+    pub positions: Option<Vec<f32>>,
+    pub widths: Option<Vec<f32>>,
 }
 
 /// A caret or selection end: a line and a character (not byte) index within it.
@@ -88,6 +95,17 @@ pub fn build_runs(lines: &[Line], anchor: Point, focus: Point, id_of: impl Fn((u
             node.set_value(part.iter().collect::<String>());
             node.set_character_lengths(part.iter().map(|ch| ch.len_utf8() as u8).collect::<Vec<u8>>());
             node.set_word_starts(word_starts);
+            if let Some(bounds) = line.bounds {
+                node.set_bounds(bounds);
+            }
+            let start = chunk * RUN_CHARS;
+            if let (Some(positions), Some(widths)) = (&line.positions, &line.widths) {
+                let end = (start + part.len()).min(positions.len().min(widths.len()));
+                if start < end {
+                    node.set_character_positions(positions[start..end].to_vec().into_boxed_slice());
+                    node.set_character_widths(widths[start..end].to_vec().into_boxed_slice());
+                }
+            }
             if chunk > 0 {
                 node.set_previous_on_line(id_of((line.index, chunk - 1)));
             }
@@ -113,14 +131,24 @@ pub fn build_runs(lines: &[Line], anchor: Point, focus: Point, id_of: impl Fn((u
     (runs, selection)
 }
 
-/// Adds the runs and the selection to the editor's node.
-pub fn describe(builder: &mut A11ySubtreeBuilder, lines: Vec<Line>, anchor: Point, focus: Point) {
-    let (runs, selection) = build_runs(&lines, anchor, focus, |key: (usize, usize)| synthetic_id(builder, key));
+/// Adds the runs and the selection to the editor's node. Bounds are filled in from the lines painted
+/// this frame, so a magnifier can follow the caret.
+pub fn describe(builder: &mut A11ySubtreeBuilder, lines: &[Line], anchor: Point, focus: Point) {
+    let (runs, selection) = build_runs(lines, anchor, focus, |key: (usize, usize)| synthetic_id(builder, key));
     for (id, node) in runs {
         builder.push_child(id, node);
     }
     if let Some(selection) = selection {
         builder.parent_node().set_text_selection(selection);
+    }
+}
+
+/// The preview's text as one read-only text pattern: a screen reader can review it by character,
+/// word and line, which a set of block names does not allow.
+pub fn describe_document(builder: &mut A11ySubtreeBuilder, lines: &[Line]) {
+    let (runs, _) = build_runs(lines, Point { line: 0, char_index: 0 }, Point { line: 0, char_index: 0 }, |key: (usize, usize)| synthetic_id(builder, key));
+    for (id, node) in runs {
+        builder.push_child(id, node);
     }
 }
 
@@ -137,7 +165,7 @@ mod tests {
     }
 
     fn line(index: usize, text: &str) -> Line {
-        Line { index, text: text.to_string() }
+        Line { index, text: text.to_string(), bounds: None, positions: None, widths: None }
     }
 
     #[test]
@@ -172,6 +200,19 @@ mod tests {
         assert_eq!(lines_to_describe(0, 1000, 500, 500).last(), Some(&500));
         assert_eq!(lines_to_describe(0, 1000, 500, 500).len(), LINES_DESCRIBED + 1);
         assert_eq!(lines_to_describe(10, 12, 11, 2), vec![2, 10, 11]);
+    }
+
+    #[test]
+    fn a_painted_line_gives_its_runs_bounds() {
+        let bounds = Rect { x0: 10.0, y0: 20.0, x1: 110.0, y1: 35.0 };
+        let mut line = line(0, "hello");
+        line.bounds = Some(bounds);
+        line.positions = Some(vec![0.0, 10.0, 20.0, 30.0, 40.0]);
+        line.widths = Some(vec![10.0; 5]);
+        let (runs, _) = build_runs(&[line], Point { line: 0, char_index: 0 }, Point { line: 0, char_index: 0 }, id);
+        assert_eq!(runs[0].1.bounds(), Some(bounds));
+        assert_eq!(runs[0].1.character_positions(), Some(&[0.0, 10.0, 20.0, 30.0, 40.0][..]));
+        assert_eq!(runs[0].1.character_widths(), Some(&[10.0; 5][..]));
     }
 
     #[test]

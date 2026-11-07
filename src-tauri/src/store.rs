@@ -45,7 +45,7 @@ impl WindowGeometry {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Snapshot {
     /// None for an untitled document.
     pub path: Option<String>,

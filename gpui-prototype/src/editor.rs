@@ -5,7 +5,9 @@
 //! virtualised GPUI lists, so only the lines and blocks near the viewport are laid out, and the
 //! preview is re-parsed on a background thread once typing pauses, as in the app.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -13,13 +15,13 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, FocusHandle, Focusable, HighlightStyle,
-    IntoElement, ListAlignment, ListOffset, ListScrollEvent, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
-    PromptLevel, SharedString, StyledText, Subscription, Task, TextLayout, UTF16Selection, Window, actions, canvas,
+    ExternalPaths, IntoElement, ListAlignment, ListOffset, ListScrollEvent, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
+    PromptLevel, SharedString, StyledText, Subscription, Task, TextAlign, TextLayout, TextRun, UTF16Selection, Window, actions, canvas,
     deferred, div, fill, list, point, prelude::*, px, rgb, size, svg,
 };
 
 use crate::buffer::{self, Buffer, EditKind, LineSplice};
-use crate::{diagrams, math};
+use crate::{diagrams, diagnostics, instance, math, store, watcher};
 use crate::files::{self, FileMeta, OpenedFile};
 use crate::perf;
 use crate::preview::{self, Block, Kind};
@@ -113,10 +115,15 @@ enum OpenMenu {
 struct Document {
     /// Finds the document again when a background parse finishes, even if tabs moved meanwhile.
     id: u64,
+    /// Empty for a New Tab document until it is saved.
     path: String,
     meta: FileMeta,
+    /// From the last read or save; a watcher event is ours when the file still has this time.
+    mtime_ms: u64,
     /// Lossy decode. Saving would corrupt the file, so Save refuses it.
     read_only: bool,
+    /// A recovered document's text is unsaved even though its undo history is empty.
+    restored: bool,
     buffer: Buffer,
     selected: Range<usize>,
     /// The caret is at `selected.start` when the selection was made backwards.
@@ -144,6 +151,12 @@ struct Document {
     counts: Counts,
     /// The last update's time from keystroke to preview, and its parse time, for the status bar.
     last_preview: Option<(f64, f64)>,
+    /// Dropping this stops watching the file.
+    watcher: Option<notify::RecommendedWatcher>,
+    /// Replaced by every watcher event, so a burst checks the file once after it settles.
+    external_task: Option<Task<()>>,
+    /// Replaced by every edit: auto-saves once typing stops.
+    auto_save_task: Option<Task<()>>,
 }
 
 /// The status bar's counts: words as the app counts them (`/\S+/g`), characters as JavaScript's `length`.
@@ -214,7 +227,9 @@ impl Document {
             id,
             path: opened.path,
             meta: opened.meta,
+            mtime_ms: opened.mtime_ms,
             read_only: opened.read_only,
+            restored: false,
             buffer,
             selected: 0..0,
             selection_reversed: false,
@@ -232,7 +247,18 @@ impl Document {
             synced_source_line: None,
             counts: Counts::default(),
             last_preview: None,
+            watcher: None,
+            external_task: None,
+            auto_save_task: None,
         }
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.restored || self.buffer.is_dirty()
+    }
+
+    fn display_name(&self) -> String {
+        if self.path.is_empty() { "Untitled".to_string() } else { file_name(&self.path) }
     }
 
     fn cursor(&self) -> usize {
@@ -306,8 +332,32 @@ pub struct Prototype {
     outline_focus: FocusHandle,
     outline_cursor: Option<usize>,
     preview_focus: FocusHandle,
+    /// The preview is one tab stop; the left and right arrows select one of its links.
+    preview_link: Option<usize>,
+    /// Lines laid out this frame, shared with the accessibility callback, which needs their bounds
+    /// after prepaint to give each text run a rectangle a screen magnifier can follow.
+    prepaint_lines: Rc<RefCell<Vec<(usize, TextLayout)>>>,
     settings_focus: FocusHandle,
+    /// One handle per control in the settings panel, so Tab and Shift+Tab stay inside it while it is
+    /// open instead of moving out into the editor.
+    settings_controls: Vec<FocusHandle>,
     settings_open: bool,
+    /// The most recent files, newest first, from the app's `recent.json`.
+    recent: Vec<PathBuf>,
+    recent_open: bool,
+    recent_focus: FocusHandle,
+    /// Crash-recovery snapshots, and the snapshots held until the user restores or discards them.
+    recovery_dir: PathBuf,
+    held_recovery: Vec<store::Snapshot>,
+    recovery_task: Option<Task<()>>,
+    /// Document ids and buffer versions in the last recovery write, so an unchanged dirty document
+    /// is not serialised again every 30 seconds. `recovery_dirty` covers held snapshots changing.
+    recovery_versions: Vec<(u64, u64)>,
+    recovery_dirty: bool,
+    /// Watches `open-request.txt`, written by a second launch.
+    request_watcher: Option<notify::RecommendedWatcher>,
+    /// The single-instance lock; held for the window's lifetime.
+    _instance_lock: Option<std::fs::File>,
     /// Esc was pressed in the editor: the next Tab moves the focus instead of indenting, as with
     /// CodeMirror's `indentWithTab`, so a keyboard user can always leave the editor.
     tab_leaves: bool,
@@ -324,7 +374,17 @@ pub struct Prototype {
 }
 
 impl Prototype {
-    pub fn new(opened: OpenedFile, settings: ViewSettings, config_dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        opened: OpenedFile,
+        settings: ViewSettings,
+        config_dir: PathBuf,
+        recovery_dir: PathBuf,
+        recovery: Vec<store::Snapshot>,
+        instance_lock: Option<std::fs::File>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // "System" follows Windows' light or dark mode while the window is open.
         let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
         let document = Document::open(opened, 0, cx);
@@ -341,7 +401,7 @@ impl Prototype {
             dark: settings.is_dark(window.appearance()),
             mono,
             settings,
-            config_dir,
+            config_dir: config_dir.clone(),
             open_menu: None,
             find: None,
             caret_bounds: None,
@@ -359,8 +419,21 @@ impl Prototype {
             outline_focus: cx.focus_handle().tab_stop(true),
             outline_cursor: None,
             preview_focus: cx.focus_handle().tab_stop(true),
+            preview_link: None,
+            prepaint_lines: Rc::new(RefCell::new(Vec::new())),
             settings_focus: cx.focus_handle(),
+            settings_controls: (0..14).map(|_| cx.focus_handle()).collect(),
             settings_open: false,
+            recent: store::load_recent(&config_dir).into_iter().filter(|path| path.is_file()).collect(),
+            recent_open: false,
+            recent_focus: cx.focus_handle(),
+            recovery_dir,
+            held_recovery: Vec::new(),
+            recovery_task: None,
+            recovery_versions: Vec::new(),
+            recovery_dirty: true,
+            request_watcher: None,
+            _instance_lock: instance_lock,
             tab_leaves: false,
             drag_outside: None,
             drag_scroll: None,
@@ -370,6 +443,11 @@ impl Prototype {
         };
         // The source paints first; the preview follows when the background parse is done, like the app.
         this.schedule_parse(0, Duration::ZERO, cx);
+        this.watch_document(0, cx);
+        this.restore_or_discard(recovery, cx);
+        this.start_recovery_timer(cx);
+        this.watch_requests(cx);
+        this.check_pending_request(cx);
         this
     }
 
@@ -405,10 +483,12 @@ impl Prototype {
     }
 
     fn after_change(&mut self, cx: &mut Context<Self>) {
+        self.preview_link = None;
         self.typed_at = Some(Instant::now());
         self.doc_mut().edited_at = self.typed_at;
         let (id, pause) = (self.doc().id, parse_pause(self.doc().last_parse_ms));
         self.schedule_parse(id, pause, cx);
+        self.schedule_auto_save(id, cx);
         cx.notify();
     }
 
@@ -990,6 +1070,9 @@ impl Prototype {
             self.close_menus(window, cx);
             return;
         }
+        if self.close_recent(window, cx) {
+            return;
+        }
         if self.close_settings(window, cx) {
             return;
         }
@@ -1082,23 +1165,38 @@ impl Prototype {
     // ----- Files, tabs and closing -----
 
     /// Restores the file's BOM and line ending. A clean buffer and a lossy decode are left on disk as they are.
+    /// A New Tab document has no file yet, so Save asks for a name instead.
     fn write_active(&mut self, cx: &mut Context<Self>) {
+        self.write_document(self.doc().id, cx);
+    }
+
+    fn write_document(&mut self, id: u64, cx: &mut Context<Self>) {
         self.open_menu = None;
         cx.notify();
-        if self.doc().read_only {
-            let message = format!("Not saved: {} is not valid UTF-8", self.doc().path);
+        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        if self.documents[index].path.is_empty() {
+            self.save_as_document(id, cx);
+            return;
+        }
+        if self.documents[index].read_only {
+            let message = format!("Not saved: {} is not valid UTF-8", self.documents[index].path);
             self.report(message);
             return;
         }
-        if !self.doc().buffer.is_dirty() {
+        if !self.documents[index].is_dirty() {
             return;
         }
-        let path = self.doc().path.clone();
-        let text = self.doc().buffer.text();
-        match files::write(Path::new(&path), &text, self.doc().meta) {
-            Ok(_) => {
-                self.doc_mut().buffer.mark_saved();
+        let path = self.documents[index].path.clone();
+        let text = self.documents[index].buffer.text();
+        let meta = self.documents[index].meta;
+        match files::write(Path::new(&path), &text, meta) {
+            Ok(mtime) => {
+                let document = &mut self.documents[index];
+                document.buffer.mark_saved();
+                document.restored = false;
+                document.mtime_ms = mtime;
                 self.status = None;
+                self.record_recent(Path::new(&path));
             }
             Err(err) => self.report(format!("Could not save {path}: {err}")),
         }
@@ -1120,6 +1218,7 @@ impl Prototype {
     /// Opens `path` as a tab, or switches to the tab that already has it.
     fn open_path(&mut self, path: &Path, cx: &mut Context<Self>) {
         if let Some(index) = self.documents.iter().position(|doc| files::same_path(Path::new(&doc.path), path)) {
+            self.record_recent(path);
             self.activate_tab(index, cx);
             return;
         }
@@ -1131,10 +1230,371 @@ impl Prototype {
                 let document = Document::open(opened, id, cx);
                 self.documents.push(document);
                 self.schedule_parse(id, Duration::ZERO, cx);
+                self.watch_document(id, cx);
+                self.record_recent(path);
                 self.activate_tab(self.documents.len() - 1, cx);
             }
             Err(err) => self.report(format!("Could not open {}: {err}", path.display())),
         }
+    }
+
+    fn new_tab(&mut self, cx: &mut Context<Self>) {
+        let id = self.next_document_id;
+        self.next_document_id += 1;
+        let opened = OpenedFile {
+            path: String::new(),
+            text: String::new(),
+            meta: FileMeta { bom: false, line_ending: self.settings.new_file_line_ending },
+            mtime_ms: 0,
+            read_only: false,
+        };
+        self.documents.push(Document::open(opened, id, cx));
+        self.schedule_parse(id, Duration::ZERO, cx);
+        self.activate_tab(self.documents.len() - 1, cx);
+        self.status = None;
+    }
+
+    /// Saves under a new name. A New Tab document has no path until this runs.
+    fn save_as_document(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        let suggested = if self.documents[index].path.is_empty() { "Untitled.md".to_string() } else { self.documents[index].display_name() };
+        let Some(target) = rfd::FileDialog::new().add_filter("Markdown", files::MARKDOWN_EXTS).set_file_name(suggested).save_file() else {
+            return;
+        };
+        let text = self.documents[index].buffer.text();
+        let meta = self.documents[index].meta;
+        match files::write(&target, &text, meta) {
+            Ok(mtime) => {
+                let doc = &mut self.documents[index];
+                doc.path = target.to_string_lossy().into_owned();
+                doc.meta = meta;
+                doc.mtime_ms = mtime;
+                doc.read_only = false;
+                doc.restored = false;
+                doc.buffer.mark_saved();
+                self.status = None;
+                self.record_recent(&target);
+                self.watch_document(id, cx);
+                cx.notify();
+            }
+            Err(err) => self.report(format!("Could not save {}: {err}", target.display())),
+        }
+    }
+
+    fn record_recent(&mut self, path: &Path) {
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        if let Err(err) = store::push_recent(&self.config_dir, path) {
+            diagnostics::write(&format!("could not update the recent files list: {err}"));
+            return;
+        }
+        self.recent = store::load_recent(&self.config_dir).into_iter().filter(|path| path.is_file()).collect();
+    }
+
+    /// Watches a document's file for changes made by another program. The app debounces and compares
+    /// mtimes; `check_external_change` does the same, after the burst settles.
+    fn watch_document(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        if self.documents[index].path.is_empty() {
+            self.documents[index].watcher = None;
+            self.documents[index].external_task = None;
+            return;
+        }
+        let path = PathBuf::from(&self.documents[index].path);
+        let (sender, receiver) = async_channel::unbounded::<()>();
+        match watcher::watch(&path, move || {
+            let _ = sender.try_send(());
+        }) {
+            Ok(watcher) => self.documents[index].watcher = Some(watcher),
+            Err(err) => {
+                self.documents[index].watcher = None;
+                diagnostics::write(&format!("could not watch {}: {err}", path.display()));
+            }
+        }
+        self.documents[index].external_task = Some(cx.spawn(async move |this, cx| {
+            while receiver.recv().await.is_ok() {
+                // A save can arrive as several events; read once after they stop.
+                while receiver.try_recv().is_ok() {}
+                cx.background_executor().timer(Duration::from_millis(200)).await;
+                while receiver.try_recv().is_ok() {}
+                if this.update(cx, |this, cx| this.check_external_change(id, cx)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn check_external_change(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        let path = PathBuf::from(&self.documents[index].path);
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let Some(now) = files::mtime_ms(&path).ok() else {
+            self.report(format!("{} was removed from disk", self.documents[index].display_name()));
+            return;
+        };
+        if now == self.documents[index].mtime_ms {
+            return;
+        }
+        let Ok(opened) = files::read(&path) else { return };
+        // Our own save, or another program writing the same bytes: only the time changed.
+        if opened.text == self.documents[index].buffer.text() {
+            self.documents[index].mtime_ms = opened.mtime_ms;
+            self.documents[index].meta = opened.meta;
+            return;
+        }
+        if self.documents[index].is_dirty() {
+            let name = self.documents[index].display_name();
+            let reload = rfd::MessageDialog::new()
+                .set_title("Marky GPUI")
+                .set_level(rfd::MessageLevel::Warning)
+                .set_description(format!("{name} changed on disk. Reload it and lose your unsaved changes?"))
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .show();
+            if reload != rfd::MessageDialogResult::Yes {
+                // Keep mine: later events for the same file are ignored until it changes again.
+                self.documents[index].mtime_ms = opened.mtime_ms;
+                return;
+            }
+        }
+        let name = self.documents[index].display_name();
+        self.reload_document(id, opened, cx);
+        self.report(format!("Reloaded {name} from disk"));
+    }
+
+    fn reload_document(&mut self, id: u64, opened: OpenedFile, cx: &mut Context<Self>) {
+        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        self.documents[index] = Document::open(opened, id, cx);
+        self.preview_link = None;
+        self.schedule_parse(id, Duration::ZERO, cx);
+        self.watch_document(id, cx);
+        self.release_unused_images(cx);
+        cx.notify();
+    }
+
+    fn schedule_auto_save(&mut self, id: u64, cx: &mut Context<Self>) {
+        if !self.settings.auto_save {
+            return;
+        }
+        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        if self.documents[index].path.is_empty() || self.documents[index].read_only {
+            return;
+        }
+        self.documents[index].auto_save_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(1000)).await;
+            let _ = this.update(cx, |this, cx| {
+                if !this.settings.auto_save {
+                    return;
+                }
+                if this.documents.iter().any(|doc| doc.id == id && doc.is_dirty()) {
+                    this.write_document(id, cx);
+                }
+            });
+        }));
+    }
+
+    // ----- Crash recovery, recent files and the single-instance request -----
+
+    /// The app's recovery prompt. Yes restores the tabs, No deletes the snapshots (an explicit
+    /// Discard), and Cancel holds them: they are written back with the next snapshot and on close.
+    fn restore_or_discard(&mut self, recovery: Vec<store::Snapshot>, cx: &mut Context<Self>) {
+        if recovery.is_empty() {
+            return;
+        }
+        let names: Vec<String> = recovery
+            .iter()
+            .map(|snapshot| snapshot.path.as_deref().map(file_name).unwrap_or_else(|| "Untitled".to_string()))
+            .collect();
+        let answer = rfd::MessageDialog::new()
+            .set_title("Marky GPUI")
+            .set_level(rfd::MessageLevel::Warning)
+            .set_description(format!("Restore unsaved changes to {}?", names.join(", ")))
+            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .show();
+        match answer {
+            rfd::MessageDialogResult::Yes => {
+                for snapshot in recovery {
+                    let path = snapshot.path.unwrap_or_default();
+                    let mtime_ms = if path.is_empty() { 0 } else { files::mtime_ms(Path::new(&path)).unwrap_or(0) };
+                    let opened = OpenedFile { path: path.clone(), text: snapshot.text, meta: snapshot.meta, mtime_ms, read_only: false };
+                    // The startup file may already be open; its recovered text replaces what was read.
+                    if !path.is_empty() {
+                        if let Some(index) = self.documents.iter().position(|doc| files::same_path(Path::new(&doc.path), Path::new(&path))) {
+                            let id = self.documents[index].id;
+                            let mut document = Document::open(opened, id, cx);
+                            document.restored = true;
+                            self.documents[index] = document;
+                            self.schedule_parse(id, Duration::ZERO, cx);
+                            self.watch_document(id, cx);
+                            continue;
+                        }
+                    }
+                    let id = self.next_document_id;
+                    self.next_document_id += 1;
+                    let mut document = Document::open(opened, id, cx);
+                    document.restored = true;
+                    self.documents.push(document);
+                    self.schedule_parse(id, Duration::ZERO, cx);
+                    self.watch_document(id, cx);
+                }
+                self.activate_tab(self.documents.len() - 1, cx);
+            }
+            rfd::MessageDialogResult::No => {
+                if let Err(err) = store::clear_snapshots(&self.recovery_dir) {
+                    diagnostics::write(&format!("could not clear recovery snapshots: {err}"));
+                }
+            }
+            _ => {
+                self.held_recovery = recovery;
+                self.recovery_dirty = true;
+            }
+        }
+    }
+
+    fn start_recovery_timer(&mut self, cx: &mut Context<Self>) {
+        self.recovery_task = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_secs(30)).await;
+            if this.update(cx, |this, cx| this.write_recovery(cx)).is_err() {
+                break;
+            }
+        }));
+    }
+
+    fn snapshots(&self) -> Vec<store::Snapshot> {
+        let mut snapshots = self.held_recovery.clone();
+        for document in &self.documents {
+            if document.is_dirty() {
+                snapshots.push(store::Snapshot {
+                    path: (!document.path.is_empty()).then(|| document.path.clone()),
+                    text: document.buffer.text(),
+                    meta: document.meta,
+                });
+            }
+        }
+        snapshots
+    }
+
+    fn recovery_versions(&self) -> Vec<(u64, u64)> {
+        self.documents.iter().filter(|doc| doc.is_dirty()).map(|doc| (doc.id, doc.buffer.version())).collect()
+    }
+
+    /// Serialising every dirty document every 30 seconds is itself a cost at 8 MB, so a write
+    /// happens only when a buffer version or the held snapshots changed.
+    fn write_recovery(&mut self, cx: &mut Context<Self>) {
+        let versions = self.recovery_versions();
+        if !self.recovery_dirty && versions == self.recovery_versions {
+            return;
+        }
+        self.recovery_versions = versions;
+        self.recovery_dirty = false;
+        let snapshots = self.snapshots();
+        let dir = self.recovery_dir.clone();
+        cx.background_spawn(async move {
+            let result = if snapshots.is_empty() { store::clear_snapshots(&dir) } else { store::save_snapshots(&dir, &snapshots) };
+            if let Err(err) = result {
+                diagnostics::write(&format!("could not save recovery snapshots: {err}"));
+            }
+        })
+        .detach();
+    }
+
+    /// Synchronous, for closing: a background write could be lost when the process ends.
+    fn flush_recovery(&mut self) {
+        let versions = self.recovery_versions();
+        if !self.recovery_dirty && versions == self.recovery_versions {
+            return;
+        }
+        self.recovery_versions = versions;
+        self.recovery_dirty = false;
+        let snapshots = self.snapshots();
+        let result = if snapshots.is_empty() { store::clear_snapshots(&self.recovery_dir) } else { store::save_snapshots(&self.recovery_dir, &snapshots) };
+        if let Err(err) = result {
+            diagnostics::write(&format!("could not save recovery snapshots on close: {err}"));
+        }
+    }
+
+    fn watch_requests(&mut self, cx: &mut Context<Self>) {
+        let dir = self.config_dir.clone();
+        let (sender, receiver) = async_channel::unbounded::<()>();
+        match watcher::watch(&instance::request_path(&dir), move || {
+            let _ = sender.try_send(());
+        }) {
+            Ok(watcher) => self.request_watcher = Some(watcher),
+            Err(err) => diagnostics::write(&format!("could not watch for a second launch: {err}")),
+        }
+        cx.spawn(async move |this, cx| {
+            while receiver.recv().await.is_ok() {
+                cx.background_executor().timer(Duration::from_millis(100)).await;
+                while receiver.try_recv().is_ok() {}
+                if this.update(cx, |this, cx| this.check_pending_request(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn check_pending_request(&mut self, cx: &mut Context<Self>) {
+        match instance::take_request(&self.config_dir) {
+            Some(Some(path)) => self.open_path(&path, cx),
+            Some(None) => cx.activate(true),
+            None => {}
+        }
+    }
+
+    /// Every link the preview draws, in document order, with the block it is in. The preview is one
+    /// tab stop; the left and right arrows move through this list and Enter follows the chosen link.
+    fn preview_links(&self) -> Vec<(Arc<str>, usize)> {
+        fn collect(runs: &[preview::Run], block: usize, out: &mut Vec<(Arc<str>, usize)>) {
+            for run in runs {
+                if let Some(link) = run.style.link.as_ref() {
+                    if !link.starts_with("image:") {
+                        out.push((link.clone(), block));
+                    }
+                }
+            }
+        }
+        let mut links = Vec::new();
+        for (index, block) in self.doc().blocks.iter().enumerate() {
+            collect(&block.runs, index, &mut links);
+            if let Some(table) = &block.table {
+                for row in &table.rows {
+                    for cell in row {
+                        collect(cell, index, &mut links);
+                    }
+                }
+            }
+        }
+        links
+    }
+
+    /// The preview's text as one read-only AccessKit text pattern, capped like the editor's so a
+    /// large document does not build a tree the size of its text on every frame.
+    fn preview_described(&self, window: &Window) -> Option<Vec<a11y::Line>> {
+        if !window.is_a11y_active() {
+            return None;
+        }
+        let mut lines = Vec::new();
+        let mut spent = 0;
+        for (index, block) in self.doc().blocks.iter().enumerate() {
+            if lines.len() >= a11y::LINES_DESCRIBED || spent >= 60_000 {
+                break;
+            }
+            let text = preview_view::accessible_text(block);
+            if text.is_empty() {
+                continue;
+            }
+            spent += text.len();
+            lines.push(a11y::Line { index, text, bounds: None, positions: None, widths: None });
+        }
+        // AccessKit marks a line end with the line break character, as in the editor's runs.
+        let last = lines.len().saturating_sub(1);
+        for line in lines.iter_mut().take(last) {
+            line.text.push('\n');
+        }
+        Some(lines)
     }
 
     /// A click on a link in the preview, with the app's rules (`followLink`): web and mail links open
@@ -1193,25 +1653,26 @@ impl Prototype {
             return;
         }
         self.active = index;
+        self.preview_link = None;
         self.doc_mut().synced_source_line = None;
         cx.notify();
     }
 
     fn dirty_count(&self) -> usize {
-        self.documents.iter().filter(|doc| doc.buffer.is_dirty()).count()
+        self.documents.iter().filter(|doc| doc.is_dirty()).count()
     }
 
     fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.documents.len() == 1 || index >= self.documents.len() {
             return;
         }
-        if !self.documents[index].buffer.is_dirty() {
+        if !self.documents[index].is_dirty() {
             self.remove_tab(index, cx);
             return;
         }
         // Tabs can move while the prompt is open, so the answer finds the tab again by id.
         let id = self.documents[index].id;
-        let message = format!("Discard unsaved changes in {}?", file_name(&self.documents[index].path));
+        let message = format!("Discard unsaved changes in {}?", self.documents[index].display_name());
         self.confirm_discard(&message, window, cx, move |this, _, cx| {
             if let Some(index) = this.documents.iter().position(|doc| doc.id == id) {
                 this.remove_tab(index, cx);
@@ -1254,11 +1715,19 @@ impl Prototype {
     pub fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let dirty = self.dirty_count();
         if dirty == 0 || self.close_confirmed {
+            // A postponed recovery survives a normal close; with nothing left to recover, this clears it.
+            self.flush_recovery();
             return true;
         }
         let message = if dirty == 1 { "Discard unsaved changes in 1 file?".to_string() } else { format!("Discard unsaved changes in {dirty} files?") };
         self.confirm_discard(&message, window, cx, |this, window, _| {
+            // Discarding everything: nothing is left to recover, and held snapshots stay held.
+            for document in &mut this.documents {
+                document.restored = false;
+                document.buffer.mark_saved();
+            }
             this.close_confirmed = true;
+            this.flush_recovery();
             window.remove_window();
         });
         false
@@ -1396,7 +1865,7 @@ impl Prototype {
 
     fn update_title(&mut self, window: &mut Window) {
         let doc = self.doc();
-        let title = format!("{}{} - Marky GPUI", file_name(&doc.path), if doc.buffer.is_dirty() { " •" } else { "" });
+        let title = format!("{}{} - Marky GPUI", doc.display_name(), if doc.is_dirty() { " •" } else { "" });
         if title != self.window_title {
             window.set_window_title(&title);
             self.window_title = title;
@@ -1418,6 +1887,16 @@ impl Prototype {
         let line = start..start + text.len();
         let selected = doc.selected.clone();
         let cursor = doc.cursor();
+        // `~sub~` and `^sup^` are drawn at 80% and shifted; their delimiters are hidden. Ranges
+        // inside inline code are left as typed, as in the preview.
+        let scripts: Vec<(Range<usize>, bool)> = preview::script_ranges(&text)
+            .into_iter()
+            .filter(|(range, _)| {
+                !doc.spans
+                    .get(ix)
+                    .is_some_and(|spans| spans.iter().any(|(span, token)| *token == syntax::Token::Code && span.start < range.end && range.start < span.end))
+            })
+            .collect();
 
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
         if !text.is_empty() {
@@ -1443,11 +1922,21 @@ impl Prototype {
                 let selection_style = HighlightStyle { background_color: Some(tone(dark, 0x1e3a8a, 0xbfdbfe).into()), ..HighlightStyle::default() };
                 highlights.push((overlap.start - start..overlap.end - start, selection_style));
             }
+            // The full-size text under a script stays for layout, caret and clicks, but is not drawn;
+            // the 80% copy is painted over it in the canvas below, with the delimiters hidden.
+            let hidden = HighlightStyle { color: Some(gpui::transparent_black()), ..HighlightStyle::default() };
+            for (range, _) in &scripts {
+                highlights.push((range.start.saturating_sub(1)..(range.end + 1).min(text.len()), hidden));
+            }
         }
-        let styled = StyledText::new(if text.is_empty() { " ".to_string() } else { text }).with_highlights(syntax::merge(&highlights));
+        let styled_text = if text.is_empty() { " ".to_string() } else { text.clone() };
+        let styled = StyledText::new(styled_text).with_highlights(syntax::merge(&highlights));
         let layout = styled.layout().clone();
+        self.prepaint_lines.borrow_mut().push((ix, layout.clone()));
         let click_layout = layout.clone();
         let drag_layout = layout.clone();
+        let script_text = text.clone();
+        let base_size = self.settings.font_size;
         let row = div()
             .relative()
             .px_3()
@@ -1474,7 +1963,35 @@ impl Prototype {
                 move |_, _, window, cx| {
                     let caret = caret_column.and_then(|column| caret_origin(&layout, column, caret_next)).map(|origin| Bounds::new(origin, size(px(1.5), layout.line_height())));
                     if let Some(caret) = caret {
-                        window.paint_quad(fill(caret, rgb(CARET)));
+                        let color = crate::high_contrast::caret().unwrap_or_else(|| rgb(CARET));
+                        window.paint_quad(fill(caret, color));
+                    }
+                    // The small script text: 80% of the line, above or below the baseline. The
+                    // full-size copy underneath is transparent, so only this is visible.
+                    let base = window.text_style();
+                    for (range, sup) in &scripts {
+                        let Some(origin) = layout.position_for_index(range.start) else { continue };
+                        let content = &script_text[range.clone()];
+                        if content.is_empty() {
+                            continue;
+                        }
+                        let run = TextRun {
+                            len: content.len(),
+                            font: base.font(),
+                            color: base.color,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        };
+                        let line_height = layout.line_height() * 0.8;
+                        let small = window.text_system().shape_line(
+                            SharedString::from(content.to_string()),
+                            px(base_size * 0.8),
+                            std::slice::from_ref(&run),
+                            None,
+                        );
+                        let top = layout.bounds().top() + if *sup { px(0.) } else { layout.line_height() * 0.45 };
+                        small.paint(point(origin.x, top), line_height, TextAlign::Left, None, window, cx).ok();
                     }
                     view.update(cx, |view, cx| {
                         view.painted_lines.push((ix, layout.clone()));
@@ -1577,7 +2094,7 @@ impl Prototype {
                 if index < last {
                     text.push('\n');
                 }
-                a11y::Line { index, text }
+                a11y::Line { index, text, bounds: None, positions: None, widths: None }
             })
             .collect();
         let lines = a11y::within_budget(lines, [focus.line, anchor.line]);
@@ -1625,7 +2142,9 @@ impl Prototype {
 
     fn editor_column(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
-        let described = self.describe_text(window);
+        let mut described = self.describe_text(window);
+        let scale = window.scale_factor();
+        let prepaint = self.prepaint_lines.clone();
         let lines = self.doc().lines.clone();
         let source = list(lines, cx.processor(|this, ix, _window, cx| this.render_line(ix, cx))).size_full();
         // Without word wrap, long lines scroll sideways: the list is as wide as the longest line.
@@ -1657,8 +2176,43 @@ impl Prototype {
                     .role(gpui::Role::MultilineTextInput)
                     .aria_label("Editor")
                     .a11y_synthetic_children(move |builder| {
-                        if let Some((lines, anchor, focus)) = described {
-                            a11y::describe(builder, lines, anchor, focus);
+                        if let Some((lines, anchor, focus)) = &mut described {
+                            // The lines were laid out during this prepaint; their boxes and per-character
+                            // positions are in window coordinates, which is what a magnifier uses to
+                            // follow the caret. AccessKit needs both to turn the caret into a rectangle.
+                            let layouts: std::collections::HashMap<usize, TextLayout> =
+                                prepaint.borrow().iter().map(|(line, layout)| (*line, layout.clone())).collect();
+                            for line in lines.iter_mut() {
+                                let Some(layout) = layouts.get(&line.index) else { continue };
+                                let bounds = layout.bounds();
+                                let left = f32::from(bounds.left());
+                                line.bounds = Some(gpui::accesskit::Rect {
+                                    x0: (left * scale) as f64,
+                                    y0: (f32::from(bounds.top()) * scale) as f64,
+                                    x1: (f32::from(bounds.right()) * scale) as f64,
+                                    y1: (f32::from(bounds.bottom()) * scale) as f64,
+                                });
+                                let mut positions = Vec::with_capacity(line.text.len());
+                                let mut widths = Vec::with_capacity(line.text.len());
+                                let mut byte = 0;
+                                for ch in line.text.chars() {
+                                    let at = layout
+                                        .position_for_index(byte)
+                                        .map(|point| (f32::from(point.x) - left).max(0.0))
+                                        .unwrap_or(0.0);
+                                    let next = layout
+                                        .position_for_index(byte + ch.len_utf8())
+                                        .map(|point| (f32::from(point.x) - left).max(0.0))
+                                        .unwrap_or(at);
+                                    let width = if ch == '\n' { 0.0 } else { (next - at).max(0.0) };
+                                    positions.push(at * scale);
+                                    widths.push(width * scale);
+                                    byte += ch.len_utf8();
+                                }
+                                line.positions = Some(positions);
+                                line.widths = Some(widths);
+                            }
+                            a11y::describe(builder, lines, *anchor, *focus);
                         }
                     })
                     .size_full()
@@ -1672,17 +2226,32 @@ impl Prototype {
             ))
     }
 
-    fn preview_column(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn preview_column(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
         let blocks = self.doc().block_list.clone();
         let focused_ring = chrome::ring(dark);
+        let links = self.preview_links();
+        if self.preview_link.is_some_and(|index| index >= links.len()) {
+            self.preview_link = None;
+        }
+        let selected = self.preview_link.and_then(|index| links.get(index)).map(|(link, _)| link.clone());
+        let preview_label = match &selected {
+            Some(link) => SharedString::from(format!("Preview, link {link}")),
+            None => SharedString::from("Preview"),
+        };
+        let described = self.preview_described(window);
         self.preview_keys(
             div()
                 .id("preview")
                 .key_context("Preview")
                 .track_focus(&self.preview_focus)
                 .role(gpui::Role::Document)
-                .aria_label("Preview")
+                .aria_label(preview_label)
+                .a11y_synthetic_children(move |builder| {
+                    if let Some(lines) = &described {
+                        a11y::describe_document(builder, lines);
+                    }
+                })
                 .border_1()
                 .border_color(gpui::transparent_black())
                 .focus_visible(move |style| style.border_color(focused_ring)),
@@ -1696,9 +2265,16 @@ impl Prototype {
             .child(
                 list(
                     blocks,
-                    cx.processor(|this, ix, _window, cx| {
+                    cx.processor(move |this, ix, _window, cx| {
                         let folder = Path::new(&this.doc().path).parent().map(Path::to_path_buf);
-                        let look = Look { font_size: this.settings.font_size, dark: this.dark, mono: this.mono.clone(), folder, svg: cx.svg_renderer() };
+                        let look = Look {
+                            font_size: this.settings.font_size,
+                            dark: this.dark,
+                            mono: this.mono.clone(),
+                            folder,
+                            svg: cx.svg_renderer(),
+                            selected_link: selected.clone(),
+                        };
                         match this.doc().blocks.get(ix) {
                             Some(block) => preview_view::preview_item(block, ix, &look, cx),
                             None => div().into_any_element(),
@@ -1804,6 +2380,7 @@ impl Focusable for Prototype {
 impl Render for Prototype {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frame_started = Some(Instant::now());
+        crate::high_contrast::refresh_periodically();
         if !self.logged_first_frame {
             perf::mark("render");
         }
@@ -1814,6 +2391,7 @@ impl Render for Prototype {
         }
         self.caret_bounds = None;
         self.painted_lines.clear();
+        self.prepaint_lines.borrow_mut().clear();
         self.update_title(window);
         self.refresh_matches(cx);
         self.sync_scroll();
@@ -1840,7 +2418,8 @@ impl Render for Prototype {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::close_menu))
             .when(show_outline, |row| row.child(self.outline_column(cx)))
             .when(show_editor, |row| row.child(self.editor_column(window, cx)))
-            .when(show_preview, |row| row.child(self.preview_column(cx)))
+            .when(show_preview, |row| row.child(self.preview_column(window, cx)))
+            .when(self.recent_open, |row| row.child(self.recent_panel(cx)))
             .when(self.settings_open, |row| row.child(self.settings_panel(cx)));
         let find_bar = self.find_bar(cx);
 
@@ -1862,6 +2441,14 @@ impl Render for Prototype {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| this.drag_anywhere(event, cx)))
+            // Dropping files on the window opens each one as a tab, as the app does.
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                for path in paths.paths() {
+                    if path.is_file() {
+                        this.open_path(path, cx);
+                    }
+                }
+            }))
             .on_action(cx.listener(Self::find))
             .on_action(cx.listener(Self::find_replace))
             .on_action(cx.listener(Self::find_next))

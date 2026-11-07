@@ -71,6 +71,7 @@ $text = @(
   '## Second heading', '',
   "${fence}js", 'const answer = 42;', $fence, '',
   "${fence}mermaid", 'flowchart LR', '  A --> B', $fence, '',
+  'H~2~O and 19^th^ are scripts.', '',
   '[^1]: The footnote text.', ''
 ) -join "`n"
 $fixture = Join-Path $dir 'fixture.md'
@@ -92,10 +93,16 @@ function Write-Skip([string]$Name, [string]$Why) { "SKIP  $Name  ($Why)" }
 
 $script:launched = [Collections.Generic.List[System.Diagnostics.Process]]::new()
 function Start-Prototype([string]$Document) {
-  # A temporary APPDATA: the prototype reads Marky's settings and keeps its own under it.
-  $saved = $env:APPDATA
+  # A temporary APPDATA and LOCALAPPDATA: the prototype reads Marky's settings, and keeps its own
+  # settings, recent list, recovery snapshots and log under them.
+  $savedAppData = $env:APPDATA
+  $savedLocalAppData = $env:LOCALAPPDATA
   $env:APPDATA = $appData
-  try { $process = Start-Process $exe -ArgumentList "`"$Document`"" -PassThru } finally { $env:APPDATA = $saved }
+  $env:LOCALAPPDATA = $appData
+  try { $process = Start-Process $exe -ArgumentList "`"$Document`"" -PassThru } finally {
+    $env:APPDATA = $savedAppData
+    $env:LOCALAPPDATA = $savedLocalAppData
+  }
   $script:launched.Add($process)
   $process
 }
@@ -166,6 +173,24 @@ function Caret-Line {
 
 function Focused-Name { $focused = $A::FocusedElement; "$($focused.Current.ControlType.ProgrammaticName.Replace('ControlType.', '')) '$($focused.Current.Name)'" }
 
+# The selection's rectangles, in physical pixels: what a screen magnifier follows. .NET returns
+# one System.Windows.Rect per range rectangle.
+function Caret-Rectangles {
+  $editor = Find $T::Edit 'Editor'
+  if (-not $editor) { return $null }
+  # .NET reports a degenerate UIA range as empty, so take the character after the caret: its
+  # rectangle is the caret's position and height, which is what a magnifier follows.
+  $range = $editor.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).GetSelection()[0].Clone()
+  [void]$range.MoveEndpointByUnit(1, [System.Windows.Automation.Text.TextUnit]::Character, 1)
+  $range.GetBoundingRectangles()
+}
+
+function Preview-Text {
+  $preview = Find $T::Document 'Preview'
+  if (-not $preview) { return $null }
+  $preview.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1)
+}
+
 function Settings-File { Join-Path $appData 'dev.marky.gpui-prototype\settings.json' }
 
 try {
@@ -179,6 +204,8 @@ try {
   $shown = Wait-Until { $value = Editor-Text; if ($value -eq $text) { $value } } 30
   Write-Check 'editor holds the text without BOM, with LF' ([bool]$shown) "$((Editor-Text).Length) of $($text.Length) chars"
   Write-Check 'preview rendered' ([bool](Find $T::Text 'Fixture' 30))
+  $previewText = Wait-Until { $value = Preview-Text; if ($value -like '*Body text*') { $value } } 15
+  Write-Check 'the preview exposes a text pattern that can be reviewed' ([bool]$previewText) "$("$previewText".Length) chars"
   Write-Check 'status bar shows CRLF and UTF-8 BOM' ([bool](Find $null 'CRLF') -and [bool](Find $null 'UTF-8 BOM'))
   Write-Check 'prices with $ stay plain text' ([bool](Find-Like 'costs \$5 and \$10 stay text'))
   Write-Check 'footnotes are gathered at the end' ([bool](Find-Like '^Footnote 1: The footnote text'))
@@ -224,6 +251,13 @@ try {
 
   Run-Menu 'File' 'Settings…' | Out-Null
   Write-Check 'File > Settings opens the settings' ([bool](Find $T::Group 'Settings'))
+  $stayedInside = $true
+  for ($tab = 0; $tab -lt 6; $tab++) {
+    [E2e.Win]::Key($window, 0x09, 0x0F)
+    $focused = Focused-Name
+    if ($focused -eq "Edit 'Editor'" -or $focused -eq "Document 'Preview'") { $stayedInside = $false }
+  }
+  Write-Check 'Tab stays among the settings controls' $stayedInside (Focused-Name)
   Press (Find $T::CheckBox 'Word wrap') | Out-Null
   $saved = Wait-Until { try { $json = Get-Content (Settings-File) -Raw | ConvertFrom-Json; if ($json.wordWrap -eq $false) { $json } } catch { $null } } 10
   Write-Check 'settings persist to settings.json' ([bool]$saved) (Settings-File)
@@ -247,12 +281,20 @@ try {
   [E2e.Win]::Key($window, 0x28, 0x50); [E2e.Win]::Key($window, 0x28, 0x50)
   $line = Wait-Until { $current = Caret-Line; if ($current -like 'Prices like*') { $current } } 10
   Write-Check 'screen readers follow the caret (TextPattern)' ([bool]$line -and $before -like 'Body text*') "from '$before' to '$(Caret-Line)'"
+  $rects = Caret-Rectangles
+  Write-Check 'the caret has a screen rectangle for a magnifier' ([bool]$rects -and $rects.Count -ge 1 -and $rects[0].Width -gt 0 -and $rects[0].Height -gt 0) "$($rects[0])"
 
   [E2e.Win]::Type($window, 'x')
   Write-Check 'dirty again before the close test' ((Wait-Until { (Title-Of $app) -like '*•*' }) -as [bool])
 
   [E2e.Win]::Key($window, 0x1B, 0x01); [E2e.Win]::Key($window, 0x09, 0x0F)
   Write-Check 'Esc then Tab leaves the editor' ((Wait-Until { (Focused-Name) -eq "Document 'Preview'" } 10) -as [bool]) (Focused-Name)
+
+  # The preview is one tab stop; the right arrow selects its first link and Enter follows it.
+  [E2e.Win]::Key($window, 0x27, 0x4D); [E2e.Win]::Key($window, 0x0D, 0x1C)
+  Write-Check 'arrow keys reach a preview link and Enter opens it' ((Wait-Until { (Title-Of $app) -eq 'second.md - Marky GPUI' } 10) -as [bool]) (Title-Of $app)
+  Press (Find $T::Button 'Close second.md') | Out-Null
+  Wait-Until { (Title-Of $app) -like 'fixture.md*' } 10 | Out-Null
 
   [E2e.Win]::Close($window)
   # A negative check, so a fixed wait: the window must still be open 2 s after the close request.
@@ -280,11 +322,58 @@ try {
   Write-Check 'files over the size limit are refused' ([bool]$dialog -and $app.WaitForExit(10000) -and $app.ExitCode -eq 1) "exit code $(if ($app.HasExited) { $app.ExitCode } else { 'running' })"
   Remove-Item $huge -ErrorAction SilentlyContinue
 
+  # ----- Run D: tabs, external changes, recent files, single instance and auto-save -----
+
+  Write-Fixture $text
+  $app = Start-Prototype $fixture
+  $window = Window-Of $app
+  $script:ui = $A::FromHandle($window)
+  $ready = Wait-Until { (Title-Of $app) -eq 'fixture.md - Marky GPUI' } 30
+  if ($ready) {
+    (Find $T::MenuItem 'File').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    [E2e.Win]::Key($window, 0x4E, 0x31)
+    Write-Check 'the underlined menu key N opens a New Tab' ((Wait-Until { (Title-Of $app) -eq 'Untitled - Marky GPUI' } 10) -as [bool]) (Title-Of $app)
+    Press (Find $T::Button 'Close Untitled') | Out-Null
+    Write-Check 'closing a clean Untitled tab returns to the first tab' ((Wait-Until { (Title-Of $app) -eq 'fixture.md - Marky GPUI' } 10) -as [bool]) (Title-Of $app)
+
+    # Another program changes the file while the buffer is clean: the watcher reloads it.
+    Write-Fixture "# Changed on disk`n"
+    Write-Check 'a clean document reloads an external change' ((Wait-Until { (Editor-Text) -eq "# Changed on disk`n" } 15) -as [bool]) "$((Editor-Text).Length) chars"
+
+    # A second launch forwards its path instead of opening a second window.
+    $second = Join-Path $dir 'second.md'
+    [IO.File]::WriteAllText($second, "# Second file`n")
+    Start-Prototype $second | Out-Null
+    Write-Check 'a second launch opens its file as a tab' ((Wait-Until { (Title-Of $app) -eq 'second.md - Marky GPUI' } 15) -as [bool]) (Title-Of $app)
+
+    Run-Menu 'File' 'Open Recent…' | Out-Null
+    Write-Check 'Open Recent lists the file just opened' ([bool](Find $T::Group 'Recent files') -and [bool](Find-Like 'second\.md'))
+    Press (Find $T::Button 'Close recent files') | Out-Null
+    Press (Find $T::TabItem 'fixture.md') | Out-Null
+
+    Run-Menu 'File' 'Settings…' | Out-Null
+    Press (Find $T::CheckBox 'Auto save') | Out-Null
+    Press (Find $T::Button 'Close settings') | Out-Null
+    # Window messages go to the focused control; put the focus back in the editor first.
+    try { (Find $T::Edit 'Editor').SetFocus() } catch { }
+    Wait-Until { (Focused-Name) -eq "Edit 'Editor'" } 10 | Out-Null
+    [E2e.Win]::Type($window, 'auto ')
+    $autosaved = Wait-Until { try { if ([IO.File]::ReadAllText($fixture) -like '*auto*') { $true } } catch { $null } } 10
+    Write-Check 'auto save writes about a second after typing stops' ([bool]$autosaved)
+    Write-Check 'the auto-saved tab is clean' ((Wait-Until { (Title-Of $app) -eq 'fixture.md - Marky GPUI' } 10) -as [bool]) (Title-Of $app)
+    [E2e.Win]::Close($window)
+    $app.WaitForExit(10000) | Out-Null
+    Stop-ProcessTree $app.Id
+  } else {
+    Write-Check 'feature run started' $false (Title-Of $app)
+    Stop-ProcessTree $app.Id
+  }
+
   # ----- What the app's test covers that the prototype does not have yet -----
 
-  Write-Skip 'clean buffer reloads external change' 'the prototype has no file watcher'
-  Write-Skip 'recovery snapshot and relaunch after a crash' 'the prototype has no crash recovery'
-  Write-Skip 'recent files, second launch into a tab, drop overlay' 'not in the prototype'
+  Write-Skip 'recovery snapshot and relaunch after a crash' 'restoring asks in a native dialog, which this harness does not drive; store.rs tests the snapshots'
+  Write-Skip 'Save As' 'the file dialog is native, which this harness does not drive'
+  Write-Skip 'drop overlay' 'the harness cannot start an OS drag session'
   Write-Skip 'IME composition' 'composition cannot be sent as window messages; the IME path is unit-tested in buffer.rs'
 }
 finally {

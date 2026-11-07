@@ -6,6 +6,7 @@
 //! the typographer and the app's math rule for `$…$` come from extras.rs.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::Arc;
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
@@ -564,6 +565,23 @@ fn next_extension(text: &str) -> Option<(usize, usize, Extension)> {
     .min_by_key(|(open, _, _)| *open)
 }
 
+/// The `~sub~` and `^sup^` content ranges in one line, as byte ranges without their delimiters, for
+/// the editor's own smaller script text. `true` means superscript. `~~strikethrough~~` is not one.
+pub fn script_ranges(text: &str) -> Vec<(Range<usize>, bool)> {
+    let mut ranges = Vec::new();
+    let mut rest = text;
+    let mut offset = 0;
+    while let Some((open, close, kind)) = next_extension(rest) {
+        if let Extension::Sub | Extension::Sup = kind {
+            ranges.push((offset + open + 1..offset + close, matches!(kind, Extension::Sup)));
+        }
+        let next = close + 1;
+        rest = &rest[next..];
+        offset += next;
+    }
+    ranges
+}
+
 /// markdown-it-sub and -sup: a single `delim`, then text with no spaces, then `delim` again.
 pub fn find_script(text: &str, delim: char) -> Option<(usize, usize)> {
     let mut from = 0;
@@ -699,6 +717,14 @@ mod tests {
         assert!(blocks[0].runs[0].style.bold);
         assert!(blocks[0].runs[2].style.italic);
         assert!(blocks[0].runs[4].style.strike);
+    }
+
+    #[test]
+    fn editor_script_ranges_exclude_delimiters_and_strikethrough() {
+        assert_eq!(script_ranges("H~2~O"), vec![(2..3, false)]);
+        assert_eq!(script_ranges("19^th^"), vec![(3..5, true)]);
+        assert!(script_ranges("~~struck~~").is_empty());
+        assert_eq!(script_ranges("a ~x~ b ^y^"), vec![(3..4, false), (9..10, true)]);
     }
 
     #[test]
