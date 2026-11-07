@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-07
+
 ### Changed
 
 - Mermaid diagrams render inside `marky.exe`; the separate diagram helper executable is gone.
