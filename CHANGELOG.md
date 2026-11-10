@@ -4,6 +4,8 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-10
+
 ### Changed
 
 - Saving, auto-save and the recent files list are written in the background, so typing no longer pauses while a file is synced to disk. Closing the window waits for a save that is still being written.
