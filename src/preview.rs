@@ -648,9 +648,27 @@ pub fn block_at_line(blocks: &[Block], line: usize) -> usize {
     index
 }
 
+/// Whether 1-based `line` is inside a code, math or Mermaid block: its opening fence, its text or
+/// its closing fence. The blocks are from the last parse, which trails typing by a pause; a fence
+/// typed a moment ago is not known yet.
+pub fn in_code_block(blocks: &[Block], line: usize) -> bool {
+    let Some(block) = blocks.get(block_at_line(blocks, line)) else { return false };
+    if !matches!(block.kind, Kind::Code | Kind::Math | Kind::Diagram) || line < block.line {
+        return false;
+    }
+    line <= block.line + block.text.lines().count() + 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_blocks_cover_their_fences_and_text() {
+        let blocks = blocks("- a\n\n```yaml\n- key\n- other\n```\n\n- b\n");
+        let inside: Vec<usize> = (1..=8).filter(|line| in_code_block(&blocks, *line)).collect();
+        assert_eq!(inside, [3, 4, 5, 6]);
+    }
 
     fn plain(kind: Kind, text: &str, line: usize) -> Block {
         Block {

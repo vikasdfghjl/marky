@@ -2,6 +2,39 @@
 
 Decisions about Marky that are not obvious from the code, with the reasons and the evidence behind them. Newest first. Each entry says what was decided, what else was considered, and what it costs; change one only with new evidence, and add a new entry rather than rewriting an old one.
 
+## 2026-11-10: Enter continues Markdown lists
+
+Context: typing `1. Apple`, Enter, `2. Oranges`, Enter should give `3. ` without typing it. The app's previous CodeMirror editor did this (`markdown()` binds Enter to `insertNewlineContinueMarkup`); the GPUI editor inserted a bare line break.
+
+### Decision
+
+- **Enter in a list item starts the next item**, always on, with no setting: an ordered item gets the next number with the same delimiter (`.` or `)`) and zero padding, a bullet the same bullet, a task item `[ ] `. The indent and the gap after the marker are kept. Text after the caret moves into the new item.
+- **Enter on an empty item ends the list**: the marker is removed and the line is left blank.
+- **Following items that continue the numbering are renumbered** in the same edit, so one Undo reverts the whole Enter. Renumbering stops at a number that does not follow on, a different delimiter, a line that is not indented under the list, or two blank lines, and looks at most 10,000 lines ahead.
+- **Markers are read from the caret's line** with CommonMark's list-item rule (`src/editor/lists.rs`), not from the last parse. **Code, math and Mermaid blocks are excluded** using the last parse's blocks (`preview::in_code_block`).
+- **Enter on the indent or the marker, or with a selection, is a plain line break.**
+
+### Options considered
+
+| Question | Chosen | Rejected, and why |
+| --- | --- | --- |
+| On by default, or a setting | Always on | **A setting**: the previous editor had no switch either, and an empty item's Enter is the way out. A setting needs a field, a reader, a control and a save (AGENTS.md); add one only if someone asks to turn it off. |
+| Where list markers are recognised | Text rule on the caret's line | **The last parse's spans or blocks**: the parse runs only after typing pauses, so a line inserted a moment ago (by the previous Enter) has no spans and the second Enter in a row would not continue. AGENTS.md asks the panes to share the parser's rules; the marker rule is CommonMark's own and the tests pin the cases where text only looks like a list (`-5`, `*emphasis*`, `2023.5`, `- - -`). |
+| Code fences | Excluded via the last parse's blocks | **No exclusion**: Enter after `- removed` in a diff fence would add `- `. **Scanning upward for fences**: costs time in proportion to the lines above on every Enter. The parse can trail a fence typed a moment ago; that only affects the first Enter after typing the fence. |
+| Renumbering later items | Renumber items that continue the sequence | **Leave numbers**: inserting mid-list would leave `2.` twice in the source, although Markdown renders it in order. **Renumber every following item**: would overwrite numbers a writer chose on purpose (`7.` after `2.`). |
+| Empty item | Remove the marker, keep a blank line | **Outdent a nested item first** (some editors): more behaviour to learn for one level of nesting; Shift+Tab already outdents. |
+| Shift+Enter | Unchanged (the same as Enter in the editor) | **A plain line break on Shift+Enter**: needs a new action, binding and menu entry; not asked for. Revisit if a plain break inside a list is wanted. |
+
+### Evidence
+
+- `lists.rs` tests: numbers, `)` delimiters, zero padding and 9 → 10; bullets, nested indent and tasks; empty items ending the list; splitting an item; renumbering with nested lines and a blank line, and where renumbering stops; text that only looks like a list. `preview.rs` tests that a fence's lines, and only those, count as code.
+- `scripts/e2e.ps1`: types `1. Apple`, Enter, `Oranges`, Enter, Enter into an Untitled tab and expects `1. Apple\n2. Oranges\n`.
+
+### Consequences
+
+- A paragraph line that happens to start with `1. ` or `- ` continues as a list on Enter, as in CommonMark, where it is a list.
+- Blockquotes (`> `) are not continued; that would be a separate rule.
+
 ## 2026-11-10: Main-thread quick wins from the performance audit
 
 Context: a read-through of the code for work on the main thread that grows with the document or waits on the disk. The current budgets have room (typing p95 2.9 ms against 20 ms), so the aim was to remove risks that show on large files, slow disks and many images or formulas, without moving any budget. The findings not done here are in `TODO.md` under "Performance audit (10 Nov 2026)", with the order they should be taken in.

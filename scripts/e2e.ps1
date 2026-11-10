@@ -319,8 +319,15 @@ try {
   $window = Window-Of $app
   $untitled = Wait-Until { (Title-Of $app) -eq 'Untitled - Marky' } 30
   Write-Check 'a launch without a file opens an Untitled tab' ([bool]$untitled) "$(if ($app.HasExited) { "exited with $($app.ExitCode)" } else { Title-Of $app })"
-  if ($untitled) { [E2e.Win]::Close($window) }
-  $app.WaitForExit(10000) | Out-Null
+  if ($untitled) {
+    # Enter in a list item starts the next number; Enter on the empty item that makes ends the list.
+    $script:ui = $A::FromHandle($window)
+    [E2e.Win]::Type($window, '1. Apple'); [E2e.Win]::Key($window, 0x0D, 0x1C)
+    [E2e.Win]::Type($window, 'Oranges'); [E2e.Win]::Key($window, 0x0D, 0x1C); [E2e.Win]::Key($window, 0x0D, 0x1C)
+    $listed = Wait-Until { if ((Editor-Text) -eq "1. Apple`n2. Oranges`n") { $true } } 10
+    Write-Check 'Enter continues a numbered list and ends it on an empty item' ([bool]$listed) ((Editor-Text) -replace "`n", '\n')
+  }
+  # The list leaves the tab unsaved, so a close would wait on the discard prompt; end the process.
   Stop-ProcessTree $app.Id
 
   # ----- Run C: files over the size limit are refused before they are read -----
