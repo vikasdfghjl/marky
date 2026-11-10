@@ -35,9 +35,11 @@ pub fn log_startup() {
     log(&format!("startup_ms={total:.0} marks: {}", marks.unwrap_or_default()));
 }
 
+/// Runs after every typed frame, so the log's path is looked up once.
 pub fn log(line: &str) {
+    static PATH: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
     eprintln!("{line}");
-    let Some(path) = std::env::var_os("MARKY_PERF_LOG") else { return };
+    let Some(path) = PATH.get_or_init(|| std::env::var_os("MARKY_PERF_LOG")) else { return };
     let file = OpenOptions::new().create(true).append(true).open(path);
     if let Ok(mut file) = file {
         let _ = writeln!(file, "{line}");

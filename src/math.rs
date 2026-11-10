@@ -5,8 +5,10 @@
 //! The bitmap is made here rather than by GPUI, so [`release_unused`] can drop the bitmaps of
 //! formulas that no open document contains any more (see `bitmaps.rs`).
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use gpui::{App, Image, ImageFormat, RenderImage, SvgRenderer};
 use ratex_layout::{LayoutOptions, layout, to_display_list, validate_layout};
@@ -14,7 +16,7 @@ use ratex_svg::{SvgOptions, render_to_svg};
 use ratex_types::color::Color;
 use ratex_types::math_style::MathStyle;
 
-use crate::bitmaps;
+use crate::{bitmaps, perf};
 
 /// The app's `.katex { font-size: 1.21em }`: formulas are a little larger than the text around them.
 const KATEX_SCALE: f32 = 1.21;
@@ -36,16 +38,50 @@ fn cache() -> &'static Mutex<HashMap<Key, Rendered>> {
     CACHE.get_or_init(Default::default)
 }
 
+/// A formula the preview has not drawn before is laid out on the thread that draws, in about a
+/// millisecond. One frame lays out formulas for at most this long and leaves the rest to the next
+/// frames, so scrolling onto a page of them does not freeze the window.
+const FRAME_BUDGET: Duration = Duration::from_millis(8);
+
+thread_local! {
+    /// Layout time spent in the current frame, and whether a formula was left for a later one.
+    static SPENT: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    static DEFERRED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Starts a frame's layout budget. Call it at the top of the window's render.
+pub fn begin_frame() {
+    SPENT.set(Duration::ZERO);
+}
+
+/// Whether a formula was left for a later frame since the last call; the caller asks for one.
+pub fn take_deferred() -> bool {
+    DEFERRED.replace(false)
+}
+
 /// Lays out and draws `tex` once per size, colour and style; later frames reuse the bitmap. Only
 /// formulas the preview actually draws are laid out, because the preview is a virtualised list.
-pub fn render(tex: &str, display: bool, font_size: f32, dark: bool, renderer: &SvgRenderer) -> Rendered {
+/// `None` means the frame's budget is spent and the formula is drawn in a later frame. Until the
+/// first frame has painted there is no budget, so formulas on screen at start-up appear at once.
+pub fn render(tex: &str, display: bool, font_size: f32, dark: bool, renderer: &SvgRenderer) -> Option<Rendered> {
+    let budget = perf::startup_ms().map(|_| FRAME_BUDGET);
+    render_within(tex, display, font_size, dark, renderer, budget)
+}
+
+fn render_within(tex: &str, display: bool, font_size: f32, dark: bool, renderer: &SvgRenderer, budget: Option<Duration>) -> Option<Rendered> {
     let key: Key = (tex.to_string(), display, font_size.to_bits(), dark);
     if let Some(found) = cache().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
-        return found.clone();
+        return Some(found.clone());
     }
+    if budget.is_some_and(|budget| SPENT.get() >= budget) {
+        DEFERRED.set(true);
+        return None;
+    }
+    let started = Instant::now();
     let rendered = lay_out(tex, display, font_size * KATEX_SCALE, dark, renderer);
+    SPENT.set(SPENT.get() + started.elapsed());
     cache().lock().unwrap_or_else(PoisonError::into_inner).insert(key, rendered.clone());
-    rendered
+    Some(rendered)
 }
 
 /// Forgets every formula that is not in `in_use` (TeX and display style) at this font size and
@@ -94,7 +130,18 @@ mod tests {
     use super::*;
 
     fn draw(tex: &str, display: bool, font_size: f32, dark: bool) -> Rendered {
-        render(tex, display, font_size, dark, &SvgRenderer::new(Arc::new(())))
+        render_within(tex, display, font_size, dark, &SvgRenderer::new(Arc::new(())), None).expect("no budget, so never deferred")
+    }
+
+    #[test]
+    fn a_spent_frame_budget_defers_new_formulas_but_not_cached_ones() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        assert!(draw("y_1", false, 17.0, false).is_ok());
+        let spent = Some(Duration::ZERO);
+        assert!(render_within("y_1", false, 17.0, false, &renderer, spent).is_some());
+        assert!(render_within("y_2", false, 17.0, false, &renderer, spent).is_none());
+        assert!(take_deferred());
+        assert!(!take_deferred());
     }
 
     #[test]

@@ -19,7 +19,7 @@ const RUN_CHARS: usize = 255;
 /// Lines described below the top visible one, and a cap on characters, so a few very long lines
 /// cannot make the tree huge.
 pub const LINES_DESCRIBED: usize = 120;
-const CHARS_DESCRIBED: usize = 60_000;
+pub const CHARS_DESCRIBED: usize = 60_000;
 
 /// One source line as described: its index and its text, with a trailing `\n` unless it is the last
 /// line of the document (AccessKit marks line ends with the line break character).

@@ -45,6 +45,10 @@ pub struct LineSplice {
     pub new: usize,
 }
 
+/// Where the undo history was when a save took its snapshot; see [`Buffer::save_point`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SavePoint(Option<u64>);
+
 pub struct Buffer {
     rope: Rope,
     undo: Vec<Transaction>,
@@ -87,11 +91,20 @@ impl Buffer {
         self.rope.len_lines()
     }
 
-    /// Line `index` without its newline.
+    /// Line `index` without its newline. One allocation: this runs for every line on screen, every frame.
     pub fn line(&self, index: usize) -> String {
+        let mut text = self.rope.line(index.min(self.line_count() - 1)).to_string();
+        if text.ends_with('\n') {
+            text.pop();
+        }
+        text
+    }
+
+    /// Length in bytes of line `index` without its newline, without copying the line.
+    fn line_len(&self, index: usize) -> usize {
         let line = self.rope.line(index.min(self.line_count() - 1));
-        let text = line.to_string();
-        text.strip_suffix('\n').map(str::to_string).unwrap_or(text)
+        let len = line.len_bytes();
+        if len > 0 && line.byte(len - 1) == b'\n' { len - 1 } else { len }
     }
 
     pub fn line_start(&self, index: usize) -> usize {
@@ -104,7 +117,7 @@ impl Buffer {
     /// Byte range of line `index`, without its newline.
     pub fn line_range(&self, index: usize) -> Range<usize> {
         let start = self.line_start(index);
-        start..start + self.line(index).len()
+        start..start + self.line_len(index)
     }
 
     pub fn line_of(&self, offset: usize) -> usize {
@@ -300,7 +313,20 @@ impl Buffer {
     }
 
     pub fn mark_saved(&mut self) {
-        self.saved = self.undo.last().map(|step| step.id);
+        let point = self.save_point();
+        self.mark_saved_at(point);
+    }
+
+    /// The undo step a save started now will contain. Ends the typing group first, so a keystroke
+    /// made while a background save runs starts a new step and keeps the document dirty.
+    pub fn save_point(&mut self) -> SavePoint {
+        self.break_group();
+        SavePoint(self.undo.last().map(|step| step.id))
+    }
+
+    /// The file on disk now holds the text as it was at `point`; edits made since stay unsaved.
+    pub fn mark_saved_at(&mut self, point: SavePoint) {
+        self.saved = point.0;
         self.break_group();
     }
 
@@ -375,6 +401,21 @@ pub fn find_all(text: &str, query: &str) -> Vec<Range<usize>> {
         }
     }
     matches
+}
+
+/// Brings sorted, non-overlapping `matches` up to date after an edit replaced the whole lines in
+/// `old` (bytes) with whole lines ending at `new_end`; both start at the same line start. Matches
+/// never cross a line, so only those in the replaced lines change: `fresh`, found in the new lines
+/// (document offsets), takes their place, and every later match moves by the edit's size.
+pub fn splice_matches(matches: &mut Vec<Range<usize>>, old: Range<usize>, new_end: usize, fresh: Vec<Range<usize>>) {
+    let first = matches.partition_point(|found| found.start < old.start);
+    let last = matches.partition_point(|found| found.start < old.end);
+    let kept = first + fresh.len();
+    matches.splice(first..last, fresh);
+    // Every later match starts at or after `old.end`, so this never underflows.
+    for found in &mut matches[kept..] {
+        *found = found.start + new_end - old.end..found.end + new_end - old.end;
+    }
 }
 
 /// The non-ASCII query path. A lower-cased non-ASCII query cannot match a line of ASCII text, so
@@ -522,6 +563,45 @@ mod tests {
         assert_eq!(buffer.boundary(3), 2);
         assert_eq!(buffer.utf16_of(4), 3);
         assert_eq!(buffer.offset_of_utf16(3), 4);
+    }
+
+    /// What the find bar does while typing: search the edited lines only, and agree with a full search.
+    #[test]
+    fn spliced_matches_equal_a_full_search_after_an_edit() {
+        let mut buffer = Buffer::new("foo bar\nbaz foo\nqux\nfoo foo\n");
+        let query = "foo";
+        for (range, text) in [(9..9, "foo "), (0..8, ""), (4..10, "x\nfoo\ny"), (0..0, "foo\n\n")] {
+            let mut matches = find_all(&buffer.text(), query);
+            let before = buffer.len();
+            let (_, splice) = buffer.edit(range, text, EditKind::Other, 0..0);
+            let new_lines = buffer.line_start(splice.first)..buffer.line_start(splice.first + splice.new);
+            let old_end = new_lines.end + before - buffer.len();
+            let fresh = find_all(&buffer.slice(new_lines.clone()), query).into_iter().map(|found| found.start + new_lines.start..found.end + new_lines.start).collect();
+            splice_matches(&mut matches, new_lines.start..old_end, new_lines.end, fresh);
+            assert_eq!(matches, find_all(&buffer.text(), query), "after {text:?}");
+        }
+    }
+
+    #[test]
+    fn typing_during_a_background_save_keeps_the_document_dirty() {
+        let mut buffer = Buffer::new("");
+        buffer.edit(0..0, "a", EditKind::Typing, 0..0);
+        let point = buffer.save_point();
+        // The next keystroke would have joined the typing group; the save point ended it.
+        buffer.edit(1..1, "b", EditKind::Typing, 1..1);
+        buffer.mark_saved_at(point);
+        assert!(buffer.is_dirty());
+        buffer.undo();
+        assert!(!buffer.is_dirty());
+    }
+
+    #[test]
+    fn line_ranges_exclude_the_newline() {
+        let buffer = Buffer::new("ab\ncé\n");
+        assert_eq!(buffer.line_range(0), 0..2);
+        assert_eq!(buffer.line_range(1), 3..6);
+        assert_eq!(buffer.line_range(2), 7..7);
+        assert_eq!(buffer.line(1), "cé");
     }
 
     #[test]

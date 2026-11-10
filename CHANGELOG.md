@@ -4,6 +4,13 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Changed
+
+- Saving, auto-save and the recent files list are written in the background, so typing no longer pauses while a file is synced to disk. Closing the window waits for a save that is still being written.
+- With the find bar open, typing re-searches only the edited lines, so large documents stay responsive.
+- Scrolling onto many formulas at once lays them out over a few frames instead of freezing the window; a formula shows its TeX for a moment until it is drawn.
+- The preview and outline do less work on every keystroke in documents with many links, headings or images.
+
 ## [0.4.2] - 2026-11-08
 
 ### Changed

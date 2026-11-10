@@ -7,6 +7,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 const RECENT_FILE: &str = "recent.json";
 const RECENT_LIMIT: usize = 10;
@@ -88,7 +89,11 @@ pub fn load_recent(config_dir: &Path) -> Vec<PathBuf> {
     read_json(&config_dir.join(RECENT_FILE), RECENT_MAX_BYTES).unwrap_or_default()
 }
 
+/// Read, change, write: callers on background threads take turns, so two files opened at once both
+/// stay in the list.
 pub fn push_recent(config_dir: &Path, path: &Path) -> io::Result<()> {
+    static TURN: Mutex<()> = Mutex::new(());
+    let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
     let mut recent = load_recent(config_dir);
     recent.retain(|p| !files::same_path(p, path));
     recent.insert(0, path.to_path_buf());
