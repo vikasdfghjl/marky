@@ -79,6 +79,7 @@ actions!(
 
 mod a11y;
 mod chrome;
+mod lists;
 
 pub use chrome::*;
 
@@ -662,9 +663,29 @@ impl Prototype {
         self.edit(range, "", EditKind::Deleting, cx);
     }
 
+    /// In a list item, Enter starts the next item (`lists.rs`); elsewhere it breaks the line.
     fn enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
         let range = self.doc().selected.clone();
+        if let Some(list) = self.list_enter(&range) {
+            self.edit(list.range, &list.text, EditKind::Typing, cx);
+            self.doc_mut().selected = list.caret..list.caret;
+            return;
+        }
         self.edit(range, "\n", EditKind::Typing, cx);
+    }
+
+    /// The list continuation for Enter with the caret at `range`, unless text is selected or the
+    /// caret is in a code, math or diagram block, where `- ` and `1. ` are content, not lists.
+    fn list_enter(&self, range: &Range<usize>) -> Option<lists::ListEnter> {
+        if !range.is_empty() {
+            return None;
+        }
+        let doc = self.doc();
+        let line = doc.buffer.line_of(range.start) + 1;
+        if preview::in_code_block(&doc.blocks, line) {
+            return None;
+        }
+        lists::on_enter(&doc.buffer, range.start)
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {

@@ -4,6 +4,10 @@ Notable changes to Marky, newest first. The format follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+
+- Pressing Enter in a list starts the next item: `2. Oranges` is followed by `3. `, a bullet by the same bullet, and a task by an unchecked box. Numbered items after the new one are renumbered. Enter on an empty item ends the list. Code blocks are left alone.
+
 ## [0.4.3] - 2026-11-10
 
 ### Changed
