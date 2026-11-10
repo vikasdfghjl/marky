@@ -2,6 +2,53 @@
 
 Decisions about Marky that are not obvious from the code, with the reasons and the evidence behind them. Newest first. Each entry says what was decided, what else was considered, and what it costs; change one only with new evidence, and add a new entry rather than rewriting an old one.
 
+## 2026-11-10: Main-thread quick wins from the performance audit
+
+Context: a read-through of the code for work on the main thread that grows with the document or waits on the disk. The current budgets have room (typing p95 2.9 ms against 20 ms), so the aim was to remove risks that show on large files, slow disks and many images or formulas, without moving any budget. The findings not done here are in `TODO.md` under "Performance audit (10 Nov 2026)", with the order they should be taken in.
+
+### Decision
+
+- **Saves run on a background thread, one per document at a time.** Save, auto-save and Save As snapshot the rope (cheap), write it with `files::write` on the background executor, and mark the document saved when the write finishes, at the undo step the snapshot was taken (`Buffer::save_point`, `mark_saved_at`). The save point ends the typing group, so a keystroke made during the write keeps the tab dirty. A save asked for while one is running is queued (the latest target wins) and runs next.
+- **Closing waits for a running save**, polling every 15 ms, then asks `may_close` again.
+- **The external-change check skips a document while Marky's own save to it is running**; the save records the new mtime when it finishes.
+- **The recent list is written in the background, and not at all when the path is already first** (every auto-save of the same file). `store::push_recent` holds a lock across its read, change and write.
+- **Recovery snapshots take ropes on the main thread and make text on the writing thread.** One helper decides whether anything changed, for the 30-second write and the write on close.
+- **Find updates matches per edit.** An edit re-searches only the lines it replaced and shifts later matches (`buffer::splice_matches`). A changed query, a multi-step undo or redo, and a query containing a line break still search the whole document.
+- **The preview's links and the outline's headings are gathered on the parse thread** and stored on the document with the blocks they came from.
+- **Image paths are cached for 2 seconds, up to 1,000 entries,** per (folder, path as written). A missing image is cached too.
+- **Formula layout gets 8 ms per frame after the first frame.** Formulas over the budget show their TeX for a frame and the view asks for another frame. The first frame has no budget.
+- **`rust-version = "1.91"`** in `Cargo.toml`, because `str::floor_char_boundary` replaces two hand-written helpers.
+
+### Options considered
+
+| Question | Chosen | Rejected, and why |
+| --- | --- | --- |
+| Where saves run | Background thread, one in flight per document, later requests queued | **Main thread** (before): `sync_all` plus rename, then a second synced write of `recent.json`, ran inside the frame after a typing pause, tens of ms on OneDrive, HDDs or with antivirus. **Unlimited concurrent saves**: two writes of one file could finish out of order and leave the older text on disk. **Dropping `sync_all`**: gives up the old-or-new-never-torn guarantee that `killed_mid_save_leaves_old_or_new_content` tests. |
+| When the tab turns clean | When the write finishes, at the snapshot's undo step | **When the save is requested**: a failed write would show a clean tab with nothing on disk. **Mark the newest step**: text typed during the write would show as saved. |
+| Closing during a save | Poll every 15 ms until no save runs, then ask again | **`futures::Shared` on the save task**: a new direct dependency for a wait of a few ms. **A synchronous save on close**: would race the background write to the same file. **Close at once**: the user could lose the save they just asked for. |
+| Find while typing | Re-search the edited lines, shift the rest | **Search everything in the background after a pause**: highlights and Replace would use stale offsets until it finished. **Search the rope's chunks without copying**: a query can span a chunk boundary; worth doing for query changes (in `TODO.md`), not needed per keystroke. |
+| Links and headings | Gathered by the parse | **Memoise on the main thread by blocks pointer**: still walks every block once per parse on the main thread, and the parse thread already holds them. |
+| Image paths | 2-second cache in the view | **Resolve in the parse**: the parse does not know the folder, and Save As would need a re-parse. **Cache without expiry**: an image saved next to the document after it was referenced would never appear. **Invalidate from the file watcher**: it watches only the document's folder, not image subfolders. |
+| Formulas on screen at once | 8 ms budget per frame, none on the first frame | **Lay formulas out on a background thread, as diagrams are**: reverses the 7 Nov choice that formulas appear in the first frame (start-up with 48 formulas unchanged, memory lower). **No budget**: a page of new formulas at about 1 ms each blocks the frame. 8 ms is half a 60 Hz frame, leaving the rest for layout and paint. |
+| Clippy's `type_complexity` on the image cache | Name the key and value types (`Source`, `Resolved`) | **`#[allow]`**: the names also say what the map holds. |
+| Clippy's `too_many_lines` (not enabled in CI) | Left for the view split in `TODO.md` | **Split long functions now**: `render_line` and `blocks_with` would be cut by line count, not by responsibility; the split by subsystem fixes both. |
+| Toolchain | `rust-version = "1.91"` only | **Pin `rust-toolchain.toml` now**: CI uses stable and the budgets were last measured on it; pinning is in `TODO.md` with the next benchmark run. |
+
+### Evidence
+
+- Clippy clean with `-D warnings`; 90 tests pass, four new: find matches spliced after edits equal a full search, typing during a background save keeps the document dirty, line ranges exclude the newline, and a spent frame budget defers new formulas but not cached ones.
+- Release build: `marky.exe` 21.09 MB (21.07 MB before).
+- `scripts/e2e.ps1`: 42 pass, 4 documented skips, 0 fail, including File > Save keeping BOM and CRLF, undo and redo around a save, Open Recent, and auto-save writing and leaving the tab clean.
+- `bench.ps1` and `bench-large.ps1` have **not** been run since; the numbers in the README are from 7 Nov.
+
+### Consequences
+
+- The dirty marker clears a few milliseconds after Save, when the file is on disk, not when the key is pressed. A failed save leaves the tab dirty and shows the error in the status bar.
+- An external change that lands while Marky is writing the same file is not noticed until the next change event for it.
+- Discarding a tab while its save is running drops the save task; the file holds either the old or the new text, never a torn mix.
+- Not covered by the e2e harness: closing during a running save, and the formula placeholder (the budget is rarely spent on a fast machine). Both are short, timing-dependent paths.
+- A new main-thread cost must be weighed against these choices: do not move saves, recent-list writes or recovery text back onto the main thread, and do not search the whole document per keystroke.
+
 ## 2026-11-07: Mermaid moves into marky.exe
 
 Context: the helper program kept the main executable under the previous 12 MB limit, but it added a second file to build, sign, install and supervise. The limit was raised so one executable can carry every Mermaid diagram type.

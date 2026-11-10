@@ -2,6 +2,10 @@
 
 Marky is a Windows Markdown editor built in Rust with [GPUI](https://gpui.rs/) (Zed's GPU UI framework), with no webview. Its reason to exist is being small and fast. `docs/gpui-migration.md` records how the port was measured and what was decided; this file is the working guide. The app code lives in `src/`, and test, benchmark and release scripts in `scripts/`.
 
+## Decisions
+
+`DECISION.md` records each trade-off with the options that were rejected and why, newest first. Read it before reopening a settled question (a dependency, a budget, which thread does some work, an approach already tried); change course only with new evidence, in a new entry. When a change picks one approach over another that a later reader might try again, add an entry with the rejected options. Work found but not done goes in `TODO.md`.
+
 ## Architecture invariants
 
 - **Rust owns the disk and the UI.** Documents live in a rope in `buffer.rs`; the editor state, undo history, tabs and selection are Rust. There is no IPC boundary and no webview. Typing stays in the GPUI view.

@@ -561,9 +561,8 @@ impl Prototype {
     /// arrows move through it and Enter jumps, so a long outline does not fill the Tab order.
     pub fn outline_column(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = self.dark;
-        let headings = self.headings();
-        let caret_line = self.doc().buffer.line_of(self.doc().cursor()) + 1;
-        let current = headings.iter().rposition(|(line, _, _)| *line <= caret_line);
+        let current = self.heading_at_caret();
+        let headings = &self.doc().headings;
         let selected = self.outline_cursor.filter(|index| *index < headings.len()).or(current);
         let column = focus_ring(
             div()
@@ -588,13 +587,14 @@ impl Prototype {
             return column.child(div().text_color(quiet(dark)).child("No headings"));
         }
         let count = headings.len();
-        column.children(headings.into_iter().enumerate().map(|(index, (line, level, text))| {
+        column.children(headings.iter().enumerate().map(|(index, heading)| {
+            let (line, level, text) = (heading.line, heading.level, heading.text.clone());
             let is_current = Some(index) == current;
             let is_selected = Some(index) == selected;
             div()
                 .id(("heading", index))
                 .role(Role::ListItem)
-                .aria_label(SharedString::from(text.clone()))
+                .aria_label(text.clone())
                 .aria_level(level as usize)
                 .aria_position_in_set(index + 1)
                 .aria_size_of_set(count)
@@ -614,34 +614,26 @@ impl Prototype {
         }))
     }
 
-    fn headings(&self) -> Vec<(usize, u8, String)> {
-        self.doc()
-            .blocks
-            .iter()
-            .filter_map(|block| match block.kind {
-                Kind::Heading(level) => Some((block.line, level, block.text.clone())),
-                _ => None,
-            })
-            .collect()
+    /// The last heading at or above the caret: the one the outline highlights.
+    fn heading_at_caret(&self) -> Option<usize> {
+        let caret_line = self.doc().buffer.line_of(self.doc().cursor()) + 1;
+        self.doc().headings.iter().rposition(|heading| heading.line <= caret_line)
     }
 
     fn outline_step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.headings().len();
+        let count = self.doc().headings.len();
         if count == 0 {
             return;
         }
-        let caret_line = self.doc().buffer.line_of(self.doc().cursor()) + 1;
-        let from = self.outline_cursor.unwrap_or_else(|| self.headings().iter().rposition(|(line, _, _)| *line <= caret_line).unwrap_or(0));
+        let from = self.outline_cursor.or_else(|| self.heading_at_caret()).unwrap_or(0);
         self.outline_cursor = Some((from as isize + delta).clamp(0, count as isize - 1) as usize);
         cx.notify();
     }
 
     fn outline_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let headings = self.headings();
-        let caret_line = self.doc().buffer.line_of(self.doc().cursor()) + 1;
-        let index = self.outline_cursor.or_else(|| headings.iter().rposition(|(line, _, _)| *line <= caret_line));
-        let Some((line, _, _)) = index.and_then(|index| headings.get(index)) else { return };
-        self.jump_to_line(*line, cx);
+        let index = self.outline_cursor.or_else(|| self.heading_at_caret());
+        let Some(line) = index.and_then(|index| self.doc().headings.get(index)).map(|heading| heading.line) else { return };
+        self.jump_to_line(line, cx);
         self.outline_cursor = None;
         self.focus_editor(window, cx);
     }
@@ -1038,20 +1030,19 @@ impl Prototype {
     /// Left and right move through the preview's links, and scroll the chosen one into view. The
     /// preview itself is the tab stop, so a document with many links does not fill the Tab order.
     fn preview_link_step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let links = self.preview_links();
-        if links.is_empty() {
+        let count = self.preview_links().len() as isize;
+        if count == 0 {
             self.preview_link = None;
             cx.notify();
             return;
         }
-        let count = links.len() as isize;
         let next = match self.preview_link {
             Some(index) => (index as isize + delta).rem_euclid(count),
             None if delta > 0 => 0,
             None => count - 1,
         } as usize;
         self.preview_link = Some(next);
-        let block = links[next].1;
+        let block = self.preview_links()[next].1;
         self.doc().block_list.scroll_to(ListOffset { item_ix: block, offset_in_item: px(0.) });
         cx.notify();
     }

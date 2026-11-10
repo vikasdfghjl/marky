@@ -21,7 +21,7 @@ use gpui::{
 };
 
 use crate::allowlist;
-use crate::buffer::{self, Buffer, EditKind, LineSplice};
+use crate::buffer::{self, Buffer, EditKind, LineSplice, SavePoint};
 use crate::{diagrams, diagnostics, instance, math, store, watcher};
 use crate::files::{self, FileMeta, OpenedFile};
 use crate::perf;
@@ -134,6 +134,10 @@ struct Document {
     blocks: Arc<Vec<Block>>,
     /// The formulas and diagrams in `blocks`, gathered by the parse: freeing unused images reads these.
     images: Arc<ImagesInUse>,
+    /// The preview's links and the outline's headings, gathered from `blocks` by the parse, so
+    /// drawing a frame does not walk every block.
+    links: Vec<(Arc<str>, usize)>,
+    headings: Vec<Heading>,
     /// Syntax colours per source line, from the last background parse.
     spans: Vec<Vec<Span>>,
     /// The longest line in characters, from the last parse: the width to scroll to when word wrap is off.
@@ -158,9 +162,11 @@ struct Document {
     external_task: Option<Task<()>>,
     /// Replaced by every edit: auto-saves once typing stops.
     auto_save_task: Option<Task<()>>,
+    /// The save being written on a background thread, and the target of one asked for meanwhile.
+    save_task: Option<Task<()>>,
+    queued_save: Option<PathBuf>,
 }
 
-/// The status bar's counts: words as the app counts them (`/\S+/g`), characters as JavaScript's `length`.
 /// What a background parse hands back to the window. Everything that costs time in proportion to
 /// the document is done on the parse thread, so applying it stays cheap at any size (at 8 MB the
 /// comparison alone took 55–67 ms on the main thread).
@@ -174,6 +180,8 @@ struct Parsed {
     base: Arc<Vec<Block>>,
     changed: (Range<usize>, usize),
     images: ImagesInUse,
+    links: Vec<(Arc<str>, usize)>,
+    headings: Vec<Heading>,
 }
 
 /// The formula and diagram sources a document shows, which keep their bitmaps alive.
@@ -206,6 +214,23 @@ impl ImagesInUse {
     }
 }
 
+/// One recovery write: the held snapshots and each dirty document as a rope, which is cheap to
+/// copy on the main thread and is turned into text on the thread that writes it.
+struct RecoveryWrite {
+    held: Vec<store::Snapshot>,
+    documents: Vec<(Option<String>, ropey::Rope, FileMeta)>,
+}
+
+impl RecoveryWrite {
+    /// Saves the snapshots, or clears the file when nothing is left to recover.
+    fn write(self, dir: &Path) -> std::io::Result<()> {
+        let mut snapshots = self.held;
+        snapshots.extend(self.documents.into_iter().map(|(path, rope, meta)| store::Snapshot { path, text: rope.to_string(), meta }));
+        if snapshots.is_empty() { store::clear_snapshots(dir) } else { store::save_snapshots(dir, &snapshots) }
+    }
+}
+
+/// The status bar's counts: words as the app counts them (`/\S+/g`), characters as JavaScript's `length`.
 #[derive(Clone, Copy, Default)]
 struct Counts {
     words: usize,
@@ -237,6 +262,8 @@ impl Document {
             marked: None,
             blocks: Arc::default(),
             images: Arc::default(),
+            links: Vec::new(),
+            headings: Vec::new(),
             spans: Vec::new(),
             longest_line: 0,
             parse_task: None,
@@ -251,6 +278,8 @@ impl Document {
             watcher: None,
             external_task: None,
             auto_save_task: None,
+            save_task: None,
+            queued_save: None,
         }
     }
 
@@ -373,6 +402,8 @@ pub struct Prototype {
     frame_started: Option<Instant>,
     /// The last window bounds, written after a resize settles.
     geometry_task: Option<Task<()>>,
+    /// A close asked for while a save was still being written; it asks again once the save is done.
+    close_task: Option<Task<()>>,
     _appearance: Subscription,
     _bounds: Subscription,
 }
@@ -445,6 +476,7 @@ impl Prototype {
             painted_lines: Vec::new(),
             frame_started: None,
             geometry_task: None,
+            close_task: None,
             _appearance: appearance,
             _bounds: bounds,
         };
@@ -481,12 +513,34 @@ impl Prototype {
         }
         let doc = self.doc_mut();
         let before = doc.selected.clone();
+        let (len_before, version_before) = (doc.buffer.len(), doc.buffer.version());
         let (caret, splice) = doc.buffer.edit(range, text, kind, before);
         doc.splice_lines(splice);
         doc.selected = caret..caret;
         doc.selection_reversed = false;
         doc.marked = None;
+        self.update_matches_after_edit(splice, len_before, version_before);
         self.after_change(cx);
+    }
+
+    /// With the find bar open, an edit re-searches only the lines it replaced; searching the whole
+    /// document on every keystroke cost the main thread time in proportion to its size.
+    fn update_matches_after_edit(&mut self, splice: LineSplice, len_before: usize, version_before: u64) {
+        let Some(find) = self.find.as_mut() else { return };
+        let Some((id, version, query)) = find.searched.as_mut() else { return };
+        let buffer = &self.documents[self.active].buffer;
+        // A query with a line break could match across the edited lines; search it all again.
+        if *id != self.documents[self.active].id || *version != version_before || query.contains('\n') {
+            return;
+        }
+        let new_lines = buffer.line_start(splice.first)..buffer.line_start(splice.first + splice.new);
+        let old_end = new_lines.end + len_before - buffer.len();
+        let fresh = buffer::find_all(&buffer.slice(new_lines.clone()), query)
+            .into_iter()
+            .map(|found| found.start + new_lines.start..found.end + new_lines.start)
+            .collect();
+        buffer::splice_matches(&mut find.matches, new_lines.start..old_end, new_lines.end, fresh);
+        *version = buffer.version();
     }
 
     fn after_change(&mut self, cx: &mut Context<Self>) {
@@ -522,7 +576,8 @@ impl Prototype {
                     let blocks = preview::blocks_with(&text, flavor);
                     let changed = preview_view::changed_blocks(&base, &blocks);
                     let images = ImagesInUse::of(&blocks);
-                    Parsed { blocks, spans: syntax::source_spans(&text), longest, counts: Counts::of(&text), base, changed, images }
+                    let (links, headings) = (links_of(&blocks), headings_of(&blocks));
+                    Parsed { blocks, spans: syntax::source_spans(&text), longest, counts: Counts::of(&text), base, changed, images, links, headings }
                 })
                 .await;
             let parse_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -533,7 +588,7 @@ impl Prototype {
     /// Replaces only the blocks that changed, so the preview keeps its measured heights and scroll position.
     fn apply_parse(&mut self, id: u64, version: u64, parsed: Parsed, parse_ms: f64, cx: &mut Context<Self>) {
         let applying = Instant::now();
-        let Parsed { blocks, spans, longest, counts, base, changed, images } = parsed;
+        let Parsed { blocks, spans, longest, counts, base, changed, images, links, headings } = parsed;
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else { return };
         if doc.buffer.version() != version {
             return;
@@ -553,6 +608,8 @@ impl Prototype {
         let old_blocks = std::mem::replace(&mut doc.blocks, Arc::new(blocks));
         let old_spans = std::mem::replace(&mut doc.spans, spans);
         doc.images = Arc::new(images);
+        doc.links = links;
+        doc.headings = headings;
         doc.longest_line = longest;
         doc.synced_source_line = None;
         // Freeing a large document's old blocks and colours is itself tens of milliseconds.
@@ -1068,7 +1125,6 @@ impl Prototype {
         self.find_step(-1, cx);
     }
 
-    /// Esc closes the find bar, or an open menu.
     /// Esc closes what is open, innermost first: a menu, the settings panel, the find bar. With
     /// nothing open, in the editor, it lets the next Tab leave the editor instead of indenting.
     fn find_close(&mut self, _: &FindClose, window: &mut Window, cx: &mut Context<Self>) {
@@ -1096,13 +1152,14 @@ impl Prototype {
     fn refresh_matches(&mut self, cx: &App) {
         let Some(find) = self.find.as_mut() else { return };
         let doc = &self.documents[self.active];
-        let query = find.query.read(cx).text().to_string();
-        let key = (doc.id, doc.buffer.version(), query);
-        if find.searched.as_ref() == Some(&key) {
+        let query = find.query.read(cx).text();
+        // This runs every frame; compare before copying the query.
+        let current = find.searched.as_ref().is_some_and(|(id, version, searched)| *id == doc.id && *version == doc.buffer.version() && searched == query);
+        if current {
             return;
         }
-        find.matches = buffer::find_all(&doc.buffer.text(), &key.2);
-        find.searched = Some(key);
+        find.matches = buffer::find_all(&doc.buffer.text(), query);
+        find.searched = Some((doc.id, doc.buffer.version(), query.to_string()));
     }
 
     fn matches(&self) -> &[Range<usize>] {
@@ -1180,33 +1237,78 @@ impl Prototype {
     fn write_document(&mut self, id: u64, cx: &mut Context<Self>) {
         self.open_menu = None;
         cx.notify();
-        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
-        if self.documents[index].path.is_empty() {
+        let Some(index) = self.document_index(id) else { return };
+        let doc = &self.documents[index];
+        if doc.path.is_empty() {
             self.save_as_document(id, cx);
             return;
         }
-        if self.documents[index].read_only {
-            let message = format!("Not saved: {} is not valid UTF-8", self.documents[index].path);
+        if doc.read_only {
+            let message = format!("Not saved: {} is not valid UTF-8", doc.path);
             self.report(message);
             return;
         }
-        if !self.documents[index].is_dirty() {
+        if !doc.is_dirty() {
             return;
         }
-        let path = self.documents[index].path.clone();
-        let text = self.documents[index].buffer.text();
-        let meta = self.documents[index].meta;
-        match files::write(Path::new(&path), &text, meta) {
-            Ok(mtime) => {
-                let document = &mut self.documents[index];
-                document.buffer.mark_saved();
-                document.restored = false;
-                document.mtime_ms = mtime;
-                self.status = None;
-                self.record_recent(Path::new(&path));
-            }
-            Err(err) => self.report(format!("Could not save {path}: {err}")),
+        let target = PathBuf::from(&doc.path);
+        self.start_save(id, target, cx);
+    }
+
+    fn document_index(&self, id: u64) -> Option<usize> {
+        self.documents.iter().position(|doc| doc.id == id)
+    }
+
+    /// Writes the document on a background thread: syncing a file to disk can take tens of
+    /// milliseconds, which typing must not wait for. One save per document runs at a time, so an
+    /// older snapshot never lands after a newer one; a save asked for meanwhile runs next.
+    fn start_save(&mut self, id: u64, target: PathBuf, cx: &mut Context<Self>) {
+        let Some(index) = self.document_index(id) else { return };
+        let doc = &mut self.documents[index];
+        if doc.save_task.is_some() {
+            doc.queued_save = Some(target);
+            return;
         }
+        let point = doc.buffer.save_point();
+        let rope = doc.buffer.snapshot();
+        let meta = doc.meta;
+        doc.save_task = Some(cx.spawn(async move |this, cx| {
+            let path = target.clone();
+            let written = cx.background_executor().spawn(async move { files::write(&path, &rope.to_string(), meta) }).await;
+            let _ = this.update(cx, |this, cx| this.finish_save(id, target, point, written, cx));
+        }));
+    }
+
+    /// The file now holds the text as it was when the save started; later edits stay unsaved.
+    /// A save to a new path (Save As) also moves the tab, its watcher and the recent list there.
+    fn finish_save(&mut self, id: u64, target: PathBuf, point: SavePoint, written: std::io::Result<u64>, cx: &mut Context<Self>) {
+        let Some(index) = self.document_index(id) else { return };
+        let doc = &mut self.documents[index];
+        doc.save_task = None;
+        let queued = doc.queued_save.take();
+        cx.notify();
+        match written {
+            Ok(mtime) => {
+                let moved = doc.path.is_empty() || !files::same_path(Path::new(&doc.path), &target);
+                doc.path = target.to_string_lossy().into_owned();
+                doc.mtime_ms = mtime;
+                doc.read_only = false;
+                doc.restored = false;
+                doc.buffer.mark_saved_at(point);
+                self.status = None;
+                self.record_recent(&target, cx);
+                if moved {
+                    self.watch_document(id, cx);
+                }
+            }
+            Err(err) => self.report(format!("Could not save {}: {err}", target.display())),
+        }
+        let Some(next) = queued else { return };
+        let doc = &self.documents[index];
+        if files::same_path(Path::new(&doc.path), &next) && !doc.is_dirty() {
+            return;
+        }
+        self.start_save(id, next, cx);
     }
 
     fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
@@ -1225,7 +1327,7 @@ impl Prototype {
     /// Opens `path` as a tab, or switches to the tab that already has it.
     fn open_path(&mut self, path: &Path, cx: &mut Context<Self>) {
         if let Some(index) = self.documents.iter().position(|doc| files::same_path(Path::new(&doc.path), path)) {
-            self.record_recent(path);
+            self.record_recent(path, cx);
             self.activate_tab(index, cx);
             return;
         }
@@ -1238,7 +1340,7 @@ impl Prototype {
                 self.documents.push(document);
                 self.schedule_parse(id, Duration::ZERO, cx);
                 self.watch_document(id, cx);
-                self.record_recent(path);
+                self.record_recent(path, cx);
                 self.activate_tab(self.documents.len() - 1, cx);
             }
             Err(err) => self.report(format!("Could not open {}: {err}", path.display())),
@@ -1257,46 +1359,45 @@ impl Prototype {
 
     /// Saves under a new name. A New Tab document has no path until this runs.
     fn save_as_document(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        let Some(index) = self.document_index(id) else { return };
         let suggested = if self.documents[index].path.is_empty() { "Untitled.md".to_string() } else { self.documents[index].display_name() };
         let Some(target) = rfd::FileDialog::new().add_filter("Markdown", files::MARKDOWN_EXTS).set_file_name(suggested).save_file() else {
             return;
         };
-        let text = self.documents[index].buffer.text();
-        let meta = self.documents[index].meta;
-        match files::write(&target, &text, meta) {
-            Ok(mtime) => {
-                let doc = &mut self.documents[index];
-                doc.path = target.to_string_lossy().into_owned();
-                doc.meta = meta;
-                doc.mtime_ms = mtime;
-                doc.read_only = false;
-                doc.restored = false;
-                doc.buffer.mark_saved();
-                self.status = None;
-                self.record_recent(&target);
-                self.watch_document(id, cx);
-                cx.notify();
-            }
-            Err(err) => self.report(format!("Could not save {}: {err}", target.display())),
-        }
+        self.start_save(id, target, cx);
     }
 
-    fn record_recent(&mut self, path: &Path) {
-        if path.as_os_str().is_empty() {
+    /// Writing the list syncs it to disk, so it happens in the background, and not at all when the
+    /// path is already at the top (every auto-save of the same file).
+    fn record_recent(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if path.as_os_str().is_empty() || self.recent.first().is_some_and(|first| files::same_path(first, path)) {
             return;
         }
-        if let Err(err) = store::push_recent(&self.config_dir, path) {
-            diagnostics::write(&format!("could not update the recent files list: {err}"));
-            return;
-        }
-        self.recent = store::load_recent(&self.config_dir).into_iter().filter(|path| path.is_file()).collect();
+        let config_dir = self.config_dir.clone();
+        let path = path.to_path_buf();
+        cx.spawn(async move |this, cx| {
+            let recent = cx
+                .background_executor()
+                .spawn(async move {
+                    store::push_recent(&config_dir, &path)?;
+                    Ok::<_, std::io::Error>(store::load_recent(&config_dir).into_iter().filter(|path| path.is_file()).collect::<Vec<_>>())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match recent {
+                Ok(recent) => {
+                    this.recent = recent;
+                    cx.notify();
+                }
+                Err(err) => diagnostics::write(&format!("could not update the recent files list: {err}")),
+            });
+        })
+        .detach();
     }
 
     /// Watches a document's file for changes made by another program. The app debounces and compares
     /// mtimes; `check_external_change` does the same, after the burst settles.
     fn watch_document(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        let Some(index) = self.document_index(id) else { return };
         if self.documents[index].path.is_empty() {
             self.documents[index].watcher = None;
             self.documents[index].external_task = None;
@@ -1327,7 +1428,11 @@ impl Prototype {
     }
 
     fn check_external_change(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        let Some(index) = self.document_index(id) else { return };
+        // Our own save is still being written; its mtime is recorded when it finishes.
+        if self.documents[index].save_task.is_some() {
+            return;
+        }
         let path = PathBuf::from(&self.documents[index].path);
         if path.as_os_str().is_empty() {
             return;
@@ -1366,7 +1471,7 @@ impl Prototype {
     }
 
     fn reload_document(&mut self, id: u64, opened: OpenedFile, cx: &mut Context<Self>) {
-        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        let Some(index) = self.document_index(id) else { return };
         self.documents[index] = Document::open(opened, id, cx);
         self.preview_link = None;
         self.schedule_parse(id, Duration::ZERO, cx);
@@ -1379,7 +1484,7 @@ impl Prototype {
         if !self.settings.auto_save {
             return;
         }
-        let Some(index) = self.documents.iter().position(|doc| doc.id == id) else { return };
+        let Some(index) = self.document_index(id) else { return };
         if self.documents[index].path.is_empty() || self.documents[index].read_only {
             return;
         }
@@ -1463,38 +1568,33 @@ impl Prototype {
         }));
     }
 
-    fn snapshots(&self) -> Vec<store::Snapshot> {
-        let mut snapshots = self.held_recovery.clone();
-        for document in &self.documents {
-            if document.is_dirty() {
-                snapshots.push(store::Snapshot {
-                    path: (!document.path.is_empty()).then(|| document.path.clone()),
-                    text: document.buffer.text(),
-                    meta: document.meta,
-                });
-            }
-        }
-        snapshots
-    }
-
     fn recovery_versions(&self) -> Vec<(u64, u64)> {
         self.documents.iter().filter(|doc| doc.is_dirty()).map(|doc| (doc.id, doc.buffer.version())).collect()
     }
 
-    /// Serialising every dirty document every 30 seconds is itself a cost at 8 MB, so a write
-    /// happens only when a buffer version or the held snapshots changed.
-    fn write_recovery(&mut self, cx: &mut Context<Self>) {
+    /// What the next recovery write holds, or `None` when no buffer version and no held snapshot
+    /// changed since the last one: serialising every dirty document is itself a cost at 8 MB.
+    fn take_recovery_changes(&mut self) -> Option<RecoveryWrite> {
         let versions = self.recovery_versions();
         if !self.recovery_dirty && versions == self.recovery_versions {
-            return;
+            return None;
         }
         self.recovery_versions = versions;
         self.recovery_dirty = false;
-        let snapshots = self.snapshots();
+        let documents = self
+            .documents
+            .iter()
+            .filter(|doc| doc.is_dirty())
+            .map(|doc| ((!doc.path.is_empty()).then(|| doc.path.clone()), doc.buffer.snapshot(), doc.meta))
+            .collect();
+        Some(RecoveryWrite { held: self.held_recovery.clone(), documents })
+    }
+
+    fn write_recovery(&mut self, cx: &mut Context<Self>) {
+        let Some(changes) = self.take_recovery_changes() else { return };
         let dir = self.recovery_dir.clone();
         cx.background_spawn(async move {
-            let result = if snapshots.is_empty() { store::clear_snapshots(&dir) } else { store::save_snapshots(&dir, &snapshots) };
-            if let Err(err) = result {
+            if let Err(err) = changes.write(&dir) {
                 diagnostics::write(&format!("could not save recovery snapshots: {err}"));
             }
         })
@@ -1503,15 +1603,8 @@ impl Prototype {
 
     /// Synchronous, for closing: a background write could be lost when the process ends.
     fn flush_recovery(&mut self) {
-        let versions = self.recovery_versions();
-        if !self.recovery_dirty && versions == self.recovery_versions {
-            return;
-        }
-        self.recovery_versions = versions;
-        self.recovery_dirty = false;
-        let snapshots = self.snapshots();
-        let result = if snapshots.is_empty() { store::clear_snapshots(&self.recovery_dir) } else { store::save_snapshots(&self.recovery_dir, &snapshots) };
-        if let Err(err) = result {
+        let Some(changes) = self.take_recovery_changes() else { return };
+        if let Err(err) = changes.write(&self.recovery_dir) {
             diagnostics::write(&format!("could not save recovery snapshots on close: {err}"));
         }
     }
@@ -1547,28 +1640,8 @@ impl Prototype {
 
     /// Every link the preview draws, in document order, with the block it is in. The preview is one
     /// tab stop; the left and right arrows move through this list and Enter follows the chosen link.
-    fn preview_links(&self) -> Vec<(Arc<str>, usize)> {
-        fn collect(runs: &[preview::Run], block: usize, out: &mut Vec<(Arc<str>, usize)>) {
-            for run in runs {
-                if let Some(link) = run.style.link.as_ref() {
-                    if !link.starts_with("image:") {
-                        out.push((link.clone(), block));
-                    }
-                }
-            }
-        }
-        let mut links = Vec::new();
-        for (index, block) in self.doc().blocks.iter().enumerate() {
-            collect(&block.runs, index, &mut links);
-            if let Some(table) = &block.table {
-                for row in &table.rows {
-                    for cell in row {
-                        collect(cell, index, &mut links);
-                    }
-                }
-            }
-        }
-        links
+    fn preview_links(&self) -> &[(Arc<str>, usize)] {
+        &self.doc().links
     }
 
     /// The preview's text as one read-only AccessKit text pattern, capped like the editor's so a
@@ -1580,7 +1653,7 @@ impl Prototype {
         let mut lines = Vec::new();
         let mut spent = 0;
         for (index, block) in self.doc().blocks.iter().enumerate() {
-            if lines.len() >= a11y::LINES_DESCRIBED || spent >= 60_000 {
+            if lines.len() >= a11y::LINES_DESCRIBED || spent >= a11y::CHARS_DESCRIBED {
                 break;
             }
             let text = preview_view::accessible_text(block);
@@ -1667,7 +1740,7 @@ impl Prototype {
         let id = self.documents[index].id;
         let message = format!("Discard unsaved changes in {}?", self.documents[index].display_name());
         self.confirm_discard(&message, window, cx, move |this, _, cx| {
-            if let Some(index) = this.documents.iter().position(|doc| doc.id == id) {
+            if let Some(index) = this.document_index(id) {
                 this.remove_tab(index, cx);
             }
         });
@@ -1706,6 +1779,10 @@ impl Prototype {
 
     /// The title-bar X and Quit both come here. Returns whether the window may close now.
     pub fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.documents.iter().any(|doc| doc.save_task.is_some()) {
+            self.close_after_saves(window, cx);
+            return false;
+        }
         let dirty = self.dirty_count();
         if dirty == 0 || self.close_confirmed {
             // A postponed recovery survives a normal close; with nothing left to recover, this clears it.
@@ -1724,6 +1801,29 @@ impl Prototype {
             window.remove_window();
         });
         false
+    }
+
+    /// A close while a save is being written waits for it and then asks again, so the file is
+    /// complete and the unsaved-changes prompt sees what was saved. Saves take milliseconds.
+    fn close_after_saves(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_task.is_some() {
+            return;
+        }
+        self.close_task = Some(cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(15)).await;
+                let Ok(saving) = this.update(cx, |this, _| this.documents.iter().any(|doc| doc.save_task.is_some())) else { return };
+                if !saving {
+                    break;
+                }
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.close_task = None;
+                if this.may_close(window, cx) {
+                    window.remove_window();
+                }
+            });
+        }));
     }
 
     fn quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
@@ -1919,7 +2019,7 @@ impl Prototype {
             // Colours from the last parse. Right after an edit they can be a few characters off, or
             // past the end of the line, until the next parse; clamp them to character boundaries.
             for (range, token) in doc.spans.get(ix).map(Vec::as_slice).unwrap_or(&[]) {
-                let span = floor_boundary(&text, range.start)..floor_boundary(&text, range.end);
+                let span = text.floor_char_boundary(range.start)..text.floor_char_boundary(range.end);
                 if !span.is_empty() {
                     highlights.push((span, token.style(dark)));
                 }
@@ -1945,7 +2045,9 @@ impl Prototype {
                 highlights.push((range.start.saturating_sub(1)..(range.end + 1).min(text.len()), hidden));
             }
         }
-        let styled_text = if text.is_empty() { " ".to_string() } else { text.clone() };
+        // One copy of the line, shared by the text, the script overlay and the caret lookup.
+        let text = SharedString::from(text);
+        let styled_text = if text.is_empty() { SharedString::from(" ") } else { text.clone() };
         let styled = StyledText::new(styled_text).with_highlights(syntax::merge(&highlights));
         let layout = styled.layout().clone();
         self.prepaint_lines.borrow_mut().push((ix, layout.clone()));
@@ -1968,8 +2070,7 @@ impl Prototype {
             )
             .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| this.drag_line(ix, &drag_layout, event, cx)));
         let caret_column = (selected.is_empty() && (line.start..=line.end).contains(&cursor)).then(|| cursor - line.start);
-        let line_text = doc.buffer.line(ix);
-        let caret_next = caret_column.and_then(|column| line_text.get(column..)?.chars().next().map(|ch| column + ch.len_utf8()));
+        let caret_next = caret_column.and_then(|column| text.get(column..)?.chars().next().map(|ch| column + ch.len_utf8()));
         let view = cx.entity();
         // Paints the caret, and records the line's layout once it has been painted: Home and End on
         // wrapped rows and the IME's point-to-character lookup may only use painted layouts.
@@ -2079,11 +2180,7 @@ impl Prototype {
         let range = doc.buffer.line_range(line);
         let Some(row) = self.caret_row().filter(|row| row.end < range.len()) else { return range.end };
         let text = doc.buffer.line(line);
-        let mut end = row.end;
-        while end > row.start && !text.is_char_boundary(end - 1) {
-            end -= 1;
-        }
-        let target = range.start + floor_boundary(&text, end.saturating_sub(1)).max(row.start);
+        let target = range.start + text.floor_char_boundary(row.end.saturating_sub(1)).max(row.start);
         if target == cursor { range.end } else { target }
     }
 
@@ -2246,11 +2343,10 @@ impl Prototype {
         let dark = self.dark;
         let blocks = self.doc().block_list.clone();
         let focused_ring = chrome::ring(dark);
-        let links = self.preview_links();
-        if self.preview_link.is_some_and(|index| index >= links.len()) {
+        if self.preview_link.is_some_and(|index| index >= self.preview_links().len()) {
             self.preview_link = None;
         }
-        let selected = self.preview_link.and_then(|index| links.get(index)).map(|(link, _)| link.clone());
+        let selected = self.preview_link.and_then(|index| self.preview_links().get(index)).map(|(link, _)| link.clone());
         let preview_label = match &selected {
             Some(link) => SharedString::from(format!("Preview, link {link}")),
             None => SharedString::from("Preview"),
@@ -2281,7 +2377,7 @@ impl Prototype {
             .child(
                 list(
                     blocks,
-                    cx.processor(move |this, ix, _window, cx| {
+                    cx.processor(move |this, ix, window, cx| {
                         let folder = Path::new(&this.doc().path).parent().map(Path::to_path_buf);
                         let look = Look {
                             font_size: this.settings.font_size,
@@ -2291,10 +2387,15 @@ impl Prototype {
                             svg: cx.svg_renderer(),
                             selected_link: selected.clone(),
                         };
-                        match this.doc().blocks.get(ix) {
+                        let item = match this.doc().blocks.get(ix) {
                             Some(block) => preview_view::preview_item(block, ix, &look, cx),
                             None => div().into_any_element(),
+                        };
+                        // A formula over this frame's layout budget is drawn in the next one.
+                        if math::take_deferred() {
+                            window.request_animation_frame();
                         }
+                        item
                     }),
                 )
                 .size_full(),
@@ -2396,6 +2497,7 @@ impl Focusable for Prototype {
 impl Render for Prototype {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frame_started = Some(Instant::now());
+        math::begin_frame();
         crate::high_contrast::refresh_periodically();
         if !self.logged_first_frame {
             perf::mark("render");
@@ -2484,17 +2586,40 @@ impl Render for Prototype {
     }
 }
 
-fn file_name(path: &str) -> String {
-    Path::new(path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
+/// A heading for the outline: its 1-based source line, level and text.
+struct Heading {
+    line: usize,
+    level: u8,
+    text: SharedString,
 }
 
-/// The nearest char boundary at or before `offset`, within `text`.
-fn floor_boundary(text: &str, offset: usize) -> usize {
-    let mut offset = offset.min(text.len());
-    while !text.is_char_boundary(offset) {
-        offset -= 1;
+fn headings_of(blocks: &[Block]) -> Vec<Heading> {
+    blocks
+        .iter()
+        .filter_map(|block| match block.kind {
+            Kind::Heading(level) => Some(Heading { line: block.line, level, text: SharedString::from(block.text.clone()) }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every link in `blocks`, images aside, in document order, with the index of its block.
+fn links_of(blocks: &[Block]) -> Vec<(Arc<str>, usize)> {
+    let mut links = Vec::new();
+    for (index, block) in blocks.iter().enumerate() {
+        let cells = block.table.iter().flat_map(|table| table.rows.iter().flatten().flatten());
+        for run in block.runs.iter().chain(cells) {
+            let Some(link) = run.style.link.as_ref() else { continue };
+            if !link.starts_with("image:") {
+                links.push((link.clone(), index));
+            }
+        }
     }
-    offset
+    links
+}
+
+fn file_name(path: &str) -> String {
+    Path::new(path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
 fn utf16_to_byte(text: &str, utf16_offset: usize) -> usize {

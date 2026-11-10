@@ -1,8 +1,11 @@
 //! Draws the preview's blocks. Each block is one item of a virtualised GPUI list, so only the
 //! blocks near the viewport are laid out, at any document size.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui::{AppContext, ClickEvent, Context, FontWeight, IntoElement, Pixels, Role, SharedString, StyledText, SvgRenderer, div, img, prelude::*, px, rgb};
 
@@ -182,7 +185,10 @@ fn code_block(text: &str, spans: &[Span], look: &Look) -> gpui::Div {
 /// A display formula, centred like KaTeX's display mode. Broken TeX shows its source and the error,
 /// as the app does with KaTeX's `throwOnError: false`.
 fn math_block(tex: &str, look: &Look) -> gpui::Div {
-    match math::render(tex, true, look.font_size, look.dark, &look.svg) {
+    let Some(rendered) = math::render(tex, true, look.font_size, look.dark, &look.svg) else {
+        return div().mb_3().flex().justify_center().child(formula_pending(tex, look));
+    };
+    match rendered {
         Ok(formula) => div().mb_3().flex().justify_center().child(formula_image(&formula)),
         Err(err) => div()
             .mb_3()
@@ -227,13 +233,21 @@ fn diagram_block(source: &str, look: &Look, cx: &mut Context<Prototype>) -> gpui
 
 /// An inline formula in a paragraph; broken TeX stays as its `$…$` source in the error colour.
 fn inline_formula(run: &Run, look: &Look) -> gpui::Div {
-    match math::render(&run.text, run.style.display, look.font_size, look.dark, &look.svg) {
+    let Some(rendered) = math::render(&run.text, run.style.display, look.font_size, look.dark, &look.svg) else {
+        return formula_pending(&run.text, look);
+    };
+    match rendered {
         Ok(formula) => div().child(formula_image(&formula)),
         Err(_) => {
             let fence = if run.style.display { "$$" } else { "$" };
             div().text_color(error_color(look.dark)).child(format!("{fence}{}{fence}", run.text))
         }
     }
+}
+
+/// A formula left for a later frame (see `math::render`) shows its TeX, muted, for that frame.
+fn formula_pending(tex: &str, look: &Look) -> gpui::Div {
+    div().font_family(look.mono.clone()).text_size(look.code_size()).text_color(look.muted()).child(tex.to_string())
 }
 
 fn formula_image(formula: &math::Formula) -> gpui::Img {
@@ -249,11 +263,42 @@ fn error_color(dark: bool) -> gpui::Rgba {
 fn image_block(block: &Block, look: &Look) -> gpui::Div {
     let alt = if block.text.is_empty() { "image".to_string() } else { block.text.clone() };
     let source = block.src.as_deref().unwrap_or_default();
-    let Some(path) = local_image(source, look.folder.as_deref()) else {
+    let Some(path) = cached_local_image(source, look.folder.as_deref()) else {
         let reason = if source.contains("://") { "remote images are not loaded" } else { "not found next to this file" };
         return div().mb_3().italic().text_color(look.muted()).child(format!("[{alt}: {reason}]"));
     };
     div().mb_3().child(img(path).max_w_full())
+}
+
+/// `local_image`, remembered for a moment. Resolving a path asks the file system twice, and the
+/// preview is drawn on every keystroke; an image saved next to the document still shows within
+/// `FRESH`.
+fn cached_local_image(source: &str, folder: Option<&Path>) -> Option<PathBuf> {
+    const FRESH: Duration = Duration::from_secs(2);
+    /// Typing an image path adds an entry per keystroke; start over past this many.
+    const MAX_ENTRIES: usize = 1_000;
+    /// The document's folder and the image path as written.
+    type Source = (PathBuf, String);
+    /// When the path was resolved, and to what (`None`: missing or outside the folder).
+    type Resolved = (Instant, Option<PathBuf>);
+    thread_local! {
+        static RESOLVED: RefCell<HashMap<Source, Resolved>> = RefCell::default();
+    }
+    let folder = folder?;
+    RESOLVED.with_borrow_mut(|resolved| {
+        let key = (folder.to_path_buf(), source.to_string());
+        if let Some((at, path)) = resolved.get(&key) {
+            if at.elapsed() < FRESH {
+                return path.clone();
+            }
+        }
+        if resolved.len() >= MAX_ENTRIES {
+            resolved.clear();
+        }
+        let path = local_image(source, Some(folder));
+        resolved.insert(key, (Instant::now(), path.clone()));
+        path
+    })
 }
 
 /// A relative path that resolves inside `folder` and exists. URLs and paths that leave the folder are refused.
@@ -351,7 +396,7 @@ fn image_source(run: &Run) -> Option<&str> {
 /// An image in the flow of a paragraph, from the document's folder only, never wider than the pane.
 /// Anything else shows its alt text, as the image blocks do.
 fn inline_image(run: &Run, source: &str, look: &Look) -> gpui::Div {
-    match local_image(source, look.folder.as_deref()) {
+    match cached_local_image(source, look.folder.as_deref()) {
         Some(path) => div().max_w_full().child(img(path).max_w_full()),
         None => div().italic().text_color(look.muted()).child(format!("[{}]", if run.text.is_empty() { "image" } else { &run.text })),
     }
